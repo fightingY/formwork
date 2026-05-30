@@ -47,6 +47,7 @@ class ContextSettings:
 class PolicySettings:
     require_approval_for_network: bool = True
     deny_sudo: bool = True
+    require_approval_for_destructive: bool = True
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,11 @@ def load_settings() -> Settings:
                 True,
             ),
             deny_sudo=_bool_config(policy_config, "deny_sudo", True),
+            require_approval_for_destructive=_bool_config(
+                policy_config,
+                "require_approval_for_destructive",
+                True,
+            ),
         ),
     )
 

@@ -1,0 +1,97 @@
+from minicc.core.protocol import BashAction
+from minicc.core.state import RunState
+from minicc.config import (
+    BudgetSettings,
+    ContextSettings,
+    PolicySettings,
+    ProviderSettings,
+    SandboxSettings,
+    Settings,
+)
+from minicc.policy.approval import ApprovalPolicy
+from minicc.policy.base import PolicyChain
+from minicc.policy.budget import BudgetPolicy
+from minicc.policy.command import CommandPolicy
+from minicc.policy.factory import build_policy_chain
+from minicc.policy.network import NetworkPolicy
+from minicc.policy.path import PathPolicy
+
+
+def test_command_policy_denies_sudo() -> None:
+    decision = CommandPolicy().evaluate(BashAction(command="sudo apt update"), RunState.start("test"))
+
+    assert decision.type == "deny"
+    assert decision.policy_name == "CommandPolicy"
+
+
+def test_path_policy_denies_sensitive_path() -> None:
+    decision = PathPolicy().evaluate(BashAction(command="cat /root/.ssh/id_rsa"), RunState.start("test"))
+
+    assert decision.type == "deny"
+
+
+def test_network_policy_requires_approval_in_locked_mode() -> None:
+    decision = NetworkPolicy(mode="locked", require_approval=True).evaluate(
+        BashAction(command="pip install pytest"),
+        RunState.start("test"),
+    )
+
+    assert decision.type == "require_approval"
+    assert "network" in decision.reason.lower()
+
+
+def test_budget_policy_rewrites_timeout() -> None:
+    decision = BudgetPolicy(max_action_timeout_sec=5).evaluate(
+        BashAction(command="sleep 10", timeout_sec=60),
+        RunState.start("test"),
+    )
+
+    assert decision.type == "rewrite"
+    assert decision.rewritten_action is not None
+    assert decision.rewritten_action.timeout_sec == 5
+
+
+def test_approval_policy_requires_approval_for_destructive_command() -> None:
+    decision = ApprovalPolicy().evaluate(BashAction(command="rm -r build"), RunState.start("test"))
+
+    assert decision.type == "require_approval"
+
+
+def test_approval_policy_can_be_disabled() -> None:
+    decision = ApprovalPolicy(enabled=False).evaluate(BashAction(command="rm -r build"), RunState.start("test"))
+
+    assert decision.type == "allow"
+
+
+def test_policy_chain_returns_first_blocking_decision() -> None:
+    decision = PolicyChain(
+        [
+            CommandPolicy(),
+            NetworkPolicy(mode="locked", require_approval=True),
+        ]
+    ).evaluate(BashAction(command="sudo pip install pytest"), RunState.start("test"))
+
+    assert decision.type == "deny"
+    assert decision.policy_name == "CommandPolicy"
+
+
+def test_policy_factory_always_includes_approval_policy() -> None:
+    settings = Settings(
+        provider=ProviderSettings(),
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(),
+        context=ContextSettings(),
+        policy=PolicySettings(require_approval_for_destructive=False),
+    )
+
+    chain = build_policy_chain(settings)
+
+    assert [policy.name for policy in chain.policies] == [
+        "CommandPolicy",
+        "PathPolicy",
+        "NetworkPolicy",
+        "BudgetPolicy",
+        "ApprovalPolicy",
+    ]
+    decision = chain.evaluate(BashAction(command="rm -r build"), RunState.start("test"))
+    assert decision.type == "allow"

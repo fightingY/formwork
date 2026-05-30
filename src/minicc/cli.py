@@ -5,12 +5,15 @@ import sys
 from pathlib import Path
 
 from minicc import __version__
-from minicc.config import load_settings
-from minicc.core.loop import AgentLoop, LocalCommandExecutor, LoopConfig
+from minicc.config import Settings, load_settings
+from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
-from minicc.core.state import RunState
+from minicc.core.session import SessionManager
+from minicc.core.state import RunState, state_path_for_run
+from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
 from minicc.sandbox.docker_runner import DockerCommandExecutor, DockerSandboxConfig, DockerSandboxRunner
+from minicc.sandbox.local_runner import LocalCommandExecutor
 from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
 
 
@@ -57,6 +60,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.set_defaults(handler=run_command)
 
+    resume_parser = subparsers.add_parser("resume", help="Resume a waiting run.")
+    resume_parser.add_argument("run_id", help="Run id to resume.")
+    resume_parser.add_argument(
+        "--execute-local",
+        action="store_true",
+        help="Resume using local execution instead of Docker.",
+    )
+    resume_parser.set_defaults(handler=resume_command)
+
+    approve_parser = subparsers.add_parser("approve", help="Approve a pending action for a run.")
+    approve_parser.add_argument("run_id", help="Run id waiting for approval.")
+    approve_parser.add_argument("--yes", action="store_true", help="Approve without interactive prompt.")
+    approve_parser.set_defaults(handler=approve_command)
+
+    deny_parser = subparsers.add_parser("deny", help="Deny a pending action for a run.")
+    deny_parser.add_argument("run_id", help="Run id waiting for approval.")
+    deny_parser.add_argument("--reason", default="User denied the action.", help="Reason returned to the model.")
+    deny_parser.set_defaults(handler=deny_command)
+
     eval_parser = subparsers.add_parser("eval", help="Eval runner entry point placeholder for M6.")
     eval_parser.add_argument("path", nargs="?", default="eval_cases", help="Eval cases directory.")
     eval_parser.set_defaults(handler=eval_command)
@@ -68,32 +90,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_command(args: argparse.Namespace) -> int:
     settings = load_settings()
-    missing = [
-        name
-        for name, value in {
-            "MINICC_BASE_URL": settings.base_url,
-            "MINICC_API_KEY": settings.api_key,
-            "MINICC_MODEL": settings.model,
-        }.items()
-        if not value
-    ]
-    if missing:
-        print(
-            "Missing provider configuration: "
-            + ", ".join(missing)
-            + "\nSet these environment variables before running a real model.",
-            file=sys.stderr,
-        )
+    provider = _build_provider_or_print_error(settings)
+    if provider is None:
         return 2
 
-    provider = OpenAICompatibleProvider(
-        base_url=settings.base_url or "",
-        api_key=settings.api_key or "",
-        model=settings.model or "",
-    )
     workspace = None
     runner = None
     state = RunState.start(args.goal)
+    result = None
     try:
         if args.no_workspace_copy:
             if not args.execute_local:
@@ -103,7 +107,9 @@ def run_command(args: argparse.Namespace) -> int:
             executor = LocalCommandExecutor()
         else:
             workspace = prepare_run_workspace(Path.cwd(), run_id=state.run_id)
+            state.run_dir = workspace.run_dir
             state.workspace_host_path = workspace.workspace_dir
+            state.artifacts_dir = workspace.artifacts_dir
             artifacts = ArtifactStore(
                 workspace.artifacts_dir,
                 display_path_prefix=".minicc_artifacts",
@@ -132,20 +138,18 @@ def run_command(args: argparse.Namespace) -> int:
                 )
                 executor = DockerCommandExecutor(runner, artifacts=artifacts)
 
-        loop = AgentLoop(
+        session = SessionManager()
+        session.save(state)
+        loop = _build_loop(
             provider,
             executor,
-            config=LoopConfig(
-                max_turns=settings.budget.max_turns if args.max_turns is None else args.max_turns,
-                max_action_timeout_sec=settings.budget.max_action_timeout_sec,
-                model_options=CompletionOptions(
-                    temperature=settings.temperature,
-                    stream=settings.provider.stream if args.stream is None else args.stream,
-                    include_usage=settings.provider.include_usage,
-                ),
-            ),
+            settings=settings,
+            session=session,
+            max_turns=settings.budget.max_turns if args.max_turns is None else args.max_turns,
+            stream=settings.provider.stream if args.stream is None else args.stream,
         )
         result = loop.run(state)
+        session.save(result.state)
     except FileNotFoundError as exc:
         print(f"Required executable was not found: {exc.filename}", file=sys.stderr)
         return 127
@@ -163,23 +167,205 @@ def run_command(args: argparse.Namespace) -> int:
             except Exception as exc:
                 print(f"Failed to write workspace diff: {exc}", file=sys.stderr)
 
-    print(f"run_id: {result.state.run_id}")
-    print(f"status: {result.state.status}")
-    print(f"turns: {result.state.metrics['turns']}")
-    print(f"bash_actions: {result.state.metrics['bash_actions']}")
-    print(f"artifact_bytes: {result.state.metrics.get('artifact_bytes', 0)}")
-    if workspace is not None:
-        print(f"run_dir: {workspace.run_dir}")
-        print(f"workspace: {workspace.workspace_dir}")
-        print(f"artifacts: {workspace.artifacts_dir}")
-    if result.state.open_questions:
-        print("question: " + result.state.open_questions[-1])
-    if result.state.final_answer:
-        print("\n" + result.state.final_answer)
-    if result.state.status == "failed" and result.state.state_summary:
-        print(result.state.state_summary, file=sys.stderr)
+    if result is None:
+        return 1
+    _print_run_result(result.state, workspace.run_dir if workspace is not None else None)
+    if result.state.status == "failed":
         return 1
     return 0
+
+
+def resume_command(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    provider = _build_provider_or_print_error(settings)
+    if provider is None:
+        return 2
+
+    state_path = state_path_for_run(args.run_id)
+    if not state_path.exists():
+        print(f"Run state not found: {state_path}", file=sys.stderr)
+        return 2
+
+    session = SessionManager()
+    state = session.load(args.run_id)
+    if state.status != "waiting_approval":
+        print(f"Run {args.run_id} is not waiting for approval. Current status: {state.status}", file=sys.stderr)
+        return 2
+
+    runner = None
+    try:
+        artifacts_dir = state.artifacts_dir or state_path.parent / "artifacts"
+        artifacts = ArtifactStore(
+            artifacts_dir,
+            display_path_prefix=".minicc_artifacts",
+            preview_chars=settings.context.artifact_preview_chars,
+        )
+        if args.execute_local:
+            executor = LocalCommandExecutor(
+                artifacts=artifacts,
+                preview_chars=settings.context.artifact_preview_chars,
+            )
+        else:
+            if state.workspace_host_path is None:
+                print("Cannot resume: missing workspace_host_path in state.", file=sys.stderr)
+                return 2
+            runner = DockerSandboxRunner(
+                DockerSandboxConfig(
+                    image=settings.sandbox.image,
+                    cpus=settings.sandbox.cpus,
+                    memory=settings.sandbox.memory,
+                    pids_limit=settings.sandbox.pids_limit,
+                    network=settings.sandbox.network,
+                )
+            )
+            state.container_name = runner.start(
+                run_id=state.run_id,
+                workspace_dir=state.workspace_host_path,
+                artifacts_dir=artifacts_dir,
+            )
+            executor = DockerCommandExecutor(runner, artifacts=artifacts)
+
+        session.apply_pending_approval_result(state, executor)
+        if state.status == "running":
+            loop = _build_loop(provider, executor, settings=settings, session=session)
+            result = loop.run(state)
+        else:
+            result = type("ResumeResult", (), {"state": state})()
+        session.save(result.state)
+    except Exception as exc:
+        state.status = "failed"
+        state.state_summary = f"Resume failed: {exc}"
+        session.save(state)
+        print(state.state_summary, file=sys.stderr)
+        return 1
+    finally:
+        if runner is not None:
+            runner.cleanup(state.container_name)
+        if state.workspace_host_path is not None and state.artifacts_dir is not None:
+            try:
+                write_workspace_diff(state.workspace_host_path, state.artifacts_dir)
+            except Exception as exc:
+                print(f"Failed to write workspace diff: {exc}", file=sys.stderr)
+
+    _print_run_result(result.state, result.state.run_dir)
+    return 1 if result.state.status == "failed" else 0
+
+
+def approve_command(args: argparse.Namespace) -> int:
+    if not args.yes:
+        print("Use --yes to approve the pending action explicitly.", file=sys.stderr)
+        return 2
+    session = SessionManager()
+    state = _load_waiting_state(session, args.run_id, require_pending_action=True)
+    if state is None:
+        return 2
+    session.approve(state)
+    print(f"Approved pending action for run {args.run_id}. Use `uv run minicc resume {args.run_id}` to continue.")
+    return 0
+
+
+def deny_command(args: argparse.Namespace) -> int:
+    session = SessionManager()
+    state = _load_waiting_state(session, args.run_id, require_pending_action=False)
+    if state is None:
+        return 2
+    session.deny(state, args.reason)
+    print(f"Denied pending action for run {args.run_id}. Use `uv run minicc resume {args.run_id}` to continue.")
+    return 0
+
+
+def _print_run_result(state: RunState, run_dir: Path | None) -> None:
+    print(f"run_id: {state.run_id}")
+    print(f"status: {state.status}")
+    print(f"turns: {state.metrics['turns']}")
+    print(f"bash_actions: {state.metrics['bash_actions']}")
+    print(f"policy_denials: {state.metrics.get('policy_denials', 0)}")
+    print(f"approvals_requested: {state.metrics.get('approvals_requested', 0)}")
+    print(f"artifact_bytes: {state.metrics.get('artifact_bytes', 0)}")
+    if run_dir is not None:
+        print(f"run_dir: {run_dir}")
+    if state.workspace_host_path is not None:
+        print(f"workspace: {state.workspace_host_path}")
+    if state.artifacts_dir is not None:
+        print(f"artifacts: {state.artifacts_dir}")
+    if state.open_questions:
+        print("question: " + state.open_questions[-1])
+    if state.final_answer:
+        print("\n" + state.final_answer)
+    if state.status == "failed" and state.state_summary:
+        print(state.state_summary, file=sys.stderr)
+
+
+def _build_provider_or_print_error(settings: Settings) -> OpenAICompatibleProvider | None:
+    missing = [
+        name
+        for name, value in {
+            "MINICC_BASE_URL": settings.base_url,
+            "MINICC_API_KEY": settings.api_key,
+            "MINICC_MODEL": settings.model,
+        }.items()
+        if not value
+    ]
+    if missing:
+        print(
+            "Missing provider configuration: "
+            + ", ".join(missing)
+            + "\nSet these values in .env / environment variables and minicc.yaml.",
+            file=sys.stderr,
+        )
+        return None
+
+    return OpenAICompatibleProvider(
+        base_url=settings.base_url or "",
+        api_key=settings.api_key or "",
+        model=settings.model or "",
+    )
+
+
+def _build_loop(
+    provider: OpenAICompatibleProvider,
+    executor: BashExecutor,
+    *,
+    settings: Settings,
+    session: SessionManager | None = None,
+    max_turns: int | None = None,
+    stream: bool | None = None,
+) -> AgentLoop:
+    return AgentLoop(
+        provider,
+        executor,
+        policy_chain=build_policy_chain(settings),
+        session=session,
+        config=LoopConfig(
+            max_turns=settings.budget.max_turns if max_turns is None else max_turns,
+            max_action_timeout_sec=settings.budget.max_action_timeout_sec,
+            model_options=CompletionOptions(
+                temperature=settings.temperature,
+                stream=settings.provider.stream if stream is None else stream,
+                include_usage=settings.provider.include_usage,
+            ),
+        ),
+    )
+
+
+def _load_waiting_state(
+    session: SessionManager,
+    run_id: str,
+    *,
+    require_pending_action: bool,
+) -> RunState | None:
+    state_path = session.state_path(run_id)
+    if not state_path.exists():
+        print(f"Run state not found: {state_path}", file=sys.stderr)
+        return None
+    state = session.load(run_id)
+    if state.status != "waiting_approval":
+        print(f"Run {run_id} is not waiting for approval. Current status: {state.status}", file=sys.stderr)
+        return None
+    if require_pending_action and state.pending_action is None:
+        print(f"Run {run_id} has no pending bash action to approve or deny.", file=sys.stderr)
+        return None
+    return state
 
 
 def eval_command(args: argparse.Namespace) -> int:

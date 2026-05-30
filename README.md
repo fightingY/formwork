@@ -23,7 +23,7 @@ M5: Skill Registry、Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前进度：M2
+## 当前进度：M3
 
 M1 已实现基础闭环：
 
@@ -45,6 +45,17 @@ M2 已实现执行与结果治理层：
 - Docker 容器默认禁网，并限制 CPU、内存、PID、capabilities 和 no-new-privileges。
 - 命令结果会标准化为 `Observation`：`command_result`、`no_output`、`command_error`、`timeout` 等。
 - 超长 stdout/stderr 会写入 artifact，prompt 中只保留 preview、artifact id 和路径。
+
+M3 已实现策略中间件和 HITL 基础链路：
+
+- 实现 `PolicyChain`，bash action 在进入 executor 前必须先经过策略链。
+- 实现 `CommandPolicy`，拦截 `sudo`、危险 `rm -rf /`、`shutdown`、`mkfs`、`mount` 等高危命令。
+- 实现 `PathPolicy`，拦截 `/mnt`、`/var/run/docker.sock`、`/root/.ssh` 等敏感路径。
+- 实现 `NetworkPolicy`，locked mode 下对 `curl`、`wget`、`git clone`、`pip install`、`npm install` 等联网动作要求审批或拒绝。
+- 实现 `BudgetPolicy`，限制 bash action 次数，并把超长 timeout 改写到配置上限。
+- 实现 `ApprovalPolicy`，对删除类高风险动作触发人工审批。
+- `ask` 和 `require_approval` 会让 run 进入 `waiting_approval`，并把状态保存到 `state.json`。
+- 新增 `approve`、`deny`、`resume` CLI 命令，支持 Stop and Resume 风格的审批恢复。
 
 ## 快速开始
 
@@ -101,6 +112,11 @@ provider:
   temperature: 0
   stream: false
   include_usage: true
+
+policy:
+  require_approval_for_network: true
+  deny_sudo: true
+  require_approval_for_destructive: true
 ```
 
 其中 `MINICC_BASE_URL`、`MINICC_MODEL`、`MINICC_TEMPERATURE` 可以通过环境变量覆盖 `minicc.yaml`；`MINICC_API_KEY` 只建议放在 `.env` 或系统环境变量里，不写入 `minicc.yaml`。
@@ -133,6 +149,30 @@ uv run minicc run "运行测试并总结结果" --execute-local --no-workspace-c
 
 这个模式只建议开发调试时使用。
 
+## 审批与恢复
+
+当模型发起 `ask`，或 policy 判断某个 bash action 需要人工审批时，run 会暂停并保存状态：
+
+```text
+.minicc/runs/<run_id>/state.json
+```
+
+批准 pending action：
+
+```bash
+uv run minicc approve <run_id> --yes
+uv run minicc resume <run_id>
+```
+
+拒绝 pending action，或回答模型主动提出的 `ask`，并把内容作为 observation 交回模型：
+
+```bash
+uv run minicc deny <run_id> --reason "不要联网安装依赖"
+uv run minicc resume <run_id>
+```
+
+`resume` 会重新启动执行环境，继续使用该 run 的 workspace 和 artifacts。
+
 ## Action 协议
 
 模型每轮必须只输出一个 JSON object，不能输出 Markdown。
@@ -164,17 +204,30 @@ src/minicc/
   cli.py              # CLI 入口
   config.py           # 环境变量配置
   core/
-    loop.py           # Minimal Agent Loop
+    loop.py           # 只保留 Agent Loop 编排
+    runner.py         # 模型调用、usage 统计、action 解析
+    action_handler.py # final/ask/bash 分流，policy 和 executor 调度
+    session.py        # state 保存、审批请求和审批结果应用
     prompt.py         # M1 简版 prompt builder
     protocol.py       # bash / ask / final action parser
     provider.py       # OpenAI-compatible Provider Adapter
     state.py          # RunState / Observation / TrajectoryStep
+  policy/
+    base.py           # Policy / PolicyChain / PolicyDecision
+    factory.py        # 根据配置构建完整 PolicyChain
+    command.py        # 危险命令策略
+    path.py           # 敏感路径策略
+    network.py        # locked mode 网络策略
+    budget.py         # bash 次数和 timeout 策略
+    approval.py       # 删除类动作审批策略
   sandbox/
     artifact_store.py # 大输出 artifact 存储
     docker_runner.py  # Docker sandbox 启动、执行、清理
+    local_runner.py   # 本地开发执行器
     observation.py    # command result -> Observation
     workspace.py      # run workspace copy 与 diff 生成
 tests/
+  test_policy.py
   test_docker_runner.py
   test_observation.py
   test_workspace.py
@@ -188,7 +241,7 @@ docs/
 
 ## 验收
 
-当前 M2 验收命令：
+当前 M3 验收命令：
 
 ```bash
 uv run minicc --help

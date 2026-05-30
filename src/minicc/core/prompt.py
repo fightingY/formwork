@@ -35,6 +35,8 @@ class PromptBuilder:
             dynamic_context.append("Constraints:\n" + "\n".join(f"- {item}" for item in state.constraints))
         if state.state_summary:
             dynamic_context.append(f"State summary:\n{state.state_summary}")
+        if state.last_observation is not None:
+            dynamic_context.append(f"Last observation:\n{_format_observation(state.last_observation)}")
         if trajectory:
             dynamic_context.append("Recent trajectory:\n" + _format_trajectory(trajectory[-6:]))
 

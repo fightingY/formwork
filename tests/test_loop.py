@@ -4,6 +4,8 @@ from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
 from minicc.core.state import Observation, RunState
+from minicc.policy.base import PolicyChain, PolicyDecision
+from minicc.policy.network import NetworkPolicy
 
 
 @dataclass
@@ -92,3 +94,46 @@ def test_loop_fails_after_protocol_error_threshold() -> None:
 
     assert result.state.status == "failed"
     assert result.state.metrics["protocol_errors"] == 3
+
+
+def test_loop_turns_policy_deny_into_observation() -> None:
+    provider = FakeProvider(
+        [
+            '{"type":"bash","command":"sudo apt update"}',
+            '{"type":"final","answer":"Stopped."}',
+        ]
+    )
+
+    class DenyPolicy:
+        name = "DenyPolicy"
+
+        def evaluate(self, action: BashAction, state: RunState) -> PolicyDecision:
+            return PolicyDecision(type="deny", reason="nope", policy_name=self.name)
+
+    result = AgentLoop(
+        provider,
+        FakeExecutor(),
+        policy_chain=PolicyChain([DenyPolicy()]),
+    ).run(RunState.start("deny command"))
+
+    assert result.state.status == "completed"
+    assert result.trajectory[0].observation.kind == "policy_violation"
+    assert result.state.metrics["policy_denials"] == 1
+
+
+def test_loop_waits_for_policy_approval(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    provider = FakeProvider(['{"type":"bash","command":"pip install pytest"}'])
+    state = RunState.start("install dependency", run_dir=tmp_path)
+
+    result = AgentLoop(
+        provider,
+        FakeExecutor(),
+        policy_chain=PolicyChain([NetworkPolicy(mode="locked", require_approval=True)]),
+    ).run(state)
+
+    assert result.state.status == "waiting_approval"
+    assert result.state.pending_action == BashAction(command="pip install pytest")
+    assert result.state.approval_question is not None
+    assert result.state.metrics["approvals_requested"] == 1
+    assert (tmp_path / "state.json").exists()
