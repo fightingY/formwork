@@ -1,0 +1,28 @@
+[project]
+name = "mini-claude-code"
+version = "0.1.0"
+description = "A Bash-first CodeAct agent harness for interview-ready Agent engineering demos."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+minicc = "minicc.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/minicc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
