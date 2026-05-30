@@ -20,14 +20,10 @@ env/
 htmlcov/
 coverage.xml
 
-# uv
-uv.lock
-
 # Environment and local config
 .env
 .env.*
 !.env.example
-minicc.yaml
 
 # miniCC runtime data
 .minicc/
@@ -39,5 +35,3 @@ minicc.yaml
 *.swo
 .DS_Store
 Thumbs.db
-
-.env

@@ -10,6 +10,8 @@ from minicc.core.prompt import PromptBuilder
 from minicc.core.protocol import Action, AskAction, BashAction, FinalAction, ProtocolError, parse_action
 from minicc.core.provider import CompletionOptions, ModelProvider, ModelUsage
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.sandbox.artifact_store import ArtifactStore
+from minicc.sandbox.observation import CommandResult, observation_from_command_result
 
 
 class BashExecutor(Protocol):
@@ -119,6 +121,17 @@ class DisabledExecutor:
 class LocalCommandExecutor:
     """Small M1 executor used for demos and tests before Docker arrives in M2."""
 
+    def __init__(
+        self,
+        *,
+        artifacts: ArtifactStore | None = None,
+        artifact_threshold_bytes: int = 16 * 1024,
+        preview_chars: int = 12_000,
+    ) -> None:
+        self.artifacts = artifacts
+        self.artifact_threshold_bytes = artifact_threshold_bytes
+        self.preview_chars = preview_chars
+
     def run(self, action: BashAction, state: RunState) -> Observation:
         started = time.perf_counter()
         command_args = _local_shell_args(action.command)
@@ -140,40 +153,33 @@ class LocalCommandExecutor:
                 timeout=action.timeout_sec,
             )
         except subprocess.TimeoutExpired as exc:
-            return Observation(
-                kind="timeout",
-                stdout_preview=(exc.stdout or "")[:4000],
-                stderr_preview=(exc.stderr or "")[:4000],
-                message=f"Command timed out after {action.timeout_sec} seconds.",
-                duration_ms=int((time.perf_counter() - started) * 1000),
+            return observation_from_command_result(
+                CommandResult(
+                    exit_code=None,
+                    stdout=_decode_timeout_output(exc.stdout),
+                    stderr=_decode_timeout_output(exc.stderr),
+                    timed_out=True,
+                    timeout_sec=action.timeout_sec,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                ),
+                state=state,
+                artifacts=self.artifacts,
+                artifact_threshold_bytes=self.artifact_threshold_bytes,
+                preview_chars=self.preview_chars,
             )
 
         duration_ms = int((time.perf_counter() - started) * 1000)
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-        if completed.returncode == 0 and not stdout and not stderr:
-            return Observation(
-                kind="no_output",
-                exit_code=0,
-                message="Command exited successfully with no output.",
+        return observation_from_command_result(
+            CommandResult(
+                exit_code=completed.returncode,
+                stdout=completed.stdout or "",
+                stderr=completed.stderr or "",
                 duration_ms=duration_ms,
-            )
-        if completed.returncode == 0:
-            return Observation(
-                kind="command_result",
-                exit_code=0,
-                stdout_preview=stdout[:4000],
-                stderr_preview=stderr[:4000],
-                message="Command exited successfully.",
-                duration_ms=duration_ms,
-            )
-        return Observation(
-            kind="command_error",
-            exit_code=completed.returncode,
-            stdout_preview=stdout[:4000],
-            stderr_preview=stderr[:4000],
-            message=f"Command failed with exit code {completed.returncode}.",
-            duration_ms=duration_ms,
+            ),
+            state=state,
+            artifacts=self.artifacts,
+            artifact_threshold_bytes=self.artifact_threshold_bytes,
+            preview_chars=self.preview_chars,
         )
 
 
@@ -196,3 +202,11 @@ def _local_shell_args(command: str) -> list[str] | None:
     if bash_path:
         return [bash_path, "-lc", command]
     return None
+
+
+def _decode_timeout_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value

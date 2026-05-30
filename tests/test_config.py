@@ -1,4 +1,4 @@
-from minicc.config import load_dotenv_file, load_settings
+from minicc.config import load_dotenv_file, load_settings, load_yaml_config
 
 
 def test_load_dotenv_file_sets_missing_values(tmp_path, monkeypatch) -> None:
@@ -36,3 +36,88 @@ def test_env_vars_override_dotenv_file(tmp_path, monkeypatch) -> None:
     load_dotenv_file(dotenv)
 
     assert load_settings().api_key == "from-env"
+
+
+def test_load_settings_reads_minicc_yaml(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINICC_BASE_URL", raising=False)
+    monkeypatch.delenv("MINICC_API_KEY", raising=False)
+    monkeypatch.delenv("MINICC_MODEL", raising=False)
+    monkeypatch.delenv("MINICC_TEMPERATURE", raising=False)
+    (tmp_path / ".env").write_text("MINICC_API_KEY=from-dotenv\n", encoding="utf-8")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+sandbox:
+  image: python:3.12-slim
+  cpus: "2"
+  memory: 2g
+  pids_limit: 128
+  network: bridge
+budget:
+  max_turns: 3
+  max_action_timeout_sec: 9
+context:
+  artifact_preview_chars: 42
+provider:
+  base_url: https://provider.test/v1
+  model: test-model
+  temperature: 0.7
+  stream: true
+  include_usage: false
+policy:
+  require_approval_for_network: false
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.api_key == "from-dotenv"
+    assert settings.provider.base_url == "https://provider.test/v1"
+    assert settings.provider.model == "test-model"
+    assert settings.provider.temperature == 0.7
+    assert settings.provider.stream is True
+    assert settings.provider.include_usage is False
+    assert settings.sandbox.image == "python:3.12-slim"
+    assert settings.sandbox.cpus == "2"
+    assert settings.sandbox.memory == "2g"
+    assert settings.sandbox.pids_limit == 128
+    assert settings.sandbox.network == "bridge"
+    assert settings.budget.max_turns == 3
+    assert settings.budget.max_action_timeout_sec == 9
+    assert settings.context.artifact_preview_chars == 42
+    assert settings.policy.require_approval_for_network is False
+
+
+def test_env_overrides_minicc_yaml_provider_fields(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_BASE_URL", "https://env.test/v1")
+    monkeypatch.setenv("MINICC_MODEL", "env-model")
+    monkeypatch.setenv("MINICC_TEMPERATURE", "0.1")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+provider:
+  base_url: https://yaml.test/v1
+  model: yaml-model
+  temperature: 0.9
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.provider.base_url == "https://env.test/v1"
+    assert settings.provider.model == "env-model"
+    assert settings.provider.temperature == 0.1
+
+
+def test_load_yaml_config_rejects_non_mapping(tmp_path) -> None:
+    config = tmp_path / "minicc.yaml"
+    config.write_text("- not\n- mapping\n", encoding="utf-8")
+
+    try:
+        load_yaml_config(config)
+    except ValueError as exc:
+        assert "YAML mapping" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError")

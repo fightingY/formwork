@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -21,7 +22,8 @@ ObservationKind = Literal[
 
 
 def new_run_id() -> str:
-    return uuid4().hex[:12]
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{timestamp}-{uuid4().hex[:8]}"
 
 
 @dataclass
@@ -80,4 +82,5 @@ def initial_metrics() -> dict[str, Any]:
         "prompt_cache_hit_tokens": 0,
         "prompt_cache_miss_tokens": 0,
         "latency_ms": 0,
+        "artifact_bytes": 0,
     }

@@ -1,0 +1,22 @@
+sandbox:
+  image: python:3.11-slim
+  mode: locked
+  cpus: "1"
+  memory: 1g
+  pids_limit: 256
+  network: none
+
+budget:
+  max_turns: 12
+  max_bash_actions: 30
+  max_seconds: 900
+  max_action_timeout_sec: 120
+
+context:
+  max_prompt_chars: 120000
+  recent_turns: 6
+  artifact_preview_chars: 12000
+
+policy:
+  require_approval_for_network: true
+  deny_sudo: true
