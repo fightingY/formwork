@@ -5,12 +5,14 @@ from typing import Protocol
 
 from minicc.core.action_handler import ActionHandler
 from minicc.core.context import ContextBuilder
+from minicc.core.lifecycle import RunLifecycle
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelProvider
 from minicc.core.runner import ModelTurnConfig, ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.policy.base import PolicyChain
+from minicc.trace.recorder import TraceRecorder
 
 
 class BashExecutor(Protocol):
@@ -41,11 +43,15 @@ class AgentLoop:
         context_builder: ContextBuilder | None = None,
         policy_chain: PolicyChain | None = None,
         session: SessionManager | None = None,
+        trace: TraceRecorder | None = None,
         config: LoopConfig | None = None,
     ) -> None:
         self.config = config or LoopConfig()
         self.session = session or SessionManager()
         self.context_builder = context_builder or ContextBuilder()
+        self.trace = trace or TraceRecorder()
+        self.context_builder.trace = self.trace
+        self.lifecycle = RunLifecycle(self.trace)
         self.turn_runner = ModelTurnRunner(
             provider,
             config=ModelTurnConfig(
@@ -53,15 +59,18 @@ class AgentLoop:
                 max_action_timeout_sec=self.config.max_action_timeout_sec,
                 model_options=self.config.model_options,
             ),
+            trace=self.trace,
         )
         self.action_handler = ActionHandler(
             executor,
             policy_chain=policy_chain,
             session=self.session,
+            trace=self.trace,
         )
 
     def run(self, state: RunState) -> AgentLoopResult:
         trajectory: list[TrajectoryStep] = []
+        self.lifecycle.start(state)
 
         while state.status == "running":
             if state.metrics["turns"] >= self.config.max_turns:
@@ -87,6 +96,7 @@ class AgentLoop:
             if not outcome.should_continue:
                 break
 
+        self.lifecycle.finish(state)
         return AgentLoopResult(state=state, trajectory=trajectory)
 
 

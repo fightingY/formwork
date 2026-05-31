@@ -23,7 +23,7 @@ M5: Skill Registry、Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前进度：M4
+## 当前进度：M5
 
 M1 已实现基础闭环：
 
@@ -65,6 +65,15 @@ M4 已实现上下文构建和压缩基础链路：
 - 动态上下文只保留最近 `context.recent_turns` 条 trajectory，旧轨迹超过预算时压缩进 `RunState.state_summary`。
 - 压缩指标写入 `metrics.context_compactions`，同时记录已经压缩过的 trajectory 步数，避免重复压缩。
 - 实际项目统一使用 `ContextBuilder.build_messages()`，不再保留 `PromptBuilder` 兼容层。
+
+M5 已实现 Skill / Memory / Trace / Metrics 基础链路：
+
+- 新增 `SkillRegistry`，从 `skills/<name>/SKILL.md` 读取 frontmatter，并在 prompt 中只注入 name + description catalog。
+- 新增 `FeedbackMemory`，从 `.minicc/memory/feedback_rules.jsonl` 读取 `never` / `prefer` / `caution` 规则，并按当前 goal 筛选注入。
+- `ContextBuilder` 支持注入 skill catalog 和 feedback memory，位置在动态任务状态之前，不改 Stable Prefix。
+- 新增 `TraceRecorder`，将 `run_started`、`prompt_built`、`model_response`、`action_parsed`、`policy_decision`、`sandbox_exec_*`、`observation_created`、`artifact_written`、`context_compacted`、`approval_requested`、`run_completed`、`run_failed` 写入 `trace.jsonl`。
+- 新增 `metrics.json` 落盘，保存 turns、bash actions、protocol errors、policy denials、context compactions、token/cache/latency 等 run 指标快照。
+- `minicc traces` 可列出本地 `.minicc/runs/<run_id>/trace.jsonl` 和 `metrics.json`。
 
 ## 快速开始
 
@@ -222,6 +231,13 @@ src/minicc/
     protocol.py       # bash / ask / final action parser
     provider.py       # OpenAI-compatible Provider Adapter
     state.py          # RunState / Observation / TrajectoryStep
+  skills/
+    registry.py       # SkillRegistry：读取 SKILL.md catalog
+  memory/
+    feedback.py       # FeedbackMemory：读取反馈规则
+  trace/
+    recorder.py       # TraceRecorder：JSONL event 记录
+    metrics.py        # metrics.json 快照落盘
   policy/
     base.py           # Policy / PolicyChain / PolicyDecision
     factory.py        # 根据配置构建完整 PolicyChain
@@ -251,7 +267,7 @@ docs/
 
 ## 验收
 
-当前 M4 验收命令：
+当前 M5 验收命令：
 
 ```bash
 uv run minicc --help

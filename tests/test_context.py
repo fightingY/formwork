@@ -1,6 +1,8 @@
 from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.protocol import BashAction
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.memory.feedback import FeedbackMemory
+from minicc.skills.registry import SkillRegistry
 
 
 def test_context_builder_uses_cache_friendly_stable_prefix() -> None:
@@ -51,6 +53,29 @@ def test_context_builder_compacts_old_trajectory_once() -> None:
 
     assert "State summary" in messages[1]["content"]
     assert "sed -n" in messages[1]["content"]
+
+
+def test_context_builder_injects_skill_catalog_and_feedback_memory(tmp_path) -> None:
+    skill_dir = tmp_path / "skills" / "repo-inspection"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: repo-inspection\ndescription: Inspect repository structure.\n---\n",
+        encoding="utf-8",
+    )
+    memory_path = tmp_path / "feedback_rules.jsonl"
+    memory_path.write_text(
+        '{"id":"mem_1","type":"caution","rule":"Use rg before broad file reads."}\n',
+        encoding="utf-8",
+    )
+    builder = ContextBuilder(
+        skill_registry=SkillRegistry(tmp_path / "skills"),
+        feedback_memory=FeedbackMemory(memory_path),
+    )
+
+    messages = builder.build_messages(RunState.start("Use rg to inspect repository files"), [])
+
+    assert "repo-inspection: Inspect repository structure." in messages[1]["content"]
+    assert "caution: Use rg before broad file reads." in messages[1]["content"]
 
 
 def _step(command: str, message: str, artifact_ids: list[str] | None = None) -> TrajectoryStep:

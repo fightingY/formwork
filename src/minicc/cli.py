@@ -11,11 +11,14 @@ from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
+from minicc.memory.feedback import FeedbackMemory
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
 from minicc.sandbox.docker_runner import DockerCommandExecutor, DockerSandboxConfig, DockerSandboxRunner
 from minicc.sandbox.local_runner import LocalCommandExecutor
 from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
+from minicc.skills.registry import SkillRegistry
+from minicc.trace.recorder import TraceRecorder, trace_path_for
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -84,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("path", nargs="?", default="eval_cases", help="Eval cases directory.")
     eval_parser.set_defaults(handler=eval_command)
 
-    traces_parser = subparsers.add_parser("traces", help="List trace runs placeholder for M5/M6.")
+    traces_parser = subparsers.add_parser("traces", help="List runs that have trace or metrics files.")
     traces_parser.set_defaults(handler=traces_command)
     return parser
 
@@ -146,6 +149,7 @@ def run_command(args: argparse.Namespace) -> int:
             executor,
             settings=settings,
             session=session,
+            state=state,
             max_turns=settings.budget.max_turns if args.max_turns is None else args.max_turns,
             stream=settings.provider.stream if args.stream is None else args.stream,
         )
@@ -228,7 +232,7 @@ def resume_command(args: argparse.Namespace) -> int:
 
         session.apply_pending_approval_result(state, executor)
         if state.status == "running":
-            loop = _build_loop(provider, executor, settings=settings, session=session)
+            loop = _build_loop(provider, executor, settings=settings, session=session, state=state)
             result = loop.run(state)
         else:
             result = type("ResumeResult", (), {"state": state})()
@@ -329,9 +333,11 @@ def _build_loop(
     *,
     settings: Settings,
     session: SessionManager | None = None,
+    state: RunState | None = None,
     max_turns: int | None = None,
     stream: bool | None = None,
 ) -> AgentLoop:
+    skill_root = (state.workspace_host_path if state and state.workspace_host_path else Path.cwd()) / "skills"
     return AgentLoop(
         provider,
         executor,
@@ -340,10 +346,13 @@ def _build_loop(
                 max_prompt_chars=settings.context.max_prompt_chars,
                 recent_turns=settings.context.recent_turns,
                 artifact_preview_chars=settings.context.artifact_preview_chars,
-            )
+            ),
+            skill_registry=SkillRegistry(skill_root),
+            feedback_memory=FeedbackMemory(Path.cwd() / ".minicc" / "memory" / "feedback_rules.jsonl"),
         ),
         policy_chain=build_policy_chain(settings),
         session=session,
+        trace=TraceRecorder(trace_path_for(state)) if state is not None else None,
         config=LoopConfig(
             max_turns=settings.budget.max_turns if max_turns is None else max_turns,
             max_action_timeout_sec=settings.budget.max_action_timeout_sec,
@@ -385,10 +394,24 @@ def eval_command(args: argparse.Namespace) -> int:
 
 
 def traces_command(args: argparse.Namespace) -> int:
-    print(
-        "Trace listing is scheduled for the observability milestone. "
-        "M1 does not persist trace files yet."
-    )
+    runs_root = Path.cwd() / ".minicc" / "runs"
+    if not runs_root.exists():
+        print(f"No runs found under {runs_root}.")
+        return 0
+
+    found = False
+    for run_dir in sorted((item for item in runs_root.iterdir() if item.is_dir()), reverse=True):
+        trace_path = run_dir / "trace.jsonl"
+        metrics_path = run_dir / "metrics.json"
+        if trace_path.exists() or metrics_path.exists():
+            found = True
+            print(f"{run_dir.name}")
+            if trace_path.exists():
+                print(f"  trace: {trace_path}")
+            if metrics_path.exists():
+                print(f"  metrics: {metrics_path}")
+    if not found:
+        print(f"No trace files found under {runs_root}.")
     return 0
 
 

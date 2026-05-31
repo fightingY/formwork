@@ -127,6 +127,9 @@ class RunState:
 
 def initial_metrics() -> dict[str, Any]:
     return {
+        "started_at": None,
+        "completed_at": None,
+        "total_duration_ms": 0,
         "turns": 0,
         "bash_actions": 0,
         "protocol_errors": 0,
@@ -134,9 +137,11 @@ def initial_metrics() -> dict[str, Any]:
         "timeouts": 0,
         "prompt_tokens": 0,
         "completion_tokens": 0,
+        "total_tokens": 0,
         "cached_tokens": 0,
         "prompt_cache_hit_tokens": 0,
         "prompt_cache_miss_tokens": 0,
+        "cache_hit_rate": 0,
         "latency_ms": 0,
         "artifact_bytes": 0,
         "policy_denials": 0,

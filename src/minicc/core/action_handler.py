@@ -7,6 +7,7 @@ from minicc.core.protocol import Action, AskAction, BashAction, FinalAction
 from minicc.core.session import SessionManager, record_execution_metrics
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.policy.base import PolicyChain, PolicyDecision
+from minicc.trace.recorder import TraceRecorder
 
 
 class BashExecutor(Protocol):
@@ -27,10 +28,12 @@ class ActionHandler:
         *,
         policy_chain: PolicyChain | None = None,
         session: SessionManager | None = None,
+        trace: TraceRecorder | None = None,
     ) -> None:
         self.executor = executor
         self.policy_chain = policy_chain or PolicyChain()
         self.session = session or SessionManager()
+        self.trace = trace
 
     def handle(self, action: Action, state: RunState) -> ActionOutcome:
         if isinstance(action, FinalAction):
@@ -40,30 +43,43 @@ class ActionHandler:
 
         if isinstance(action, AskAction):
             self.session.request_ask(state, action.question)
+            if self.trace is not None:
+                self.trace.approval_requested(state, action.question)
             return ActionOutcome(should_continue=False)
 
         return self._handle_bash(action, state)
 
     def _handle_bash(self, action: BashAction, state: RunState) -> ActionOutcome:
         decision = self.policy_chain.evaluate(action, state)
+        if self.trace is not None:
+            self.trace.policy_decision(state, decision)
         action_to_execute = action
 
         if decision.type == "deny":
             state.metrics["policy_denials"] = state.metrics.get("policy_denials", 0) + 1
             observation = _policy_violation_observation(decision)
             state.last_observation = observation
+            if self.trace is not None:
+                self.trace.observation_created(state, observation)
             return ActionOutcome(steps=[TrajectoryStep(action=action, observation=observation)])
 
         if decision.type == "require_approval":
             self.session.request_approval(state, action, decision)
+            if self.trace is not None:
+                self.trace.approval_requested(state, state.approval_question or decision.reason)
             return ActionOutcome(should_continue=False)
 
         if decision.type == "rewrite" and decision.rewritten_action is not None:
             action_to_execute = decision.rewritten_action
 
+        if self.trace is not None:
+            self.trace.sandbox_exec_started(state, action_to_execute.command)
         observation = self.executor.run(action_to_execute, state)
         record_execution_metrics(state, observation)
         state.last_observation = observation
+        if self.trace is not None:
+            self.trace.sandbox_exec_finished(state, observation)
+            self.trace.observation_created(state, observation)
         return ActionOutcome(steps=[TrajectoryStep(action=action_to_execute, observation=observation)])
 
 

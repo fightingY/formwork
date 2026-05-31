@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.protocol import BashAction
@@ -6,6 +7,7 @@ from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
 from minicc.core.state import Observation, RunState
 from minicc.policy.base import PolicyChain, PolicyDecision
 from minicc.policy.network import NetworkPolicy
+from minicc.trace.recorder import TraceRecorder
 
 
 @dataclass
@@ -137,3 +139,31 @@ def test_loop_waits_for_policy_approval(tmp_path, monkeypatch) -> None:
     assert result.state.approval_question is not None
     assert result.state.metrics["approvals_requested"] == 1
     assert (tmp_path / "state.json").exists()
+
+
+def test_loop_records_trace_and_metrics(tmp_path) -> None:
+    provider = FakeProvider(
+        [
+            '{"type":"bash","command":"pytest -q","purpose":"run tests"}',
+            '{"type":"final","answer":"Tests passed."}',
+        ]
+    )
+    state = RunState.start("Run tests", run_dir=tmp_path)
+    trace_path = tmp_path / "trace.jsonl"
+
+    result = AgentLoop(
+        provider,
+        FakeExecutor(),
+        trace=TraceRecorder(trace_path),
+    ).run(state)
+
+    events = [json.loads(line)["event"] for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert result.state.status == "completed"
+    assert "run_started" in events
+    assert "prompt_built" in events
+    assert "model_response" in events
+    assert "policy_decision" in events
+    assert "sandbox_exec_started" in events
+    assert "sandbox_exec_finished" in events
+    assert "run_completed" in events
+    assert (tmp_path / "metrics.json").exists()

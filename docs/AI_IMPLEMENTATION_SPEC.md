@@ -745,6 +745,15 @@ cat skills/python-debugging/SKILL.md
 
 后续可扩展为 `load_skill` action，但当前 action space 保持 Bash-first。
 
+当前实现说明：
+
+```text
+M5 已实现 core 外的轻量 SkillRegistry。
+默认读取 skills/<name>/SKILL.md。
+Prompt 中只注入 name + description catalog，不注入完整 SKILL.md。
+模型需要完整步骤时仍通过 bash 读取对应 SKILL.md。
+```
+
 ### L14 Feedback Memory
 
 解决的问题：Memory 只应该保存稳定的用户反馈规则，而不是保存所有历史。
@@ -792,6 +801,15 @@ Git 历史，git log 更权威
 数量限制，例如最多 10 条
 放 Semi-Stable Context 后段，不污染 Stable Prefix
 用户明确纠正时才写入
+```
+
+当前实现说明：
+
+```text
+M5 已实现 FeedbackMemory 读取 .minicc/memory/feedback_rules.jsonl。
+每条规则支持 never / prefer / caution。
+ContextBuilder 按当前 goal 做轻量关键词筛选后注入。
+Memory 不参与 trajectory compression，也不会写入 Stable Prefix。
 ```
 
 ### L15 Trace 与 Metrics
@@ -845,6 +863,18 @@ cache_hit_rate
 latency_ms
 total_duration_ms
 artifact_bytes
+```
+
+当前实现说明：
+
+```text
+M5 已实现 TraceRecorder，run 内事件落到 .minicc/runs/<run_id>/trace.jsonl。
+已记录 run_started / prompt_built / model_response / action_parsed /
+policy_decision / sandbox_exec_started / sandbox_exec_finished /
+observation_created / artifact_written / context_compacted /
+approval_requested / run_completed / run_failed。
+metrics.json 在 loop 结束时写入 run_dir，保存 RunState.metrics 快照和 run 状态。
+minicc traces 可列出本地 trace 和 metrics 文件。
 ```
 
 ### L16 Eval Runner

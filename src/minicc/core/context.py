@@ -4,6 +4,9 @@ from dataclasses import dataclass
 
 from minicc.core.protocol import action_to_json
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.memory.feedback import FeedbackMemory
+from minicc.skills.registry import SkillRegistry
+from minicc.trace.recorder import TraceRecorder
 
 
 STABLE_PREFIX = """You are miniCC, a Bash-first CodeAct coding agent.
@@ -48,8 +51,18 @@ class ContextConfig:
 
 
 class ContextBuilder:
-    def __init__(self, config: ContextConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: ContextConfig | None = None,
+        *,
+        skill_registry: SkillRegistry | None = None,
+        feedback_memory: FeedbackMemory | None = None,
+        trace: TraceRecorder | None = None,
+    ) -> None:
         self.config = config or ContextConfig()
+        self.skill_registry = skill_registry
+        self.feedback_memory = feedback_memory
+        self.trace = trace
 
     def build_messages(
         self,
@@ -58,10 +71,13 @@ class ContextBuilder:
     ) -> list[dict[str, str]]:
         recent = self.recent_trajectory(trajectory)
         dynamic_context = self._dynamic_context(state, recent)
-        return [
+        messages = [
             {"role": "system", "content": STABLE_PREFIX},
             {"role": "user", "content": "\n\n".join(dynamic_context)},
         ]
+        if self.trace is not None:
+            self.trace.prompt_built(state, messages)
+        return messages
 
     def maybe_compact(
         self,
@@ -111,10 +127,22 @@ class ContextBuilder:
         state: RunState,
         trajectory: list[TrajectoryStep],
     ) -> list[str]:
-        dynamic_context = [
-            f"Goal: {state.goal}",
-            f"Run status: {state.status}",
-        ]
+        dynamic_context: list[str] = []
+        if self.skill_registry is not None:
+            skill_catalog = self.skill_registry.catalog_text()
+            if skill_catalog:
+                dynamic_context.append(skill_catalog)
+        if self.feedback_memory is not None:
+            memory_context = self.feedback_memory.context_text(state.goal)
+            if memory_context:
+                dynamic_context.append(memory_context)
+
+        dynamic_context.extend(
+            [
+                f"Goal: {state.goal}",
+                f"Run status: {state.status}",
+            ]
+        )
         if state.constraints:
             dynamic_context.append("Constraints:\n" + "\n".join(f"- {item}" for item in state.constraints))
         if state.state_summary:
@@ -182,6 +210,8 @@ class ContextBuilder:
     def _record_compaction(self, state: RunState, message: str) -> None:
         state.metrics["context_compactions"] = state.metrics.get("context_compactions", 0) + 1
         state.metrics["last_context_compaction"] = message
+        if self.trace is not None:
+            self.trace.context_compacted(state, message)
 
     @staticmethod
     def _messages_len(messages: list[dict[str, str]]) -> int:
