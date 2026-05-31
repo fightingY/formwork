@@ -23,7 +23,7 @@ M5: Skill Registry、Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前进度：M5
+## 当前进度：M6
 
 M1 已实现基础闭环：
 
@@ -74,6 +74,26 @@ M5 已实现 Skill / Memory / Trace / Metrics 基础链路：
 - 新增 `TraceRecorder`，将 `run_started`、`prompt_built`、`model_response`、`action_parsed`、`policy_decision`、`sandbox_exec_*`、`observation_created`、`artifact_written`、`context_compacted`、`approval_requested`、`run_completed`、`run_failed` 写入 `trace.jsonl`。
 - 新增 `metrics.json` 落盘，保存 turns、bash actions、protocol errors、policy denials、context compactions、token/cache/latency 等 run 指标快照。
 - `minicc traces` 可列出本地 `.minicc/runs/<run_id>/trace.jsonl` 和 `metrics.json`。
+
+M6 已实现 eval runner 和只读 trace viewer：
+
+- 新增 `minicc eval <path>`，读取 `case.yaml`，复制 fixture 到独立 run workspace，执行 agent，再运行确定性 assertions。
+- Eval 支持 `command`、`file_exists`、`file_not_exists`、`file_contains`、`file_not_contains`、`diff_allowlist`、`diff_does_not_delete`、`no_source_diff`、`max_changed_files`、`metric_at_least`、`trace_contains_event`、`no_policy_violation` 等断言。
+- Eval 报告写入 `.minicc/runs/eval_reports/eval_report.json` 和 `eval_report.md`。
+- 新增 `minicc web`，使用 Python 标准库启动只读 trace viewer，展示 run 列表、timeline、metrics 和 diff。
+
+项目内置了一套 M6 capability suite，覆盖仓库理解、失败测试修复、小功能开发、回归测试、有限重构、环境配置修复、长日志调试和安全清理 8 类任务：
+
+```bash
+uv run minicc eval eval_cases/capability_suite_v1 --execute-local
+```
+
+不加 `--execute-local` 时会按默认 Docker sandbox 执行。评测结束后可查看：
+
+```text
+.minicc/runs/eval_reports/eval_report.json
+.minicc/runs/eval_reports/eval_report.md
+```
 
 ## 快速开始
 
@@ -238,6 +258,12 @@ src/minicc/
   trace/
     recorder.py       # TraceRecorder：JSONL event 记录
     metrics.py        # metrics.json 快照落盘
+  evals/
+    case.py           # eval case.yaml 读取与发现
+    assertions.py     # eval 确定性断言
+    runner.py         # eval suite/case 执行与报告
+  server/
+    app.py            # 标准库只读 trace viewer
   policy/
     base.py           # Policy / PolicyChain / PolicyDecision
     factory.py        # 根据配置构建完整 PolicyChain
@@ -267,11 +293,13 @@ docs/
 
 ## 验收
 
-当前 M5 验收命令：
+当前 M6 验收命令：
 
 ```bash
 uv run minicc --help
 uv run pytest
+uv run minicc traces
+uv run minicc eval eval_cases/capability_suite_v1 --execute-local
 ```
 
-预期：CLI 正常显示，测试全部通过。
+预期：CLI 正常显示，测试全部通过，eval report 正常生成。

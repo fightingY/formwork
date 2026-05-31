@@ -1,0 +1,20 @@
+name: C07_large_log_debugging
+capability: long_output_handling
+prompt: >
+  测试会产生很长日志。请定位第一个真正的失败原因并修复。
+sandbox_mode: locked
+budget:
+  max_turns: 12
+  max_bash_actions: 30
+assertions:
+  - type: command
+    command: "python -m unittest discover -s tests"
+    expect_exit_code: 0
+  - type: trace_contains_event
+    event_type: artifact_written
+  - type: metric_at_least
+    name: artifact_bytes
+    value: 20000
+  - type: diff_allowlist
+    paths: ["src/"]
+proves: "Agent 能在长输出场景下依赖 artifact + preview 定位问题。"

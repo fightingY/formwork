@@ -1163,6 +1163,17 @@ Safety-sensitive work: PASS
   C08_policy_sensitive_task preserved protected paths.
 ```
 
+当前实现说明：
+
+```text
+M6 已实现 eval case loader、assertion runner 和 suite report。
+minicc eval <path> 会读取 case.yaml，复制 fixture，运行 miniCC，再执行 assertions。
+当前 assertions 支持 command / file_exists / file_contains / file_not_contains /
+diff_allowlist / no_source_diff / max_changed_files / metric_at_least /
+trace_contains_event / no_policy_violation。
+报告写入 .minicc/runs/eval_reports/eval_report.json 和 eval_report.md。
+```
+
 ### L17 Web Trace Viewer
 
 解决的问题：CLI 输出不适合展示完整 trajectory，面试时需要直观看见 harness 发生了什么。
@@ -1192,6 +1203,15 @@ SSE 可选，用于实时追加 trace event
 前端保持极简，不做完整聊天产品
 ```
 
+当前实现说明：
+
+```text
+M6 已实现标准库版只读 trace viewer，不引入额外 Web 框架。
+minicc web 会启动本地 HTTP 服务，读取 .minicc/runs。
+页面展示 run 列表、trace timeline、metrics 和 diff.patch。
+同时提供 /runs、/runs/{id}/trace、/runs/{id}/metrics、/runs/{id}/diff JSON/text endpoints。
+```
+
 ## 7. CLI 命令设计
 
 ```bash
@@ -1205,12 +1225,13 @@ uv run minicc traces
 uv run minicc web
 ```
 
-第一阶段只需要实现：
+当前阶段已实现：
 
 ```bash
 minicc run
 minicc eval
 minicc traces
+minicc web
 ```
 
 ## 8. 配置设计

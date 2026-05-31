@@ -1,0 +1,19 @@
+name: C04_add_regression_test
+capability: test_writing
+prompt: >
+  这里有一个已经修复过的边界情况：空输入应该返回空列表。
+  请为它补充回归测试，不改变业务代码。
+sandbox_mode: locked
+budget:
+  max_turns: 8
+  max_bash_actions: 20
+assertions:
+  - type: command
+    command: "python -m unittest discover -s tests"
+    expect_exit_code: 0
+  - type: diff_allowlist
+    paths: ["tests/"]
+  - type: file_contains
+    path: tests/test_parser.py
+    patterns: ["empty", "[]"]
+proves: "Agent 能只补测试，不乱改业务代码。"

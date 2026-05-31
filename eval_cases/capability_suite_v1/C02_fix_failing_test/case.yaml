@@ -1,0 +1,18 @@
+name: C02_fix_failing_test
+capability: debugging
+prompt: >
+  当前仓库测试失败。请定位根因并最小修改修复，最后确保测试通过。
+sandbox_mode: locked
+budget:
+  max_turns: 10
+  max_bash_actions: 25
+assertions:
+  - type: command
+    command: "python -m unittest discover -s tests"
+    expect_exit_code: 0
+  - type: diff_allowlist
+    paths: ["src/"]
+  - type: file_not_contains
+    path: src/calculator.py
+    patterns: ["TODO", "pass  #"]
+proves: "Agent 能读失败信息、定位代码并做最小修复。"

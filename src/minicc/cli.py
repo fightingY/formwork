@@ -5,12 +5,14 @@ import sys
 from pathlib import Path
 
 from minicc import __version__
-from minicc.config import Settings, load_settings
+from minicc.config import BudgetSettings, SandboxSettings, Settings, load_settings
 from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
+from minicc.evals.case import EvalCase
+from minicc.evals.runner import copy_report_to_run_root, run_eval_suite
 from minicc.memory.feedback import FeedbackMemory
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
@@ -83,12 +85,22 @@ def build_parser() -> argparse.ArgumentParser:
     deny_parser.add_argument("--reason", default="User denied the action.", help="Reason returned to the model.")
     deny_parser.set_defaults(handler=deny_command)
 
-    eval_parser = subparsers.add_parser("eval", help="Eval runner entry point placeholder for M6.")
+    eval_parser = subparsers.add_parser("eval", help="Run eval cases and write JSON/Markdown reports.")
     eval_parser.add_argument("path", nargs="?", default="eval_cases", help="Eval cases directory.")
+    eval_parser.add_argument(
+        "--execute-local",
+        action="store_true",
+        help="Run eval bash actions locally instead of Docker.",
+    )
     eval_parser.set_defaults(handler=eval_command)
 
     traces_parser = subparsers.add_parser("traces", help="List runs that have trace or metrics files.")
     traces_parser.set_defaults(handler=traces_command)
+
+    web_parser = subparsers.add_parser("web", help="Serve a read-only trace viewer.")
+    web_parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
+    web_parser.add_argument("--port", type=int, default=8765, help="Port to bind.")
+    web_parser.set_defaults(handler=web_command)
     return parser
 
 
@@ -386,11 +398,111 @@ def _load_waiting_state(
 
 
 def eval_command(args: argparse.Namespace) -> int:
-    print(
-        f"Eval runner is scheduled for M6. Received cases path: {args.path}\n"
-        "M1 currently provides the CLI skeleton, provider adapter, action protocol, and minimal loop."
+    settings = load_settings()
+    provider = _build_provider_or_print_error(settings)
+    if provider is None:
+        return 2
+
+    runs_root = Path.cwd() / ".minicc" / "runs"
+
+    def agent_runner(case: EvalCase, state: RunState) -> RunState:
+        artifacts = ArtifactStore(
+            state.artifacts_dir or state.run_dir / "artifacts",
+            display_path_prefix=".minicc_artifacts",
+            preview_chars=settings.context.artifact_preview_chars,
+        )
+        runner = None
+        try:
+            if args.execute_local or case.sandbox_mode == "local":
+                executor = LocalCommandExecutor(
+                    artifacts=artifacts,
+                    preview_chars=settings.context.artifact_preview_chars,
+                )
+            else:
+                runner = DockerSandboxRunner(
+                    DockerSandboxConfig(
+                        image=settings.sandbox.image,
+                        cpus=settings.sandbox.cpus,
+                        memory=settings.sandbox.memory,
+                        pids_limit=settings.sandbox.pids_limit,
+                        network="bridge" if case.sandbox_mode == "dev" else settings.sandbox.network,
+                    )
+                )
+                state.container_name = runner.start(
+                    run_id=state.run_id,
+                    workspace_dir=state.workspace_host_path,
+                    artifacts_dir=state.artifacts_dir,
+                )
+                executor = DockerCommandExecutor(runner, artifacts=artifacts)
+            session = SessionManager()
+            session.save(state)
+            case_settings = _settings_for_eval_case(settings, case)
+            loop = _build_loop(
+                provider,
+                executor,
+                settings=case_settings,
+                session=session,
+                state=state,
+                max_turns=_case_int(case, "max_turns", case_settings.budget.max_turns),
+            )
+            return loop.run(state).state
+        finally:
+            if runner is not None:
+                runner.cleanup(state.container_name)
+
+    result = run_eval_suite(Path(args.path), runs_root=runs_root, agent_runner=agent_runner)
+    json_path, markdown_path = copy_report_to_run_root(result, runs_root)
+    print(f"eval_status: {'PASS' if result.passed else 'FAIL'}")
+    print(f"json_report: {json_path}")
+    print(f"markdown_report: {markdown_path}")
+    return 0 if result.passed else 1
+
+
+def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
+    budget = settings.budget
+    if case.budget:
+        budget = BudgetSettings(
+            max_turns=_case_int(case, "max_turns", settings.budget.max_turns),
+            max_bash_actions=_case_int(case, "max_bash_actions", settings.budget.max_bash_actions),
+            max_seconds=_case_int(case, "max_seconds", settings.budget.max_seconds),
+            max_action_timeout_sec=_case_int(
+                case,
+                "max_action_timeout_sec",
+                settings.budget.max_action_timeout_sec,
+            ),
+        )
+
+    if case.sandbox_mode not in {"dev", "local"}:
+        return Settings(
+            provider=settings.provider,
+            sandbox=settings.sandbox,
+            budget=budget,
+            context=settings.context,
+            policy=settings.policy,
+        )
+    sandbox = SandboxSettings(
+        image=settings.sandbox.image,
+        mode="dev",
+        cpus=settings.sandbox.cpus,
+        memory=settings.sandbox.memory,
+        pids_limit=settings.sandbox.pids_limit,
+        network="bridge",
     )
-    return 0
+    return Settings(
+        provider=settings.provider,
+        sandbox=sandbox,
+        budget=budget,
+        context=settings.context,
+        policy=settings.policy,
+    )
+
+
+def _case_int(case: EvalCase, name: str, default: int) -> int:
+    value = case.budget.get(name)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def traces_command(args: argparse.Namespace) -> int:
@@ -412,6 +524,13 @@ def traces_command(args: argparse.Namespace) -> int:
                 print(f"  metrics: {metrics_path}")
     if not found:
         print(f"No trace files found under {runs_root}.")
+    return 0
+
+
+def web_command(args: argparse.Namespace) -> int:
+    from minicc.server.app import serve_trace_viewer
+
+    serve_trace_viewer(runs_root=Path.cwd() / ".minicc" / "runs", host=args.host, port=args.port)
     return 0
 
 

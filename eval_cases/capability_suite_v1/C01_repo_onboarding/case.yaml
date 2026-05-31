@@ -1,0 +1,18 @@
+name: C01_repo_onboarding
+capability: repo_understanding
+prompt: >
+  请理解这个 Python CLI 仓库，不修改源码，生成 ONBOARDING.md。
+  内容必须包含：入口、核心模块、测试命令、运行命令、风险。
+sandbox_mode: locked
+budget:
+  max_turns: 8
+  max_bash_actions: 20
+assertions:
+  - type: file_exists
+    path: ONBOARDING.md
+  - type: file_contains
+    path: ONBOARDING.md
+    patterns: ["入口", "核心模块", "测试命令", "运行命令", "风险"]
+  - type: no_source_diff
+    paths: ["src/", "tests/"]
+proves: "Agent 能在不改源码的情况下完成仓库理解和交接文档。"
