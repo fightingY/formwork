@@ -6,6 +6,7 @@ from pathlib import Path
 
 from minicc import __version__
 from minicc.config import Settings, load_settings
+from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.session import SessionManager
@@ -334,6 +335,13 @@ def _build_loop(
     return AgentLoop(
         provider,
         executor,
+        context_builder=ContextBuilder(
+            ContextConfig(
+                max_prompt_chars=settings.context.max_prompt_chars,
+                recent_turns=settings.context.recent_turns,
+                artifact_preview_chars=settings.context.artifact_preview_chars,
+            )
+        ),
         policy_chain=build_policy_chain(settings),
         session=session,
         config=LoopConfig(

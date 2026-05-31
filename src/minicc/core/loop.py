@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from minicc.core.action_handler import ActionHandler
-from minicc.core.prompt import PromptBuilder
+from minicc.core.context import ContextBuilder
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelProvider
 from minicc.core.runner import ModelTurnConfig, ModelTurnRunner
@@ -38,16 +38,16 @@ class AgentLoop:
         provider: ModelProvider,
         executor: BashExecutor,
         *,
-        prompt_builder: PromptBuilder | None = None,
+        context_builder: ContextBuilder | None = None,
         policy_chain: PolicyChain | None = None,
         session: SessionManager | None = None,
         config: LoopConfig | None = None,
     ) -> None:
         self.config = config or LoopConfig()
         self.session = session or SessionManager()
+        self.context_builder = context_builder or ContextBuilder()
         self.turn_runner = ModelTurnRunner(
             provider,
-            prompt_builder=prompt_builder,
             config=ModelTurnConfig(
                 max_protocol_errors=self.config.max_protocol_errors,
                 max_action_timeout_sec=self.config.max_action_timeout_sec,
@@ -68,7 +68,9 @@ class AgentLoop:
                 self.session.fail(state, "Run failed because max_turns was exhausted.")
                 break
 
-            turn = self.turn_runner.next_turn(state, trajectory)
+            self.context_builder.maybe_compact(state, trajectory)
+            messages = self.context_builder.build_messages(state, trajectory)
+            turn = self.turn_runner.next_turn(state, messages)
             if turn.observation is not None:
                 trajectory.append(TrajectoryStep(action=turn.action, observation=turn.observation))
 

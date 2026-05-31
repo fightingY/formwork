@@ -23,7 +23,7 @@ M5: Skill Registry、Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前进度：M3
+## 当前进度：M4
 
 M1 已实现基础闭环：
 
@@ -56,6 +56,15 @@ M3 已实现策略中间件和 HITL 基础链路：
 - 实现 `ApprovalPolicy`，对删除类高风险动作触发人工审批。
 - `ask` 和 `require_approval` 会让 run 进入 `waiting_approval`，并把状态保存到 `state.json`。
 - 新增 `approve`、`deny`、`resume` CLI 命令，支持 Stop and Resume 风格的审批恢复。
+
+M4 已实现上下文构建和压缩基础链路：
+
+- 新增 `ContextBuilder`，统一承载 prompt assembly、context budget 和 compression 逻辑。
+- Prompt 按 Stable Prefix / Dynamic Context 分层组装，把 action 协议、policy 摘要和 observation contract 固定前置。
+- `AgentLoop` 每轮先调用 `ContextBuilder.maybe_compact`，再构建 messages 并交给模型回合执行。
+- 动态上下文只保留最近 `context.recent_turns` 条 trajectory，旧轨迹超过预算时压缩进 `RunState.state_summary`。
+- 压缩指标写入 `metrics.context_compactions`，同时记录已经压缩过的 trajectory 步数，避免重复压缩。
+- 实际项目统一使用 `ContextBuilder.build_messages()`，不再保留 `PromptBuilder` 兼容层。
 
 ## 快速开始
 
@@ -206,9 +215,10 @@ src/minicc/
   core/
     loop.py           # 只保留 Agent Loop 编排
     runner.py         # 模型调用、usage 统计、action 解析
+    context.py        # M4 ContextBuilder：prompt 分层、预算检查、压缩摘要
     action_handler.py # final/ask/bash 分流，policy 和 executor 调度
     session.py        # state 保存、审批请求和审批结果应用
-    prompt.py         # M1 简版 prompt builder
+    prompt.py         # 旧 prompt 模块兼容入口，仅导出 ContextBuilder / SYSTEM_PROMPT
     protocol.py       # bash / ask / final action parser
     provider.py       # OpenAI-compatible Provider Adapter
     state.py          # RunState / Observation / TrajectoryStep
@@ -241,7 +251,7 @@ docs/
 
 ## 验收
 
-当前 M3 验收命令：
+当前 M4 验收命令：
 
 ```bash
 uv run minicc --help

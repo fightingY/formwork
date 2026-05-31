@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from minicc.core.prompt import PromptBuilder
 from minicc.core.protocol import Action, ProtocolError, parse_action
 from minicc.core.provider import CompletionOptions, ModelProvider, ModelUsage
-from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.core.state import Observation, RunState
 
 
 @dataclass(frozen=True)
@@ -27,16 +26,17 @@ class ModelTurnRunner:
         self,
         provider: ModelProvider,
         *,
-        prompt_builder: PromptBuilder | None = None,
         config: ModelTurnConfig | None = None,
     ) -> None:
         self.provider = provider
-        self.prompt_builder = prompt_builder or PromptBuilder()
         self.config = config or ModelTurnConfig()
         self.protocol_errors = 0
 
-    def next_turn(self, state: RunState, trajectory: list[TrajectoryStep]) -> ModelTurn:
-        messages = self.prompt_builder.build(state, trajectory)
+    def next_turn(
+        self,
+        state: RunState,
+        messages: list[dict[str, str]],
+    ) -> ModelTurn:
         response = self.provider.complete(messages, options=self.config.model_options)
         state.metrics["turns"] += 1
         _accumulate_usage(state, response.usage, response.latency_ms)

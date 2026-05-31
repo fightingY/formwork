@@ -65,8 +65,8 @@ mini-claude-code/
       loop.py
       protocol.py
       state.py
+      context.py
       prompt.py
-      compression.py
       provider.py
     sandbox/
       docker_runner.py
@@ -324,7 +324,8 @@ finalize -> write diff, metrics, trace summary, remove container
 
 ```python
 while state.status == "running":
-    prompt_messages = prompt_builder.build(state, trajectory)
+    context_builder.maybe_compact(state, trajectory)
+    prompt_messages = context_builder.build_messages(state, trajectory)
     response = provider.complete(prompt_messages)
     action = protocol.parse(response.text)
 
@@ -344,8 +345,6 @@ while state.status == "running":
     observation = executor.handle(action, decision, state)
     trajectory.append(action, observation)
     trace.record_observation(observation)
-
-    context_manager.maybe_compact(state, trajectory)
 ```
 
 注意：Loop 不应该塞进具体 policy、Docker 命令、prompt 拼接细节。Loop 只做编排。
@@ -635,6 +634,14 @@ Skill 只放目录，不把所有 SKILL.md 塞进稳定前缀
 工具大结果只放 preview，不污染长前缀
 ```
 
+当前实现说明：
+
+```text
+M4 将 prompt assembly 和 compression 统一收敛到 core/context.py 的 ContextBuilder。
+实际项目统一使用 ContextBuilder.build_messages()，不再保留 PromptBuilder 兼容层。
+AgentLoop 每轮先调用 maybe_compact，再调用 build_messages。
+```
+
 ### L12 Context Budget 与 Compression
 
 解决的问题：长任务会把上下文撑爆，大量工具结果会稀释关键状态，还可能破坏 prompt cache。
@@ -689,6 +696,16 @@ state_summary 应包含：
 未解决问题
 下一步建议
 artifact 引用
+```
+
+当前实现说明：
+
+```text
+第一版 compression 采用确定性摘要，不额外调用模型。
+超过 context.max_prompt_chars 时，旧 trajectory 被总结进 RunState.state_summary。
+ContextBuilder 只把最近 context.recent_turns 条 trajectory 放入 Dynamic Context。
+metrics.context_compactions 记录压缩次数。
+metrics.context_compacted_steps 记录已压缩步数，避免重复压缩同一段轨迹。
 ```
 
 ### L13 Skill Registry

@@ -141,6 +141,8 @@ def initial_metrics() -> dict[str, Any]:
         "artifact_bytes": 0,
         "policy_denials": 0,
         "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
     }
 
 
