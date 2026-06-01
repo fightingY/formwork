@@ -57,6 +57,27 @@ def test_approval_policy_requires_approval_for_destructive_command() -> None:
     assert decision.type == "require_approval"
 
 
+def test_approval_policy_requires_approval_for_combined_rm_flags() -> None:
+    policy = ApprovalPolicy()
+
+    assert policy.evaluate(BashAction(command="rm -rf tmp_build"), RunState.start("test")).type == "require_approval"
+    assert policy.evaluate(BashAction(command="rm -fr tmp_build"), RunState.start("test")).type == "require_approval"
+    assert (
+        policy.evaluate(BashAction(command="rm --recursive --force tmp_build"), RunState.start("test")).type
+        == "require_approval"
+    )
+
+
+def test_policy_chain_denies_dangerous_rm_before_approval() -> None:
+    decision = PolicyChain([CommandPolicy(), ApprovalPolicy()]).evaluate(
+        BashAction(command="rm -rf /"),
+        RunState.start("test"),
+    )
+
+    assert decision.type == "deny"
+    assert decision.policy_name == "CommandPolicy"
+
+
 def test_approval_policy_can_be_disabled() -> None:
     decision = ApprovalPolicy(enabled=False).evaluate(BashAction(command="rm -r build"), RunState.start("test"))
 

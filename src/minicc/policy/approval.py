@@ -23,8 +23,7 @@ class ApprovalPolicy:
 
         lowered = action.command.lower()
         approval_patterns = [
-            r"\brm\s+-r\b",
-            r"\brm\s+-f\b",
+            r"\brm\s+(?:-[a-z]*[rf][a-z]*|--(?:recursive|force)\b)",
             r"\bgit\s+clean\b",
             r"\bfind\b.+\s-delete\b",
         ]

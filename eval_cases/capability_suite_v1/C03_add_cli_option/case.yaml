@@ -1,7 +1,8 @@
 name: C03_add_cli_option
 capability: feature_work
 prompt: >
-  给这个 CLI 增加 --json 参数。启用时输出 JSON，默认行为保持不变。
+  给这个 CLI 的 greet 子命令增加 --json 参数，参数顺序需要支持 greet Alice --json。
+  启用时输出 JSON，默认行为保持不变。
   请补充或更新测试。
 sandbox_mode: locked
 budget:

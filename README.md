@@ -80,7 +80,7 @@ M6 已实现 eval runner 和只读 trace viewer：
 - 新增 `minicc eval <path>`，读取 `case.yaml`，复制 fixture 到独立 run workspace，执行 agent，再运行确定性 assertions。
 - Eval 支持 `command`、`file_exists`、`file_not_exists`、`file_contains`、`file_not_contains`、`diff_allowlist`、`diff_does_not_delete`、`no_source_diff`、`max_changed_files`、`metric_at_least`、`trace_contains_event`、`no_policy_violation` 等断言。
 - Eval 报告写入 `.minicc/runs/eval_reports/eval_report.json` 和 `eval_report.md`。
-- 新增 `minicc web`，使用 Python 标准库启动只读 trace viewer，展示 run 列表、timeline、metrics 和 diff。
+- 新增 `minicc web`，使用 Python 标准库启动只读 trace viewer，支持自动刷新、run 搜索、事件筛选、timeline、metrics 和 diff 查看。
 
 项目内置了一套 M6 capability suite，覆盖仓库理解、失败测试修复、小功能开发、回归测试、有限重构、环境配置修复、长日志调试和安全清理 8 类任务：
 
@@ -94,6 +94,21 @@ uv run minicc eval eval_cases/capability_suite_v1 --execute-local
 .minicc/runs/eval_reports/eval_report.json
 .minicc/runs/eval_reports/eval_report.md
 ```
+
+如需查看 trace viewer，另开一个终端启动只读 Web 服务：
+
+```bash
+uv run minicc web
+```
+
+然后打开：
+
+```text
+http://127.0.0.1:8765
+```
+
+当前 Web viewer 不会随 `eval` 自动启动；它以 2 秒轮询方式读取 `.minicc/runs` 下已写入的
+`trace.jsonl`、`metrics.json` 和 `artifacts/diff.patch`，适合在另一个终端中陪跑 `eval` 或单次 `run`。
 
 ## 快速开始
 

@@ -30,6 +30,16 @@ def test_session_manager_approve_then_apply_executes_pending_action(tmp_path) ->
     assert state.last_observation.stdout_preview == "approved"
 
 
+def test_session_manager_save_uses_configured_runs_root(tmp_path) -> None:
+    state = RunState.start("custom root")
+    session = SessionManager(runs_root=tmp_path / "runs")
+
+    path = session.save(state)
+
+    assert path == tmp_path / "runs" / state.run_id / "state.json"
+    assert path.exists()
+
+
 def test_session_manager_deny_then_apply_returns_approval_observation(tmp_path) -> None:
     state = RunState.start("deny", run_dir=tmp_path)
     state.status = "waiting_approval"

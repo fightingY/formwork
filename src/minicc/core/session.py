@@ -20,6 +20,8 @@ class SessionManager:
     runs_root: Path | None = None
 
     def save(self, state: RunState) -> Path:
+        if state.run_dir is None and self.runs_root is not None:
+            return save_run_state(state, self.state_path(state.run_id))
         return save_run_state(state)
 
     def load(self, run_id: str) -> RunState:

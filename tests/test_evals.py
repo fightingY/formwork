@@ -48,13 +48,14 @@ def test_eval_assertions_cover_files_metrics_trace_and_diff(tmp_path) -> None:
             {"type": "file_not_exists", "path": "missing.txt"},
             {"type": "file_contains", "path": "README.md", "patterns": ["eval"]},
             {"type": "metric_at_least", "name": "turns", "value": 2},
+            {"type": "run_status", "value": "waiting_approval"},
             {"type": "trace_contains_event", "event_type": "artifact_written"},
             {"type": "diff_allowlist", "paths": ["README.md"]},
             {"type": "diff_does_not_delete", "paths": ["src/", "tests/"]},
         ],
         workspace_dir=workspace,
         run_dir=run_dir,
-        metrics={"turns": 3},
+        metrics={"turns": 3, "status": "waiting_approval"},
     )
 
     assert all(result.passed for result in results)

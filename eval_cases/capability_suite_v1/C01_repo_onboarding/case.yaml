@@ -1,7 +1,7 @@
 name: C01_repo_onboarding
 capability: repo_understanding
 prompt: >
-  请理解这个 Python CLI 仓库，不修改源码，生成 ONBOARDING.md。
+  请理解这个 Python CLI 仓库，不修改源码，并在仓库根目录创建 ONBOARDING.md 文件。
   内容必须包含：入口、核心模块、测试命令、运行命令、风险。
 sandbox_mode: locked
 budget:

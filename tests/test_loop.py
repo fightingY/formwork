@@ -4,6 +4,7 @@ import json
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
+from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState
 from minicc.policy.base import PolicyChain, PolicyDecision
 from minicc.policy.network import NetworkPolicy
@@ -42,7 +43,7 @@ class FakeExecutor(BashExecutor):
         )
 
 
-def test_loop_runs_bash_then_final() -> None:
+def test_loop_runs_bash_then_final(tmp_path) -> None:
     provider = FakeProvider(
         [
             '{"type":"bash","command":"pytest -q","purpose":"run tests"}',
@@ -52,7 +53,7 @@ def test_loop_runs_bash_then_final() -> None:
     executor = FakeExecutor()
     state = RunState.start("Run tests")
 
-    result = AgentLoop(provider, executor).run(state)
+    result = AgentLoop(provider, executor, session=SessionManager(runs_root=tmp_path / "runs")).run(state)
 
     assert result.state.status == "completed"
     assert result.state.final_answer == "Tests passed."
@@ -63,34 +64,35 @@ def test_loop_runs_bash_then_final() -> None:
     assert result.state.metrics["cached_tokens"] == 10
 
 
-def test_loop_turns_protocol_error_into_observation_then_recovers() -> None:
+def test_loop_turns_protocol_error_into_observation_then_recovers(tmp_path) -> None:
     provider = FakeProvider(["not json", '{"type":"final","answer":"Recovered."}'])
     state = RunState.start("Handle protocol error")
 
-    result = AgentLoop(provider, FakeExecutor()).run(state)
+    result = AgentLoop(provider, FakeExecutor(), session=SessionManager(runs_root=tmp_path / "runs")).run(state)
 
     assert result.state.status == "completed"
     assert result.state.metrics["protocol_errors"] == 1
     assert result.trajectory[0].observation.kind == "protocol_error"
 
 
-def test_loop_waits_on_ask_action() -> None:
+def test_loop_waits_on_ask_action(tmp_path) -> None:
     provider = FakeProvider(['{"type":"ask","question":"Which test command should I use?"}'])
     state = RunState.start("Need clarification")
 
-    result = AgentLoop(provider, FakeExecutor()).run(state)
+    result = AgentLoop(provider, FakeExecutor(), session=SessionManager(runs_root=tmp_path / "runs")).run(state)
 
     assert result.state.status == "waiting_approval"
     assert result.state.open_questions == ["Which test command should I use?"]
 
 
-def test_loop_fails_after_protocol_error_threshold() -> None:
+def test_loop_fails_after_protocol_error_threshold(tmp_path) -> None:
     provider = FakeProvider(["bad 1", "bad 2", "bad 3"])
     state = RunState.start("Bad model")
 
     result = AgentLoop(
         provider,
         FakeExecutor(),
+        session=SessionManager(runs_root=tmp_path / "runs"),
         config=LoopConfig(max_turns=5, max_protocol_errors=2),
     ).run(state)
 
@@ -98,7 +100,7 @@ def test_loop_fails_after_protocol_error_threshold() -> None:
     assert result.state.metrics["protocol_errors"] == 3
 
 
-def test_loop_turns_policy_deny_into_observation() -> None:
+def test_loop_turns_policy_deny_into_observation(tmp_path) -> None:
     provider = FakeProvider(
         [
             '{"type":"bash","command":"sudo apt update"}',
@@ -116,6 +118,7 @@ def test_loop_turns_policy_deny_into_observation() -> None:
         provider,
         FakeExecutor(),
         policy_chain=PolicyChain([DenyPolicy()]),
+        session=SessionManager(runs_root=tmp_path / "runs"),
     ).run(RunState.start("deny command"))
 
     assert result.state.status == "completed"

@@ -49,6 +49,8 @@ def run_assertion(
         return _assert_file_contains(assertion, workspace_dir, should_contain=False)
     if assertion_type == "metric_at_least":
         return _assert_metric_at_least(assertion, metrics)
+    if assertion_type == "run_status":
+        return _assert_run_status(assertion, metrics)
     if assertion_type == "trace_contains_event":
         return _assert_trace_contains_event(assertion, run_dir)
     if assertion_type == "no_policy_violation":
@@ -128,6 +130,16 @@ def _assert_metric_at_least(assertion: dict[str, Any], metrics: dict[str, Any]) 
         "metric_at_least",
         actual >= expected,
         f"metric {name}={actual}, expected at least {expected}",
+    )
+
+
+def _assert_run_status(assertion: dict[str, Any], metrics: dict[str, Any]) -> AssertionResult:
+    expected = str(assertion.get("value") or "")
+    actual = str(metrics.get("status") or "")
+    return AssertionResult(
+        "run_status",
+        actual == expected,
+        f"run status={actual}, expected={expected}",
     )
 
 
