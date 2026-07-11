@@ -70,7 +70,9 @@ def run_eval_case(
         run_dir=workspace.run_dir,
         metrics=metrics or state.metrics,
     )
-    passed = state.status != "failed" and all(result.passed for result in assertion_results)
+    expected_status = _expected_run_status(case)
+    status_passed = state.status == expected_status
+    passed = status_passed and all(result.passed for result in assertion_results)
     return EvalCaseResult(
         name=case.name,
         capability=case.capability,
@@ -142,6 +144,15 @@ def _load_metrics(run_dir: Path) -> dict | None:
     if not metrics_path.exists():
         return None
     return json.loads(metrics_path.read_text(encoding="utf-8"))
+
+
+def _expected_run_status(case: EvalCase) -> str:
+    for assertion in case.assertions:
+        if assertion.get("type") == "run_status":
+            expected = str(assertion.get("value", "completed"))
+            if expected == "waiting_approval" and case.capability.startswith("hitl"):
+                return expected
+    return "completed"
 
 
 def clean_eval_run(runs_root: Path, name: str) -> None:

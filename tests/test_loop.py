@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import json
+from pathlib import Path
 
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.protocol import BashAction
@@ -170,3 +171,8 @@ def test_loop_records_trace_and_metrics(tmp_path) -> None:
     assert "sandbox_exec_finished" in events
     assert "run_completed" in events
     assert (tmp_path / "metrics.json").exists()
+    report = json.loads((tmp_path / "run_report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "completed"
+    assert report["passed"] is True
+    assert Path(report["evidence"]["diff"]).parts[-2:] == ("artifacts", "diff.patch")
+    assert (tmp_path / "run_report.md").exists()

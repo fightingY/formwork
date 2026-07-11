@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from minicc.core.state import RunState
 from minicc.trace.metrics import write_metrics
 from minicc.trace.recorder import TraceRecorder
+from minicc.trace.report import write_run_report
 
 
 @dataclass
@@ -28,3 +29,4 @@ class RunLifecycle:
         elif state.status == "failed":
             self.trace.run_failed(state)
         write_metrics(state)
+        write_run_report(state)

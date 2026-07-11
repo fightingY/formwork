@@ -18,12 +18,14 @@ miniCC 用极简 bash / ask / final action space 承载模型智能，用 harnes
 M1: uv 项目骨架、Provider Adapter、Action Protocol、Minimal Agent Loop
 M2: workspace copy、Docker sandbox、Observation contract、Artifact store
 M3: PolicyChain、Command/Network/Budget policy、ask/approval/resume
-M4: Prompt builder、prompt cache 友好布局、context budget、compression
-M5: Skill Registry、Feedback Memory、Trace events、Metrics
+M4: Prompt builder、prompt cache 友好布局、context budget、experimental compression
+M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前进度：M6
+## 当前稳定版本：Stable V1.0
+
+Stable V1.0 只声明已经通过基线验收的 Agent Loop、workspace、Docker sandbox、Policy、trace、metrics、eval 和只读 Web Viewer。Semantic compaction、Skill Registry 和 Feedback Memory 虽然已有原型及单元测试，但在完成独立效果实验前统一视为 experimental，不计入 Stable V1.0 的稳定能力。
 
 M1 已实现基础闭环：
 
@@ -57,23 +59,20 @@ M3 已实现策略中间件和 HITL 基础链路：
 - `ask` 和 `require_approval` 会让 run 进入 `waiting_approval`，并把状态保存到 `state.json`。
 - 新增 `approve`、`deny`、`resume` CLI 命令，支持 Stop and Resume 风格的审批恢复。
 
-M4 已实现上下文构建和压缩基础链路：
+M4 已实现稳定的上下文构建基础链路：
 
 - 新增 `ContextBuilder`，统一承载 prompt assembly、context budget 和 compression 逻辑。
 - Prompt 按 Stable Prefix / Dynamic Context 分层组装，把 action 协议、policy 摘要和 observation contract 固定前置。
-- `AgentLoop` 每轮先调用 `ContextBuilder.maybe_compact`，再构建 messages 并交给模型回合执行。
-- 动态上下文只保留最近 `context.recent_turns` 条 trajectory，旧轨迹超过预算时压缩进 `RunState.state_summary`。
-- 压缩指标写入 `metrics.context_compactions`，同时记录已经压缩过的 trajectory 步数，避免重复压缩。
 - 实际项目统一使用 `ContextBuilder.build_messages()`，不再保留 `PromptBuilder` 兼容层。
+- Semantic compaction 代码暂按 experimental 保留，需通过后续 A/B 里程碑后才能作为稳定能力对外声明。
 
-M5 已实现 Skill / Memory / Trace / Metrics 基础链路：
+M5 已实现稳定的 Trace / Metrics 基础链路：
 
-- 新增 `SkillRegistry`，从 `skills/<name>/SKILL.md` 读取 frontmatter，并在 prompt 中只注入 name + description catalog。
-- 新增 `FeedbackMemory`，从 `.minicc/memory/feedback_rules.jsonl` 读取 `never` / `prefer` / `caution` 规则，并按当前 goal 筛选注入。
-- `ContextBuilder` 支持注入 skill catalog 和 feedback memory，位置在动态任务状态之前，不改 Stable Prefix。
 - 新增 `TraceRecorder`，将 `run_started`、`prompt_built`、`model_response`、`action_parsed`、`policy_decision`、`sandbox_exec_*`、`observation_created`、`artifact_written`、`context_compacted`、`approval_requested`、`run_completed`、`run_failed` 写入 `trace.jsonl`。
 - 新增 `metrics.json` 落盘，保存 turns、bash actions、protocol errors、policy denials、context compactions、token/cache/latency 等 run 指标快照。
+- 每个结束的 run 生成 `run_report.json` 和 `run_report.md`，统一关联 state、trace、metrics 和 diff 证据。
 - `minicc traces` 可列出本地 `.minicc/runs/<run_id>/trace.jsonl` 和 `metrics.json`。
+- Skill Registry 和 Feedback Memory 暂按 experimental 保留，尚未声明对任务通过率或重复 I/O 的收益。
 
 M6 已实现 eval runner 和只读 trace viewer：
 
@@ -186,6 +185,11 @@ uv run minicc run "分析这个仓库并给出测试计划"
 .minicc/runs/<run_id>/workspace
 .minicc/runs/<run_id>/artifacts
 .minicc/runs/<run_id>/artifacts/diff.patch
+.minicc/runs/<run_id>/state.json
+.minicc/runs/<run_id>/trace.jsonl
+.minicc/runs/<run_id>/metrics.json
+.minicc/runs/<run_id>/run_report.json
+.minicc/runs/<run_id>/run_report.md
 ```
 
 若只做本地开发演示，可以显式开启本地执行：
@@ -308,13 +312,15 @@ docs/
 
 ## 验收
 
-当前 M6 验收命令：
+Stable V1.0 验收命令：
 
 ```bash
 uv run minicc --help
-uv run pytest
+uv run minicc run --help
+uv run minicc eval --help
+uv run minicc web --help
+uv run pytest -q
 uv run minicc traces
-uv run minicc eval eval_cases/capability_suite_v1 --execute-local
 ```
 
-预期：CLI 正常显示，测试全部通过，eval report 正常生成。
+版本化验收结果保存在 `acceptance/stable-v1.0/`。真实模型 capability suite 从 V1.1 开始按固定 provider、模型、温度和预算单独验收，不属于 V1.0 基线恢复的成功率声明。

@@ -91,6 +91,58 @@ assertions:
     assert "Overall: PASS" in markdown_path.read_text(encoding="utf-8")
 
 
+def test_eval_runner_rejects_waiting_approval_for_ordinary_case(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "ordinary"
+    fixture = case_dir / "fixture"
+    fixture.mkdir(parents=True)
+    (case_dir / "case.yaml").write_text(
+        """
+name: ordinary
+prompt: Finish without approval.
+assertions:
+  - type: run_status
+    value: waiting_approval
+""",
+        encoding="utf-8",
+    )
+
+    def waiting_agent(case, state: RunState) -> RunState:
+        state.status = "waiting_approval"
+        return state
+
+    result = run_eval_suite(tmp_path / "cases", runs_root=tmp_path / "runs", agent_runner=waiting_agent)
+
+    assert result.passed is False
+    assert result.cases[0].passed is False
+
+
+def test_eval_runner_allows_explicit_hitl_waiting_status(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "hitl"
+    fixture = case_dir / "fixture"
+    fixture.mkdir(parents=True)
+    (case_dir / "case.yaml").write_text(
+        """
+name: hitl
+capability: hitl_safety
+prompt: Request approval.
+assertions:
+  - type: run_status
+    value: waiting_approval
+""",
+        encoding="utf-8",
+    )
+
+    def waiting_agent(case, state: RunState) -> RunState:
+        state.status = "waiting_approval"
+        state.metrics["status"] = state.status
+        return state
+
+    result = run_eval_suite(tmp_path / "cases", runs_root=tmp_path / "runs", agent_runner=waiting_agent)
+
+    assert result.passed is True
+    assert result.cases[0].passed is True
+
+
 def test_eval_case_budget_overrides_settings(tmp_path) -> None:
     case_dir = tmp_path / "cases" / "demo"
     fixture = case_dir / "fixture"

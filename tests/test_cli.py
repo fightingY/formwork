@@ -3,11 +3,26 @@ import argparse
 from minicc import cli
 from minicc.config import BudgetSettings, ContextSettings, PolicySettings, ProviderSettings, SandboxSettings, Settings
 from minicc.core.protocol import BashAction
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
 from minicc.core.state import Observation, RunState, save_run_state
 
 
 class FakeProvider:
-    pass
+    def __init__(self, responses: list[str] | None = None) -> None:
+        self.responses = responses or []
+
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        options: CompletionOptions | None = None,
+    ) -> ModelResponse:
+        return ModelResponse(
+            text=self.responses.pop(0),
+            raw={},
+            usage=ModelUsage(prompt_tokens=5, completion_tokens=2),
+            latency_ms=3,
+        )
 
 
 class FakeExecutor:
@@ -26,6 +41,51 @@ class FakeLoop:
         state.status = "completed"
         state.final_answer = "done"
         return type("LoopResult", (), {"state": state})()
+
+
+def test_run_command_fake_provider_writes_complete_evidence_bundle(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    settings = Settings(
+        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(max_turns=2),
+        context=ContextSettings(),
+        policy=PolicySettings(),
+    )
+    provider = FakeProvider(
+        [
+            '{"type":"bash","command":"echo ok","purpose":"smoke test"}',
+            '{"type":"final","answer":"done"}',
+        ]
+    )
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "_build_provider_or_print_error", lambda loaded: provider)
+    monkeypatch.setattr(cli, "LocalCommandExecutor", FakeExecutor)
+
+    exit_code = cli.run_command(
+        argparse.Namespace(
+            goal="fake provider smoke test",
+            max_turns=None,
+            execute_local=True,
+            no_workspace_copy=False,
+            docker_image=None,
+            stream=None,
+        )
+    )
+
+    run_dirs = [path for path in (tmp_path / ".minicc" / "runs").iterdir() if path.is_dir()]
+    assert exit_code == 0
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    for relative_path in [
+        "state.json",
+        "trace.jsonl",
+        "metrics.json",
+        "artifacts/diff.patch",
+        "run_report.json",
+        "run_report.md",
+    ]:
+        assert (run_dir / relative_path).exists()
 
 
 def test_resume_command_uses_normal_settings_after_approval(tmp_path, monkeypatch) -> None:
