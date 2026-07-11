@@ -1,0 +1,187 @@
+{
+  "passed": true,
+  "repeat": 3,
+  "configuration": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "deepseek-ai/DeepSeek-V4-Flash",
+    "temperature": 0.0,
+    "sandbox_mode": "locked",
+    "execute_local": false
+  },
+  "cases": [
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 1,
+      "run_id": "eval-C02_fix_failing_test-r1-20260711-220338-4c654ec6",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r1-20260711-220338-4c654ec6",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "metrics": {
+        "started_at": "2026-07-11T14:03:40.179589+00:00",
+        "completed_at": "2026-07-11T14:05:54.324627+00:00",
+        "total_duration_ms": 134144,
+        "turns": 6,
+        "bash_actions": 5,
+        "protocol_errors": 0,
+        "command_failures": 1,
+        "timeouts": 0,
+        "prompt_tokens": 6009,
+        "completion_tokens": 1434,
+        "total_tokens": 7443,
+        "cached_tokens": 256,
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 5753,
+        "cache_hit_rate": 0.19306184012066366,
+        "latency_ms": 132615,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C02_fix_failing_test-r1-20260711-220338-4c654ec6",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 2,
+      "run_id": "eval-C02_fix_failing_test-r2-20260711-220555-d4172ba4",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r2-20260711-220555-d4172ba4",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "metrics": {
+        "started_at": "2026-07-11T14:05:56.617421+00:00",
+        "completed_at": "2026-07-11T14:09:21.451753+00:00",
+        "total_duration_ms": 204834,
+        "turns": 8,
+        "bash_actions": 7,
+        "protocol_errors": 0,
+        "command_failures": 1,
+        "timeouts": 0,
+        "prompt_tokens": 8508,
+        "completion_tokens": 1065,
+        "total_tokens": 9573,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 8508,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 202688,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C02_fix_failing_test-r2-20260711-220555-d4172ba4",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 3,
+      "run_id": "eval-C02_fix_failing_test-r3-20260711-220922-2a5874a4",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r3-20260711-220922-2a5874a4",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "metrics": {
+        "started_at": "2026-07-11T14:09:23.644724+00:00",
+        "completed_at": "2026-07-11T14:11:24.057935+00:00",
+        "total_duration_ms": 120413,
+        "turns": 6,
+        "bash_actions": 5,
+        "protocol_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 4920,
+        "completion_tokens": 955,
+        "total_tokens": 5875,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 4920,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 118831,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C02_fix_failing_test-r3-20260711-220922-2a5874a4",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    }
+  ]
+}
