@@ -12,7 +12,7 @@ from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
 from minicc.evals.case import EvalCase
-from minicc.evals.runner import copy_report_to_run_root, run_eval_suite
+from minicc.evals.runner import copy_report_to_run_root, run_eval_suite, write_eval_report
 from minicc.memory.feedback import FeedbackMemory
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
@@ -91,6 +91,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--execute-local",
         action="store_true",
         help="Run eval bash actions locally instead of Docker.",
+    )
+    eval_parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Run every selected eval case N times while preserving each run directory.",
+    )
+    eval_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Write aggregate JSON/Markdown reports to this directory.",
     )
     eval_parser.set_defaults(handler=eval_command)
 
@@ -450,8 +462,25 @@ def eval_command(args: argparse.Namespace) -> int:
             if runner is not None:
                 runner.cleanup(state.container_name)
 
-    result = run_eval_suite(Path(args.path), runs_root=runs_root, agent_runner=agent_runner)
-    json_path, markdown_path = copy_report_to_run_root(result, runs_root)
+    configuration = {
+        "base_url": settings.base_url or "",
+        "model": settings.model or "",
+        "temperature": settings.temperature,
+        "sandbox_mode": settings.sandbox.mode,
+        "execute_local": bool(args.execute_local),
+    }
+    result = run_eval_suite(
+        Path(args.path),
+        runs_root=runs_root,
+        agent_runner=agent_runner,
+        repeat=args.repeat,
+        configuration=configuration,
+        preserve_runs=True,
+    )
+    if args.output_dir is None:
+        json_path, markdown_path = copy_report_to_run_root(result, runs_root)
+    else:
+        json_path, markdown_path = write_eval_report(result, args.output_dir)
     print(f"eval_status: {'PASS' if result.passed else 'FAIL'}")
     print(f"json_report: {json_path}")
     print(f"markdown_report: {markdown_path}")

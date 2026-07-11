@@ -87,8 +87,50 @@ assertions:
     json_path, markdown_path = write_eval_report(result, tmp_path / "reports")
 
     assert result.passed is True
+    assert result.repeat == 1
     assert json.loads(json_path.read_text(encoding="utf-8"))["passed"] is True
     assert "Overall: PASS" in markdown_path.read_text(encoding="utf-8")
+    case_result = json.loads(
+        (tmp_path / "runs" / "eval-demo" / "eval_result.json").read_text(encoding="utf-8")
+    )
+    assert case_result["passed"] is True
+    assert case_result["run_status"] == "completed"
+    assert (tmp_path / "runs" / "eval-demo" / "eval_result.md").exists()
+
+
+def test_eval_repeat_preserves_independent_run_evidence(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "demo"
+    fixture = case_dir / "fixture"
+    fixture.mkdir(parents=True)
+    (case_dir / "case.yaml").write_text(
+        """
+name: demo
+capability: debugging
+prompt: Finish.
+assertions: []
+""",
+        encoding="utf-8",
+    )
+
+    def fake_agent_runner(case, state: RunState) -> RunState:
+        state.status = "completed"
+        state.metrics["status"] = state.status
+        return state
+
+    result = run_eval_suite(
+        tmp_path / "cases",
+        runs_root=tmp_path / "runs",
+        agent_runner=fake_agent_runner,
+        repeat=3,
+        configuration={"model": "fixed-model", "temperature": 0},
+    )
+
+    assert result.passed is True
+    assert result.repeat == 3
+    assert [case.attempt for case in result.cases] == [1, 2, 3]
+    assert len({case.run_id for case in result.cases}) == 3
+    assert all((tmp_path / "runs" / case.run_id / "eval_result.json").exists() for case in result.cases)
+    assert result.configuration == {"model": "fixed-model", "temperature": 0}
 
 
 def test_eval_runner_rejects_waiting_approval_for_ordinary_case(tmp_path) -> None:
