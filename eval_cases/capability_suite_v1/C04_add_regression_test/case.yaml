@@ -2,7 +2,8 @@ name: C04_add_regression_test
 capability: test_writing
 prompt: >
   这里有一个已经修复过的边界情况：空输入应该返回空列表。
-  请为它补充回归测试，不改变业务代码。
+  请在现有 `ParserTests` unittest 类内补充一个空输入返回空列表的测试方法，不改变业务代码。
+  使用 `python -m unittest discover -s tests` 验证一次，通过后立即返回 final，不要重复检查。
 sandbox_mode: locked
 budget:
   max_turns: 8

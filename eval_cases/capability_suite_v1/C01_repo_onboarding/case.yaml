@@ -4,6 +4,7 @@ prompt: >
   请理解这个 Python CLI 仓库，不修改源码，并在仓库根目录创建 ONBOARDING.md 文件。
   文件必须逐字使用以下五个 Markdown 二级标题：
   `## 入口`、`## 核心模块`、`## 测试命令`、`## 运行命令`、`## 风险`。
+  创建后最多读取验证一次；确认五个标题存在后立即返回 final，不要重复检查。
 sandbox_mode: locked
 budget:
   max_turns: 8
