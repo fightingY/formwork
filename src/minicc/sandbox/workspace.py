@@ -69,11 +69,23 @@ def prepare_run_workspace(
 def write_workspace_diff(workspace_dir: Path, artifacts_dir: Path) -> Path:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     diff_path = artifacts_dir / "diff.patch"
+    subprocess.run(
+        ["git", "-C", str(workspace_dir), "add", "-N", "--", "."],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=True,
+    )
     result = subprocess.run(
         ["git", "-C", str(workspace_dir), "diff", "--no-ext-diff"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
+        check=True,
     )
     diff_path.write_text(result.stdout or "", encoding="utf-8")
     return diff_path
