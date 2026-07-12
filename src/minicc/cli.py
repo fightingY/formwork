@@ -104,6 +104,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write aggregate JSON/Markdown reports to this directory.",
     )
+    eval_parser.add_argument(
+        "--case",
+        dest="case_names",
+        action="append",
+        default=None,
+        help="Run only the named case. Repeat this option to select multiple cases.",
+    )
     eval_parser.set_defaults(handler=eval_command)
 
     traces_parser = subparsers.add_parser("traces", help="List runs that have trace or metrics files.")
@@ -476,6 +483,7 @@ def eval_command(args: argparse.Namespace) -> int:
         repeat=args.repeat,
         configuration=configuration,
         preserve_runs=True,
+        case_names=args.case_names,
     )
     if args.output_dir is None:
         json_path, markdown_path = copy_report_to_run_root(result, runs_root)

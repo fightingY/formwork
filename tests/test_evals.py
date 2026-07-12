@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from minicc.core.state import RunState
 from minicc.evals.assertions import run_assertions
 from minicc.evals.case import discover_cases, load_case
@@ -134,6 +136,36 @@ assertions: []
     assert len({case.run_id for case in result.cases}) == 3
     assert all((tmp_path / "runs" / case.run_id / "eval_result.json").exists() for case in result.cases)
     assert result.configuration == {"model": "fixed-model", "temperature": 0}
+
+
+def test_eval_suite_filters_named_cases_and_rejects_unknown_names(tmp_path) -> None:
+    for name in ["C01", "C02"]:
+        case_dir = tmp_path / "cases" / name
+        (case_dir / "fixture").mkdir(parents=True)
+        (case_dir / "case.yaml").write_text(
+            f"name: {name}\nprompt: Finish.\nassertions: []\n",
+            encoding="utf-8",
+        )
+
+    def fake_agent_runner(case, state: RunState) -> RunState:
+        state.status = "completed"
+        return state
+
+    result = run_eval_suite(
+        tmp_path / "cases",
+        runs_root=tmp_path / "runs",
+        agent_runner=fake_agent_runner,
+        case_names=["C02"],
+    )
+
+    assert [case.name for case in result.cases] == ["C02"]
+    with pytest.raises(ValueError, match="Unknown eval case"):
+        run_eval_suite(
+            tmp_path / "cases",
+            runs_root=tmp_path / "runs",
+            agent_runner=fake_agent_runner,
+            case_names=["missing"],
+        )
 
 
 def test_aggregate_case_results_reports_metrics_and_diff_paths(tmp_path) -> None:

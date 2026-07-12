@@ -50,10 +50,18 @@ def run_eval_suite(
     repeat: int = 1,
     configuration: dict | None = None,
     preserve_runs: bool = False,
+    case_names: list[str] | None = None,
 ) -> EvalSuiteResult:
     if repeat < 1:
         raise ValueError("repeat must be at least 1")
     cases = discover_cases(path)
+    if case_names:
+        requested = set(case_names)
+        discovered = {case.name for case in cases}
+        missing = sorted(requested - discovered)
+        if missing:
+            raise ValueError(f"Unknown eval case(s): {', '.join(missing)}")
+        cases = [case for case in cases if case.name in requested]
     results = [
         run_eval_case(
             case,
