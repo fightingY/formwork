@@ -44,6 +44,10 @@ class ModelProvider(Protocol):
         ...
 
 
+class ProviderError(RuntimeError):
+    """Expected failure while communicating with a model provider."""
+
+
 class OpenAICompatibleProvider:
     """Adapter for OpenAI-compatible chat completions APIs."""
 
@@ -99,17 +103,20 @@ class OpenAICompatibleProvider:
         }
 
     def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
-        with httpx.Client(timeout=self.timeout_sec) as client:
-            response = client.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            if not isinstance(data, dict):
-                raise ValueError("Expected provider response to be a JSON object.")
-            return data
+        try:
+            with httpx.Client(timeout=self.timeout_sec) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"Provider HTTP request failed: {type(exc).__name__}") from exc
+        if not isinstance(data, dict):
+            raise ProviderError("Provider response was not a JSON object.")
+        return data
 
     def _complete_stream(
         self,
@@ -119,33 +126,36 @@ class OpenAICompatibleProvider:
         content_parts: list[str] = []
         usage_raw: Mapping[str, Any] | None = None
 
-        with httpx.Client(timeout=self.timeout_sec) as client:
-            with client.stream(
-                "POST",
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                for line in response.iter_lines():
-                    if not line:
-                        continue
-                    if not line.startswith("data:"):
-                        continue
-                    data = line.removeprefix("data:").strip()
-                    if data == "[DONE]":
-                        break
-                    chunk = json.loads(data)
-                    if not isinstance(chunk, dict):
-                        continue
-                    chunks.append(chunk)
-                    if chunk.get("usage"):
-                        usage_raw = chunk["usage"]
-                    for choice in chunk.get("choices", []):
-                        delta = choice.get("delta") or {}
-                        piece = delta.get("content")
-                        if piece:
-                            content_parts.append(str(piece))
+        try:
+            with httpx.Client(timeout=self.timeout_sec) as client:
+                with client.stream(
+                    "POST",
+                    f"{self.base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=payload,
+                ) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if not line:
+                            continue
+                        if not line.startswith("data:"):
+                            continue
+                        data = line.removeprefix("data:").strip()
+                        if data == "[DONE]":
+                            break
+                        chunk = json.loads(data)
+                        if not isinstance(chunk, dict):
+                            continue
+                        chunks.append(chunk)
+                        if chunk.get("usage"):
+                            usage_raw = chunk["usage"]
+                        for choice in chunk.get("choices", []):
+                            delta = choice.get("delta") or {}
+                            piece = delta.get("content")
+                            if piece:
+                                content_parts.append(str(piece))
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"Provider HTTP request failed: {type(exc).__name__}") from exc
 
         return {"chunks": chunks, "usage": usage_raw}, "".join(content_parts), usage_raw
 

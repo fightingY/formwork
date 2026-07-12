@@ -4,7 +4,7 @@ from pathlib import Path
 
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.protocol import BashAction
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, ProviderError
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState
 from minicc.policy.base import PolicyChain, PolicyDecision
@@ -101,6 +101,30 @@ def test_loop_fails_after_protocol_error_threshold(tmp_path) -> None:
     assert result.state.metrics["protocol_errors"] == 3
     saved = json.loads((tmp_path / "runs" / state.run_id / "state.json").read_text(encoding="utf-8"))
     assert saved["status"] == "failed"
+
+
+def test_loop_persists_provider_failure_instead_of_raising(tmp_path) -> None:
+    class FailingProvider:
+        def complete(self, messages, *, options=None):
+            raise ProviderError("Provider HTTP request failed: ReadTimeout")
+
+    state = RunState.start("Handle provider timeout")
+    trace_path = tmp_path / "runs" / state.run_id / "trace.jsonl"
+
+    result = AgentLoop(
+        FailingProvider(),
+        FakeExecutor(),
+        session=SessionManager(runs_root=tmp_path / "runs"),
+        trace=TraceRecorder(trace_path),
+    ).run(state)
+
+    assert result.state.status == "failed"
+    assert result.state.metrics["provider_errors"] == 1
+    saved = json.loads((tmp_path / "runs" / state.run_id / "state.json").read_text(encoding="utf-8"))
+    assert saved["status"] == "failed"
+    assert saved["metrics"]["completed_at"] is not None
+    events = [json.loads(line)["event"] for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert events[-2:] == ["provider_error", "run_failed"]
 
 
 def test_loop_turns_policy_deny_into_observation(tmp_path) -> None:

@@ -133,6 +133,7 @@ def initial_metrics() -> dict[str, Any]:
         "turns": 0,
         "bash_actions": 0,
         "protocol_errors": 0,
+        "provider_errors": 0,
         "command_failures": 0,
         "timeouts": 0,
         "prompt_tokens": 0,

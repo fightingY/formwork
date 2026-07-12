@@ -7,7 +7,7 @@ from minicc.core.action_handler import ActionHandler
 from minicc.core.context import ContextBuilder
 from minicc.core.lifecycle import RunLifecycle
 from minicc.core.protocol import BashAction
-from minicc.core.provider import CompletionOptions, ModelProvider
+from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
 from minicc.core.runner import ModelTurnConfig, ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState, TrajectoryStep
@@ -79,7 +79,13 @@ class AgentLoop:
 
             self.context_builder.maybe_compact(state, trajectory)
             messages = self.context_builder.build_messages(state, trajectory)
-            turn = self.turn_runner.next_turn(state, messages)
+            try:
+                turn = self.turn_runner.next_turn(state, messages)
+            except ProviderError as exc:
+                state.metrics["provider_errors"] = state.metrics.get("provider_errors", 0) + 1
+                self.trace.record("provider_error", state, error=str(exc))
+                self.session.fail(state, f"Run failed because the model provider failed: {exc}")
+                break
             if turn.observation is not None:
                 trajectory.append(TrajectoryStep(action=turn.action, observation=turn.observation))
 
