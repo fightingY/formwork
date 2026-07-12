@@ -3,7 +3,8 @@ capability: feature_work
 prompt: >
   给这个 CLI 的 greet 子命令增加 --json 参数，参数顺序需要支持 greet Alice --json。
   启用时输出 JSON，默认行为保持不变。
-  请补充或更新测试。
+  请补充或更新仓库现有的 unittest 测试，禁止联网或安装依赖，
+  最后使用 `python -m unittest discover -s tests` 验证。
 sandbox_mode: locked
 budget:
   max_turns: 12
