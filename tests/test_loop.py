@@ -99,6 +99,8 @@ def test_loop_fails_after_protocol_error_threshold(tmp_path) -> None:
 
     assert result.state.status == "failed"
     assert result.state.metrics["protocol_errors"] == 3
+    saved = json.loads((tmp_path / "runs" / state.run_id / "state.json").read_text(encoding="utf-8"))
+    assert saved["status"] == "failed"
 
 
 def test_loop_turns_policy_deny_into_observation(tmp_path) -> None:

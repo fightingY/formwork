@@ -39,6 +39,8 @@ def test_docker_runner_start_uses_restricted_container_args(monkeypatch, tmp_pat
     assert "python:test" in command
     assert any(str(tmp_path.resolve()) in item for item in command)
     assert any("target=/workspace/.minicc_artifacts,readonly" in item for item in command)
+    assert calls[0][1]["encoding"] == "utf-8"
+    assert calls[0][1]["errors"] == "replace"
 
 
 def test_docker_runner_exec_uses_bash_lc(monkeypatch) -> None:
@@ -69,6 +71,8 @@ def test_docker_runner_exec_uses_bash_lc(monkeypatch) -> None:
         "pytest -q",
     ]
     assert calls[0][1]["timeout"] == 9
+    assert calls[0][1]["encoding"] == "utf-8"
+    assert calls[0][1]["errors"] == "replace"
 
 
 def test_docker_command_executor_creates_observation(tmp_path) -> None:

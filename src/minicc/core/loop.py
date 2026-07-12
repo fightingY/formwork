@@ -97,6 +97,8 @@ class AgentLoop:
                 break
 
         self.lifecycle.finish(state)
+        if state.run_dir is not None or self.session.runs_root is not None:
+            self.session.save(state)
         return AgentLoopResult(state=state, trajectory=trajectory)
 
 

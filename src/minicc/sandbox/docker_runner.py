@@ -69,7 +69,15 @@ class DockerSandboxRunner:
             "infinity",
             ]
         )
-        subprocess.run(command, capture_output=True, text=True, timeout=120, check=True)
+        subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            check=True,
+        )
         return container_name
 
     def exec(self, *, container_name: str, action: BashAction) -> CommandResult:
@@ -89,6 +97,8 @@ class DockerSandboxRunner:
                 command,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=action.timeout_sec,
             )
         except subprocess.TimeoutExpired as exc:
@@ -115,6 +125,8 @@ class DockerSandboxRunner:
             ["docker", "rm", "-f", container_name],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
         )
 
