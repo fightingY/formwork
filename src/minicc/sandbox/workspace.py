@@ -24,6 +24,15 @@ DEFAULT_IGNORE_NAMES = {
     "build",
 }
 
+GIT_EXCLUDE_PATTERNS = [
+    "**/__pycache__/",
+    "*.py[cod]",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".minicc_artifacts/",
+]
+
 
 @dataclass(frozen=True)
 class RunWorkspace:
@@ -104,8 +113,18 @@ def _ignore_names(directory: str, names: list[str]) -> set[str]:
 
 
 def _git_init_snapshot(workspace_dir: Path) -> None:
-    commands = [
+    subprocess.run(
         ["git", "-C", str(workspace_dir), "init"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+        check=True,
+    )
+    exclude_path = workspace_dir / ".git" / "info" / "exclude"
+    exclude_path.write_text("\n".join(GIT_EXCLUDE_PATTERNS) + "\n", encoding="utf-8")
+    commands = [
         ["git", "-C", str(workspace_dir), "config", "user.email", "minicc@example.local"],
         ["git", "-C", str(workspace_dir), "config", "user.name", "miniCC"],
         ["git", "-C", str(workspace_dir), "add", "-A"],
@@ -116,6 +135,8 @@ def _git_init_snapshot(workspace_dir: Path) -> None:
             command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
             check=True,
         )

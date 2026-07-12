@@ -45,9 +45,14 @@ def test_write_workspace_diff_includes_untracked_files(tmp_path) -> None:
     (source / "tracked.txt").write_text("tracked\n", encoding="utf-8")
     workspace = prepare_run_workspace(source, run_id="run-new-file")
     (workspace.workspace_dir / "ONBOARDING.md").write_text("入口\n", encoding="utf-8")
+    cache_dir = workspace.workspace_dir / "src" / "__pycache__"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "app.cpython-311.pyc").write_bytes(b"generated")
 
     diff_path = write_workspace_diff(workspace.workspace_dir, workspace.artifacts_dir)
     diff = Path(diff_path).read_text(encoding="utf-8")
 
     assert "diff --git a/ONBOARDING.md b/ONBOARDING.md" in diff
     assert "+入口" in diff
+    assert "__pycache__" not in diff
+    assert ".pyc" not in diff
