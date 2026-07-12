@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import stat
 from dataclasses import asdict, dataclass
@@ -137,6 +138,7 @@ def suite_to_dict(result: EvalSuiteResult) -> dict:
         "passed": result.passed,
         "repeat": result.repeat,
         "configuration": result.configuration or {},
+        "case_summary": aggregate_case_results(result.cases),
         "cases": [
             {
                 "name": case.name,
@@ -170,6 +172,17 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
         for name, value in result.configuration.items():
             lines.append(f"- {name}: `{value}`")
         lines.append("")
+    lines.extend(["## Case Summary", ""])
+    for summary in aggregate_case_results(result.cases):
+        lines.append(
+            f"- {summary['name']}: {summary['passed_runs']}/{summary['attempts']} passed "
+            f"(pass_rate={summary['pass_rate']:.3f}), "
+            f"avg_turns={summary['average_turns']:.2f}, "
+            f"avg_bash_actions={summary['average_bash_actions']:.2f}, "
+            f"avg_duration_ms={summary['average_duration_ms']:.0f}, "
+            f"diff_paths={summary['diff_paths']}"
+        )
+    lines.append("")
     for case in result.cases:
         label = case.capability or case.name
         lines.append(f"## {label} attempt {case.attempt}: {'PASS' if case.passed else 'FAIL'}")
@@ -180,12 +193,70 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
             "Metrics: "
             f"turns={case.metrics.get('turns', 0)}, "
             f"bash_actions={case.metrics.get('bash_actions', 0)}, "
-            f"policy_denials={case.metrics.get('policy_denials', 0)}"
+            f"policy_denials={case.metrics.get('policy_denials', 0)}, "
+            f"duration_ms={case.metrics.get('total_duration_ms', 0)}"
         )
         for assertion in case.assertions:
             lines.append(f"- {'PASS' if assertion.passed else 'FAIL'} {assertion.type}: {assertion.message}")
         lines.append("")
     return "\n".join(lines)
+
+
+def aggregate_case_results(cases: list[EvalCaseResult]) -> list[dict]:
+    grouped: dict[str, list[EvalCaseResult]] = {}
+    for case in cases:
+        grouped.setdefault(case.name, []).append(case)
+
+    summaries = []
+    for name, results in sorted(grouped.items()):
+        diff_paths = sorted({path for result in results for path in _changed_paths(result.run_dir)})
+        failed_assertions = [
+            f"attempt {result.attempt} {assertion.type}: {assertion.message}"
+            for result in results
+            for assertion in result.assertions
+            if not assertion.passed
+        ]
+        for result in results:
+            if not result.passed and not any(not assertion.passed for assertion in result.assertions):
+                failed_assertions.append(
+                    f"attempt {result.attempt} run_status: unexpected status {result.run_status}"
+                )
+        summaries.append(
+            {
+                "name": name,
+                "capability": results[0].capability,
+                "attempts": len(results),
+                "passed_runs": sum(result.passed for result in results),
+                "pass_rate": sum(result.passed for result in results) / len(results),
+                "statuses": sorted({result.run_status for result in results}),
+                "average_turns": sum(result.metrics.get("turns", 0) for result in results) / len(results),
+                "average_bash_actions": sum(
+                    result.metrics.get("bash_actions", 0) for result in results
+                )
+                / len(results),
+                "average_duration_ms": sum(
+                    result.metrics.get("total_duration_ms", 0) for result in results
+                )
+                / len(results),
+                "diff_paths": diff_paths,
+                "failure_reasons": failed_assertions,
+            }
+        )
+    return summaries
+
+
+def _changed_paths(run_dir: str) -> list[str]:
+    diff_path = Path(run_dir) / "artifacts" / "diff.patch"
+    if not diff_path.exists():
+        return []
+    paths = []
+    for line in diff_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        parts = shlex.split(line)
+        if len(parts) >= 4 and parts[3].startswith("b/"):
+            paths.append(parts[3].removeprefix("b/"))
+    return paths
 
 
 def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path, Path]:

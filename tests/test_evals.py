@@ -3,7 +3,7 @@ import json
 from minicc.core.state import RunState
 from minicc.evals.assertions import run_assertions
 from minicc.evals.case import discover_cases, load_case
-from minicc.evals.runner import run_eval_suite, write_eval_report
+from minicc.evals.runner import aggregate_case_results, run_eval_suite, write_eval_report
 from minicc.cli import _settings_for_eval_case
 from minicc.config import BudgetSettings, ContextSettings, PolicySettings, ProviderSettings, SandboxSettings, Settings
 from minicc.evals import assertions
@@ -90,6 +90,9 @@ assertions:
     assert result.repeat == 1
     assert json.loads(json_path.read_text(encoding="utf-8"))["passed"] is True
     assert "Overall: PASS" in markdown_path.read_text(encoding="utf-8")
+    report_data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert report_data["case_summary"][0]["pass_rate"] == 1.0
+    assert report_data["case_summary"][0]["diff_paths"] == []
     case_result = json.loads(
         (tmp_path / "runs" / "eval-demo" / "eval_result.json").read_text(encoding="utf-8")
     )
@@ -131,6 +134,38 @@ assertions: []
     assert len({case.run_id for case in result.cases}) == 3
     assert all((tmp_path / "runs" / case.run_id / "eval_result.json").exists() for case in result.cases)
     assert result.configuration == {"model": "fixed-model", "temperature": 0}
+
+
+def test_aggregate_case_results_reports_metrics_and_diff_paths(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "artifacts").mkdir(parents=True)
+    (run_dir / "artifacts" / "diff.patch").write_text(
+        "diff --git a/src/app.py b/src/app.py\n"
+        "diff --git a/tests/test_app.py b/tests/test_app.py\n",
+        encoding="utf-8",
+    )
+    case = type(
+        "CaseResult",
+        (),
+        {
+            "name": "C01",
+            "capability": "repo_understanding",
+            "passed": True,
+            "run_status": "completed",
+            "attempt": 1,
+            "run_dir": str(run_dir),
+            "metrics": {"turns": 4, "bash_actions": 2, "total_duration_ms": 1000},
+            "assertions": [],
+        },
+    )()
+
+    summary = aggregate_case_results([case])[0]
+
+    assert summary["pass_rate"] == 1.0
+    assert summary["average_turns"] == 4
+    assert summary["average_bash_actions"] == 2
+    assert summary["average_duration_ms"] == 1000
+    assert summary["diff_paths"] == ["src/app.py", "tests/test_app.py"]
 
 
 def test_eval_runner_rejects_waiting_approval_for_ordinary_case(tmp_path) -> None:
