@@ -23,9 +23,9 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V1.1
+## 当前稳定版本：Stable V1.2
 
-Stable V1.1 在 V1.0 基线之上，已在固定 provider、模型、temperature、预算和 locked Docker sandbox 配置下完成 `C02_fix_failing_test` 的连续 3 次真实运行：3/3 `completed`、3/3 Verifier 通过，且没有审批、预算耗尽或 provider fallback。完整汇总见 `acceptance/stable-v1.1/`。Semantic compaction、Skill Registry 和 Feedback Memory 虽然已有原型及单元测试，但在完成独立效果实验前统一视为 experimental，不计入 Stable V1.1 的稳定能力。
+Stable V1.2 已在固定 provider、模型、temperature、预算和 locked Docker sandbox 配置下完成 C01-C04 四个固定回归任务各 3 次真实运行：12/12 `completed`、12/12 Verifier 通过，且没有非预期审批、provider error 或 workspace 污染。完整汇总见 `acceptance/stable-v1.2/`。Semantic compaction、Skill Registry 和 Feedback Memory 虽然已有原型及单元测试，但在完成独立效果实验前统一视为 experimental，不计入 Stable V1.2 的稳定能力。
 
 M1 已实现基础闭环：
 
@@ -33,7 +33,7 @@ M1 已实现基础闭环：
 - 提供 `minicc` CLI 入口。
 - 实现 OpenAI-compatible Provider Adapter。
 - 归一化模型 usage 和 prompt cache 指标。
-- 实现严格 JSON action 协议，只允许 `bash`、`ask`、`final`。
+- 实现严格 JSON action schema，只允许 `bash`、`ask`、`final`，并兼容常见 Markdown/`<function>` JSON 外壳。
 - 实现最小 Agent Loop：构建 prompt、调用模型、解析 action、处理 bash/ask/final。
 - 提供可注入 executor，方便后续替换为 Docker sandbox。
 - 补充单元测试覆盖 Provider、Protocol 和 Loop。
@@ -323,10 +323,16 @@ uv run pytest -q
 uv run minicc traces
 ```
 
-版本化验收结果保存在 `acceptance/stable-v1.0/` 和 `acceptance/stable-v1.1/`。重复运行固定 case 时可使用：
+版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/` 和 `acceptance/stable-v1.2/`。重复运行 Stable V1.2 矩阵时可使用：
 
 ```bash
-uv run minicc eval eval_cases/capability_suite_v1/C02_fix_failing_test --repeat 3 --output-dir acceptance/stable-v1.1
+uv run minicc eval eval_cases \
+  --case C01_repo_onboarding \
+  --case C02_fix_failing_test \
+  --case C03_add_cli_option \
+  --case C04_add_regression_test \
+  --repeat 3 \
+  --output-dir acceptance/stable-v1.2
 ```
 
 该命令为每次运行保留独立的 state、trace、metrics、diff、run report 和 verifier report，并在输出目录生成汇总 JSON/Markdown 报告。

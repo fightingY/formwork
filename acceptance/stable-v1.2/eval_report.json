@@ -1,0 +1,807 @@
+{
+  "passed": true,
+  "repeat": 3,
+  "configuration": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "deepseek-ai/DeepSeek-V4-Flash",
+    "temperature": 0.0,
+    "sandbox_mode": "locked",
+    "execute_local": false
+  },
+  "case_summary": [
+    {
+      "name": "C01_repo_onboarding",
+      "capability": "repo_understanding",
+      "attempts": 3,
+      "passed_runs": 3,
+      "pass_rate": 1.0,
+      "statuses": [
+        "completed"
+      ],
+      "average_turns": 8.0,
+      "average_bash_actions": 7.0,
+      "average_duration_ms": 86070.0,
+      "diff_paths": [
+        "ONBOARDING.md"
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "attempts": 3,
+      "passed_runs": 3,
+      "pass_rate": 1.0,
+      "statuses": [
+        "completed"
+      ],
+      "average_turns": 6.666666666666667,
+      "average_bash_actions": 5.666666666666667,
+      "average_duration_ms": 94685.66666666667,
+      "diff_paths": [
+        "src/calculator.py"
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "C03_add_cli_option",
+      "capability": "feature_work",
+      "attempts": 3,
+      "passed_runs": 3,
+      "pass_rate": 1.0,
+      "statuses": [
+        "completed"
+      ],
+      "average_turns": 7.0,
+      "average_bash_actions": 6.0,
+      "average_duration_ms": 114650.0,
+      "diff_paths": [
+        "src/demo_cli.py",
+        "tests/test_cli.py"
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "C04_add_regression_test",
+      "capability": "test_writing",
+      "attempts": 3,
+      "passed_runs": 3,
+      "pass_rate": 1.0,
+      "statuses": [
+        "completed"
+      ],
+      "average_turns": 6.0,
+      "average_bash_actions": 5.0,
+      "average_duration_ms": 65926.33333333333,
+      "diff_paths": [
+        "tests/test_parser.py"
+      ],
+      "failure_reasons": []
+    }
+  ],
+  "cases": [
+    {
+      "name": "C01_repo_onboarding",
+      "capability": "repo_understanding",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 1,
+      "run_id": "eval-C01_repo_onboarding-r1-20260713-002945-583b8c58",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C01_repo_onboarding-r1-20260713-002945-583b8c58",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 8,
+        "max_bash_actions": 20
+      },
+      "proves": "Agent 能在不改源码的情况下完成仓库理解和交接文档。",
+      "metrics": {
+        "started_at": "2026-07-12T16:29:46.476510+00:00",
+        "completed_at": "2026-07-12T16:31:07.512715+00:00",
+        "total_duration_ms": 81036,
+        "turns": 8,
+        "bash_actions": 7,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 9288,
+        "completion_tokens": 1347,
+        "total_tokens": 10635,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 9288,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 79395,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C01_repo_onboarding-r1-20260713-002945-583b8c58",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "file_exists",
+          "passed": true,
+          "message": "file exists: ONBOARDING.md"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in ONBOARDING.md: []"
+        },
+        {
+          "type": "no_source_diff",
+          "passed": true,
+          "message": "protected files changed: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 1,
+      "run_id": "eval-C02_fix_failing_test-r1-20260713-003108-d4c3e829",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r1-20260713-003108-d4c3e829",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "metrics": {
+        "started_at": "2026-07-12T16:31:09.467869+00:00",
+        "completed_at": "2026-07-12T16:32:44.915844+00:00",
+        "total_duration_ms": 95447,
+        "turns": 6,
+        "bash_actions": 5,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 1,
+        "timeouts": 0,
+        "prompt_tokens": 6011,
+        "completion_tokens": 1386,
+        "total_tokens": 7397,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 6011,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 93976,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C02_fix_failing_test-r1-20260713-003108-d4c3e829",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C03_add_cli_option",
+      "capability": "feature_work",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 1,
+      "run_id": "eval-C03_add_cli_option-r1-20260713-003245-720a73e4",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C03_add_cli_option-r1-20260713-003245-720a73e4",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 12,
+        "max_bash_actions": 30
+      },
+      "proves": "Agent 能完成小功能实现并补充测试。",
+      "metrics": {
+        "started_at": "2026-07-12T16:32:47.095401+00:00",
+        "completed_at": "2026-07-12T16:35:43.311339+00:00",
+        "total_duration_ms": 176216,
+        "turns": 7,
+        "bash_actions": 6,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 7847,
+        "completion_tokens": 2154,
+        "total_tokens": 10001,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 7847,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 174417,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C03_add_cli_option-r1-20260713-003245-720a73e4",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m src.demo_cli greet Alice --json | python -m json.tool"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in tests/test_cli.py: []"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        }
+      ]
+    },
+    {
+      "name": "C04_add_regression_test",
+      "capability": "test_writing",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 1,
+      "run_id": "eval-C04_add_regression_test-r1-20260713-003544-bfcd58b2",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C04_add_regression_test-r1-20260713-003544-bfcd58b2",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 20
+      },
+      "proves": "Agent 能只补测试，不乱改业务代码。",
+      "metrics": {
+        "started_at": "2026-07-12T16:35:45.854954+00:00",
+        "completed_at": "2026-07-12T16:36:23.357728+00:00",
+        "total_duration_ms": 37502,
+        "turns": 5,
+        "bash_actions": 4,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 3543,
+        "completion_tokens": 455,
+        "total_tokens": 3998,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 3543,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 36242,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C04_add_regression_test-r1-20260713-003544-bfcd58b2",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in tests/test_parser.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C01_repo_onboarding",
+      "capability": "repo_understanding",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 2,
+      "run_id": "eval-C01_repo_onboarding-r2-20260713-003624-aa2475e9",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C01_repo_onboarding-r2-20260713-003624-aa2475e9",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 8,
+        "max_bash_actions": 20
+      },
+      "proves": "Agent 能在不改源码的情况下完成仓库理解和交接文档。",
+      "metrics": {
+        "started_at": "2026-07-12T16:36:25.542302+00:00",
+        "completed_at": "2026-07-12T16:37:56.476841+00:00",
+        "total_duration_ms": 90935,
+        "turns": 8,
+        "bash_actions": 7,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 8892,
+        "completion_tokens": 1163,
+        "total_tokens": 10055,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 8892,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 89312,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C01_repo_onboarding-r2-20260713-003624-aa2475e9",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "file_exists",
+          "passed": true,
+          "message": "file exists: ONBOARDING.md"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in ONBOARDING.md: []"
+        },
+        {
+          "type": "no_source_diff",
+          "passed": true,
+          "message": "protected files changed: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 2,
+      "run_id": "eval-C02_fix_failing_test-r2-20260713-003757-2f15ff5e",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r2-20260713-003757-2f15ff5e",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "metrics": {
+        "started_at": "2026-07-12T16:37:58.366203+00:00",
+        "completed_at": "2026-07-12T16:40:08.403531+00:00",
+        "total_duration_ms": 130038,
+        "turns": 8,
+        "bash_actions": 7,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 2,
+        "timeouts": 0,
+        "prompt_tokens": 8892,
+        "completion_tokens": 2656,
+        "total_tokens": 11548,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 8892,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 127811,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C02_fix_failing_test-r2-20260713-003757-2f15ff5e",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C03_add_cli_option",
+      "capability": "feature_work",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 2,
+      "run_id": "eval-C03_add_cli_option-r2-20260713-004009-a97867f0",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C03_add_cli_option-r2-20260713-004009-a97867f0",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 12,
+        "max_bash_actions": 30
+      },
+      "proves": "Agent 能完成小功能实现并补充测试。",
+      "metrics": {
+        "started_at": "2026-07-12T16:40:10.799931+00:00",
+        "completed_at": "2026-07-12T16:41:33.956697+00:00",
+        "total_duration_ms": 83157,
+        "turns": 7,
+        "bash_actions": 6,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 7781,
+        "completion_tokens": 1735,
+        "total_tokens": 9516,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 7781,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 81384,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C03_add_cli_option-r2-20260713-004009-a97867f0",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m src.demo_cli greet Alice --json | python -m json.tool"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in tests/test_cli.py: []"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        }
+      ]
+    },
+    {
+      "name": "C04_add_regression_test",
+      "capability": "test_writing",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 2,
+      "run_id": "eval-C04_add_regression_test-r2-20260713-004135-57c96e21",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C04_add_regression_test-r2-20260713-004135-57c96e21",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 20
+      },
+      "proves": "Agent 能只补测试，不乱改业务代码。",
+      "metrics": {
+        "started_at": "2026-07-12T16:41:36.517647+00:00",
+        "completed_at": "2026-07-12T16:42:42.137356+00:00",
+        "total_duration_ms": 65619,
+        "turns": 8,
+        "bash_actions": 7,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 7518,
+        "completion_tokens": 1606,
+        "total_tokens": 9124,
+        "cached_tokens": 256,
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 7262,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 63490,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C04_add_regression_test-r2-20260713-004135-57c96e21",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in tests/test_parser.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C01_repo_onboarding",
+      "capability": "repo_understanding",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 3,
+      "run_id": "eval-C01_repo_onboarding-r3-20260713-004243-7d762f83",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C01_repo_onboarding-r3-20260713-004243-7d762f83",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 8,
+        "max_bash_actions": 20
+      },
+      "proves": "Agent 能在不改源码的情况下完成仓库理解和交接文档。",
+      "metrics": {
+        "started_at": "2026-07-12T16:42:44.427051+00:00",
+        "completed_at": "2026-07-12T16:44:10.666546+00:00",
+        "total_duration_ms": 86239,
+        "turns": 8,
+        "bash_actions": 7,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 9327,
+        "completion_tokens": 1783,
+        "total_tokens": 11110,
+        "cached_tokens": 256,
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 9071,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 84615,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C01_repo_onboarding-r3-20260713-004243-7d762f83",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "file_exists",
+          "passed": true,
+          "message": "file exists: ONBOARDING.md"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in ONBOARDING.md: []"
+        },
+        {
+          "type": "no_source_diff",
+          "passed": true,
+          "message": "protected files changed: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 3,
+      "run_id": "eval-C02_fix_failing_test-r3-20260713-004411-23c6c5e0",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r3-20260713-004411-23c6c5e0",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "metrics": {
+        "started_at": "2026-07-12T16:44:12.584586+00:00",
+        "completed_at": "2026-07-12T16:45:11.156975+00:00",
+        "total_duration_ms": 58572,
+        "turns": 6,
+        "bash_actions": 5,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 5907,
+        "completion_tokens": 1152,
+        "total_tokens": 7059,
+        "cached_tokens": 512,
+        "prompt_cache_hit_tokens": 512,
+        "prompt_cache_miss_tokens": 5395,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 57120,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C02_fix_failing_test-r3-20260713-004411-23c6c5e0",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C03_add_cli_option",
+      "capability": "feature_work",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 3,
+      "run_id": "eval-C03_add_cli_option-r3-20260713-004512-957c2323",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C03_add_cli_option-r3-20260713-004512-957c2323",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 12,
+        "max_bash_actions": 30
+      },
+      "proves": "Agent 能完成小功能实现并补充测试。",
+      "metrics": {
+        "started_at": "2026-07-12T16:45:13.386010+00:00",
+        "completed_at": "2026-07-12T16:46:37.963702+00:00",
+        "total_duration_ms": 84577,
+        "turns": 7,
+        "bash_actions": 6,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 7678,
+        "completion_tokens": 1649,
+        "total_tokens": 9327,
+        "cached_tokens": 256,
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 7422,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 82835,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C03_add_cli_option-r3-20260713-004512-957c2323",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m src.demo_cli greet Alice --json | python -m json.tool"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in tests/test_cli.py: []"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        }
+      ]
+    },
+    {
+      "name": "C04_add_regression_test",
+      "capability": "test_writing",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 3,
+      "run_id": "eval-C04_add_regression_test-r3-20260713-004639-84ddbe2b",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C04_add_regression_test-r3-20260713-004639-84ddbe2b",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 20
+      },
+      "proves": "Agent 能只补测试，不乱改业务代码。",
+      "metrics": {
+        "started_at": "2026-07-12T16:46:40.539686+00:00",
+        "completed_at": "2026-07-12T16:48:15.198230+00:00",
+        "total_duration_ms": 94658,
+        "turns": 5,
+        "bash_actions": 4,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 3730,
+        "completion_tokens": 1211,
+        "total_tokens": 4941,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 3730,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 93349,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C04_add_regression_test-r3-20260713-004639-84ddbe2b",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in tests/test_parser.py: []"
+        }
+      ]
+    }
+  ]
+}
