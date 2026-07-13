@@ -44,6 +44,7 @@ def parse_action(
     default_timeout_sec: int = 60,
     max_timeout_sec: int | None = None,
 ) -> Action:
+    text = _unwrap_model_json(text)
     try:
         payload = json.loads(text.strip())
     except json.JSONDecodeError as exc:
@@ -67,6 +68,18 @@ def parse_action(
         "Action type must be one of: bash, ask, final.",
         raw_text=text,
     )
+
+
+def _unwrap_model_json(text: str) -> str:
+    """Accept common provider wrappers while preserving strict JSON validation."""
+    value = text.strip()
+    if value.startswith("<function>") and value.endswith("</function>"):
+        value = value[len("<function>") : -len("</function>")].strip()
+    if value.startswith("```") and value.endswith("```"):
+        first_newline = value.find("\n")
+        if first_newline > 0:
+            value = value[first_newline + 1 : -3].strip()
+    return value
 
 
 def action_to_dict(action: Action) -> dict[str, Any]:

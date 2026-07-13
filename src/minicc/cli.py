@@ -355,6 +355,7 @@ def _build_provider_or_print_error(settings: Settings) -> OpenAICompatibleProvid
         base_url=settings.base_url or "",
         api_key=settings.api_key or "",
         model=settings.model or "",
+        timeout_sec=settings.provider.timeout_sec,
     )
 
 

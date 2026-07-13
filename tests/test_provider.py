@@ -1,4 +1,4 @@
-from minicc.core.provider import extract_chat_text, parse_model_usage
+from minicc.core.provider import OpenAICompatibleProvider, ProviderError, extract_chat_text, parse_model_usage
 
 
 def test_parse_deepseek_style_cache_usage() -> None:
@@ -48,3 +48,30 @@ def test_extract_chat_text_from_openai_compatible_response() -> None:
     )
 
     assert text == '{"type":"final","answer":"done"}'
+
+
+def test_provider_retries_transient_request_failures(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+    )
+    calls = 0
+
+    def fake_post_json(payload):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise ProviderError("transient timeout")
+        return {
+            "choices": [{"message": {"content": '{"type":"final","answer":"done"}'}}],
+            "usage": {},
+        }
+
+    monkeypatch.setattr(provider, "_post_json", fake_post_json)
+    monkeypatch.setattr("minicc.core.provider.time.sleep", lambda seconds: None)
+
+    response = provider.complete([])
+
+    assert calls == 3
+    assert response.text == '{"type":"final","answer":"done"}'

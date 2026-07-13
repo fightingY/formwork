@@ -16,6 +16,7 @@ class ProviderSettings:
     temperature: float = 0.0
     stream: bool = False
     include_usage: bool = True
+    timeout_sec: float = 120.0
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,12 @@ def load_settings() -> Settings:
                 provider_config,
                 "include_usage",
                 True,
+            ),
+            timeout_sec=_float_env_or_config(
+                "MINICC_PROVIDER_TIMEOUT_SEC",
+                provider_config,
+                "timeout_sec",
+                120.0,
             ),
         ),
         sandbox=SandboxSettings(

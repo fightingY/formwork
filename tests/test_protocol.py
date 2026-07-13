@@ -21,9 +21,9 @@ def test_parse_final_action() -> None:
     assert action == FinalAction(answer="Done.")
 
 
-def test_rejects_markdown_wrapped_json() -> None:
-    with pytest.raises(ProtocolError):
-        parse_action('```json\n{"type":"final","answer":"Done."}\n```')
+def test_accepts_common_provider_json_wrappers() -> None:
+    assert parse_action('```json\n{"type":"final","answer":"Done."}\n```') == FinalAction(answer="Done.")
+    assert parse_action('<function>{"type":"final","answer":"Done."}</function>') == FinalAction(answer="Done.")
 
 
 def test_caps_timeout_to_loop_budget() -> None:

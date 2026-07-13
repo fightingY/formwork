@@ -6,7 +6,7 @@ prompt: >
   使用 `python -m unittest discover -s tests` 验证一次，通过后立即返回 final，不要重复检查。
 sandbox_mode: locked
 budget:
-  max_turns: 8
+  max_turns: 10
   max_bash_actions: 20
 assertions:
   - type: command

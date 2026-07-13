@@ -81,12 +81,23 @@ class OpenAICompatibleProvider:
             payload["stream_options"] = {"include_usage": True}
 
         started = time.perf_counter()
-        if options.stream:
-            raw, text, usage_raw = self._complete_stream(payload)
+        last_error: ProviderError | None = None
+        for attempt in range(3):
+            try:
+                if options.stream:
+                    raw, text, usage_raw = self._complete_stream(payload)
+                else:
+                    raw = self._post_json(payload)
+                    text = extract_chat_text(raw)
+                    usage_raw = raw.get("usage") if isinstance(raw, dict) else None
+                break
+            except ProviderError as exc:
+                last_error = exc
+                if attempt == 2:
+                    raise
+                time.sleep(0.5)
         else:
-            raw = self._post_json(payload)
-            text = extract_chat_text(raw)
-            usage_raw = raw.get("usage") if isinstance(raw, dict) else None
+            raise last_error or ProviderError("Provider request failed")
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         return ModelResponse(
