@@ -7,6 +7,7 @@ from pathlib import Path
 
 from minicc import __version__
 from minicc.config import BudgetSettings, PolicySettings, SandboxSettings, Settings, load_settings
+from minicc.core.checkpoint import CheckpointError, CheckpointManager
 from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
@@ -92,6 +93,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--execute-local",
         action="store_true",
         help="Run eval bash actions locally instead of Docker.",
+    )
+    run_parser.add_argument(
+        "--interrupt-after-steps",
+        type=int,
+        default=None,
+        help="Create a controlled checkpoint interruption after N recorded trajectory steps.",
+    )
+    resume_parser.add_argument(
+        "--from-checkpoint",
+        action="store_true",
+        help="Restore the latest validated checkpoint instead of resuming an approval.",
     )
     eval_parser.add_argument(
         "--repeat",
@@ -189,6 +201,7 @@ def run_command(args: argparse.Namespace) -> int:
             state=state,
             max_turns=settings.budget.max_turns if args.max_turns is None else args.max_turns,
             stream=settings.provider.stream if args.stream is None else args.stream,
+            interrupt_after_steps=getattr(args, "interrupt_after_steps", None),
         )
         result = loop.run(state)
         session.save(result.state)
@@ -230,7 +243,18 @@ def resume_command(args: argparse.Namespace) -> int:
 
     session = SessionManager()
     state = session.load(args.run_id)
-    if state.status != "waiting_approval":
+    trace = TraceRecorder(trace_path_for(state))
+    from_checkpoint = bool(getattr(args, "from_checkpoint", False))
+    restored_trajectory = None
+    if from_checkpoint:
+        try:
+            restored = CheckpointManager(state_path.parent, trace=trace).restore_latest(args.run_id)
+        except CheckpointError as exc:
+            print(f"Cannot resume checkpoint: {exc}", file=sys.stderr)
+            return 2
+        state = restored.state
+        restored_trajectory = restored.trajectory
+    elif state.status != "waiting_approval":
         print(f"Run {args.run_id} is not waiting for approval. Current status: {state.status}", file=sys.stderr)
         return 2
 
@@ -267,11 +291,11 @@ def resume_command(args: argparse.Namespace) -> int:
             )
             executor = DockerCommandExecutor(runner, artifacts=artifacts)
 
-        trace = TraceRecorder(trace_path_for(state))
-        session.apply_pending_approval_result(state, executor, trace=trace)
+        if not from_checkpoint:
+            session.apply_pending_approval_result(state, executor, trace=trace)
         if state.status == "running":
             loop = _build_loop(provider, executor, settings=settings, session=session, state=state)
-            result = loop.run(state)
+            result = loop.run(state, restored_trajectory) if from_checkpoint else loop.run(state)
         else:
             result = type("ResumeResult", (), {"state": state})()
         session.save(result.state)
@@ -375,8 +399,15 @@ def _build_loop(
     state: RunState | None = None,
     max_turns: int | None = None,
     stream: bool | None = None,
+    interrupt_after_steps: int | None = None,
 ) -> AgentLoop:
     skill_root = (state.workspace_host_path if state and state.workspace_host_path else Path.cwd()) / "skills"
+    trace = TraceRecorder(trace_path_for(state)) if state is not None else TraceRecorder()
+    checkpoint_manager = (
+        CheckpointManager(state.run_dir, trace=trace)
+        if state is not None and state.run_dir is not None and state.workspace_host_path is not None
+        else None
+    )
     return AgentLoop(
         provider,
         executor,
@@ -391,7 +422,8 @@ def _build_loop(
         ),
         policy_chain=build_policy_chain(settings),
         session=session,
-        trace=TraceRecorder(trace_path_for(state)) if state is not None else None,
+        trace=trace,
+        checkpoint_manager=checkpoint_manager,
         config=LoopConfig(
             max_turns=settings.budget.max_turns if max_turns is None else max_turns,
             max_action_timeout_sec=settings.budget.max_action_timeout_sec,
@@ -401,6 +433,7 @@ def _build_loop(
                 include_usage=settings.provider.include_usage,
                 json_mode=settings.provider.json_mode,
             ),
+            interrupt_after_steps=interrupt_after_steps,
         ),
     )
 

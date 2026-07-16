@@ -94,6 +94,18 @@ class TraceRecorder:
     def approval_resolved(self, state: RunState, status: str, reason: str = "") -> None:
         self.record("approval_resolved", state, approval_status=status, reason=reason)
 
+    def checkpoint_created(self, state: RunState, checkpoint_id: str, reason: str) -> None:
+        self.record("checkpoint_created", state, checkpoint_id=checkpoint_id, reason=reason)
+
+    def checkpoint_restored(self, state: RunState, checkpoint_id: str) -> None:
+        self.record("checkpoint_restored", state, checkpoint_id=checkpoint_id)
+
+    def run_resumed(self, state: RunState, trajectory_steps: int) -> None:
+        self.record("run_resumed", state, trajectory_steps=trajectory_steps, resume_count=state.resume_count)
+
+    def run_interrupted(self, state: RunState, trajectory_steps: int) -> None:
+        self.record("run_interrupted", state, trajectory_steps=trajectory_steps)
+
     def run_completed(self, state: RunState) -> None:
         self.record("run_completed", state, final_answer=state.final_answer)
 

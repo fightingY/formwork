@@ -230,6 +230,32 @@ uv run minicc resume <run_id>
 
 `resume` 会重新启动执行环境，继续使用该 run 的 workspace 和 artifacts。
 
+## Checkpoint 与恢复（V2.0）
+
+V2.0 会在 run 开始、每个 observation 落盘后、等待审批和受控中断时创建版本化 checkpoint。
+Checkpoint 同时保存 RunState、trajectory、workspace SHA256 指纹和 action 执行日志；恢复时会校验
+run id、工作区路径、内容指纹和 checkpoint digest。若 action 可能已经执行但没有可靠完成记录，
+系统会 fail-closed，拒绝自动重放。
+
+受控中断演示：
+
+```bash
+uv run minicc run "完成一个小修改并验证" --interrupt-after-steps 1
+```
+
+从最新 checkpoint 恢复：
+
+```bash
+uv run minicc resume <run_id> --from-checkpoint
+```
+
+每个 run 的 checkpoint 保存在：
+
+```text
+.minicc/runs/<run_id>/checkpoints/checkpoint-0001.json
+.minicc/runs/<run_id>/checkpoints/latest.json
+```
+
 ## Action 协议
 
 默认优先请求供应商原生 JSON mode（`MINICC_JSON_MODE=true`）；若兼容供应商明确返回

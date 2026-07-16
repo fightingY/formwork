@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
@@ -122,7 +122,9 @@ class SessionManager:
             if trace is not None:
                 trace.approval_resolved(state, "approved")
                 trace.sandbox_exec_started(state, action.command)
+            execution_id = begin_execution(state, action, self)
             observation = executor.run(action, state)
+            complete_execution(state, execution_id, observation, self)
             record_execution_metrics(state, observation)
             state.last_observation = observation
             if trace is not None:
@@ -162,3 +164,43 @@ def record_execution_metrics(state: RunState, observation: Observation) -> None:
         state.metrics["command_failures"] = state.metrics.get("command_failures", 0) + 1
     elif observation.kind == "timeout":
         state.metrics["timeouts"] = state.metrics.get("timeouts", 0) + 1
+
+
+def begin_execution(state: RunState, action: BashAction, session: SessionManager) -> str:
+    execution_id = f"execution-{len(state.execution_journal) + 1:04d}"
+    state.execution_journal.append(
+        {
+            "execution_id": execution_id,
+            "status": "started",
+            "command": action.command,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _save_if_bound(state, session)
+    return execution_id
+
+
+def complete_execution(
+    state: RunState,
+    execution_id: str,
+    observation: Observation,
+    session: SessionManager,
+) -> None:
+    for entry in reversed(state.execution_journal):
+        if entry.get("execution_id") == execution_id:
+            entry.update(
+                {
+                    "status": "completed",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "observation_kind": observation.kind,
+                    "exit_code": observation.exit_code,
+                }
+            )
+            _save_if_bound(state, session)
+            return
+    raise RuntimeError(f"Execution journal entry not found: {execution_id}")
+
+
+def _save_if_bound(state: RunState, session: SessionManager) -> None:
+    if state.run_dir is not None or session.runs_root is not None:
+        session.save(state)

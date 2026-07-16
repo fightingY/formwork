@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from minicc.core.action_handler import ActionHandler
+from minicc.core.checkpoint import CheckpointManager
 from minicc.core.context import ContextBuilder
 from minicc.core.lifecycle import RunLifecycle
 from minicc.core.protocol import BashAction
@@ -26,6 +27,7 @@ class LoopConfig:
     max_protocol_errors: int = 2
     max_action_timeout_sec: int = 120
     model_options: CompletionOptions = field(default_factory=CompletionOptions)
+    interrupt_after_steps: int | None = None
 
 
 @dataclass
@@ -45,6 +47,7 @@ class AgentLoop:
         session: SessionManager | None = None,
         trace: TraceRecorder | None = None,
         config: LoopConfig | None = None,
+        checkpoint_manager: CheckpointManager | None = None,
     ) -> None:
         self.config = config or LoopConfig()
         self.session = session or SessionManager()
@@ -52,6 +55,7 @@ class AgentLoop:
         self.trace = trace or TraceRecorder()
         self.context_builder.trace = self.trace
         self.lifecycle = RunLifecycle(self.trace)
+        self.checkpoint_manager = checkpoint_manager
         self.turn_runner = ModelTurnRunner(
             provider,
             config=ModelTurnConfig(
@@ -68,10 +72,21 @@ class AgentLoop:
             trace=self.trace,
         )
 
-    def run(self, state: RunState) -> AgentLoopResult:
-        trajectory: list[TrajectoryStep] = []
+    def run(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep] | None = None,
+    ) -> AgentLoopResult:
+        resumed = trajectory is not None
+        trajectory = list(trajectory or [])
         state.metrics["max_turns"] = self.config.max_turns
-        self.lifecycle.start(state)
+        if resumed:
+            self.lifecycle.resume(state, len(trajectory))
+        else:
+            self.lifecycle.start(state)
+        self._checkpoint(state, trajectory, "resume_started" if resumed else "run_started")
+        if self._should_interrupt(trajectory):
+            self._interrupt(state, trajectory)
 
         while state.status == "running":
             if state.metrics["turns"] >= self.config.max_turns:
@@ -89,6 +104,7 @@ class AgentLoop:
                 break
             if turn.observation is not None:
                 trajectory.append(TrajectoryStep(action=turn.action, observation=turn.observation))
+                self._checkpoint(state, trajectory, "model_observation_recorded")
 
             if not turn.should_continue or state.status != "running":
                 break
@@ -99,14 +115,44 @@ class AgentLoop:
             outcome = self.action_handler.handle(turn.action, state)
             trajectory.extend(outcome.steps)
             self.session.save(state)
+            reason = "action_completed"
+            if state.status == "waiting_approval":
+                reason = "waiting_approval"
+            elif state.status == "completed":
+                reason = "run_completed"
+            self._checkpoint(state, trajectory, reason)
+
+            if state.status == "running" and self._should_interrupt(trajectory):
+                self._interrupt(state, trajectory)
 
             if not outcome.should_continue:
                 break
 
         self.lifecycle.finish(state)
+        if state.status == "interrupted":
+            self._checkpoint(state, trajectory, "interrupted_finalized")
         if state.run_dir is not None or self.session.runs_root is not None:
             self.session.save(state)
         return AgentLoopResult(state=state, trajectory=trajectory)
+
+    def _checkpoint(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep],
+        reason: str,
+    ) -> None:
+        if self.checkpoint_manager is not None:
+            self.checkpoint_manager.create(state, trajectory, reason=reason)
+
+    def _should_interrupt(self, trajectory: list[TrajectoryStep]) -> bool:
+        threshold = self.config.interrupt_after_steps
+        return threshold is not None and len(trajectory) >= threshold
+
+    def _interrupt(self, state: RunState, trajectory: list[TrajectoryStep]) -> None:
+        state.status = "interrupted"
+        state.metrics["interrupted_after_steps"] = len(trajectory)
+        self._checkpoint(state, trajectory, "controlled_interrupt")
+        self.session.save(state)
 
 
 class DisabledExecutor:

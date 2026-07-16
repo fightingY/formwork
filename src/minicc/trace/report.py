@@ -35,6 +35,7 @@ def run_report_snapshot(state: RunState) -> dict[str, Any]:
             "trace": _evidence_path(state.run_dir, "trace.jsonl"),
             "metrics": _evidence_path(state.run_dir, "metrics.json"),
             "diff": _evidence_path(artifacts_dir, "diff.patch"),
+            "latest_checkpoint": _evidence_path(state.run_dir, "checkpoints/latest.json"),
         },
     }
 
@@ -43,31 +44,34 @@ def format_run_report(report: dict[str, Any]) -> str:
     metrics = report["metrics"]
     evidence = report["evidence"]
     lines = [
-        "# miniCC run report",
+        "# miniCC 运行报告",
         "",
-        f"- Run: `{report['run_id']}`",
-        f"- Status: `{report['status']}`",
-        f"- Passed: `{'true' if report['passed'] else 'false'}`",
-        f"- Turns: `{metrics.get('turns', 0)}`",
-        f"- Bash actions: `{metrics.get('bash_actions', 0)}`",
-        f"- Policy denials: `{metrics.get('policy_denials', 0)}`",
-        f"- Approvals requested: `{metrics.get('approvals_requested', 0)}`",
+        f"- Run：`{report['run_id']}`",
+        f"- 状态：`{report['status']}`",
+        f"- 通过：`{'是' if report['passed'] else '否'}`",
+        f"- 模型回合：`{metrics.get('turns', 0)}`",
+        f"- Bash actions：`{metrics.get('bash_actions', 0)}`",
+        f"- Checkpoints：`{metrics.get('checkpoints_created', 0)}`",
+        f"- Resume 次数：`{metrics.get('resumes_completed', 0)}`",
+        f"- Policy denials：`{metrics.get('policy_denials', 0)}`",
+        f"- 审批请求：`{metrics.get('approvals_requested', 0)}`",
         "",
-        "## Goal",
+        "## 目标",
         "",
         str(report["goal"]),
         "",
-        "## Evidence",
+        "## 证据",
         "",
-        f"- State: `{evidence['state']}`",
-        f"- Trace: `{evidence['trace']}`",
-        f"- Metrics: `{evidence['metrics']}`",
-        f"- Diff: `{evidence['diff']}`",
+        f"- State：`{evidence['state']}`",
+        f"- Trace：`{evidence['trace']}`",
+        f"- Metrics：`{evidence['metrics']}`",
+        f"- Diff：`{evidence['diff']}`",
+        f"- 最新 checkpoint：`{evidence['latest_checkpoint']}`",
     ]
     if report.get("final_answer"):
-        lines.extend(["", "## Final Answer", "", str(report["final_answer"])])
+        lines.extend(["", "## 最终回答", "", str(report["final_answer"])])
     if report.get("state_summary"):
-        lines.extend(["", "## State Summary", "", str(report["state_summary"])])
+        lines.extend(["", "## 状态摘要", "", str(report["state_summary"])])
     lines.append("")
     return "\n".join(lines)
 

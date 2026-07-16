@@ -29,6 +29,8 @@ def test_session_manager_approve_then_apply_executes_pending_action(tmp_path) ->
     assert state.metrics["bash_actions"] == 1
     assert state.last_observation is not None
     assert state.last_observation.stdout_preview == "approved"
+    assert state.execution_journal[0]["status"] == "completed"
+    assert state.execution_journal[0]["command"] == "echo ok"
 
 
 def test_session_manager_save_uses_configured_runs_root(tmp_path) -> None:

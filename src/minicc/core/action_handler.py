@@ -4,7 +4,12 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from minicc.core.protocol import Action, AskAction, BashAction, FinalAction
-from minicc.core.session import SessionManager, record_execution_metrics
+from minicc.core.session import (
+    SessionManager,
+    begin_execution,
+    complete_execution,
+    record_execution_metrics,
+)
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.policy.base import PolicyChain, PolicyDecision
 from minicc.trace.recorder import TraceRecorder
@@ -77,7 +82,9 @@ class ActionHandler:
 
         if self.trace is not None:
             self.trace.sandbox_exec_started(state, action_to_execute.command)
+        execution_id = begin_execution(state, action_to_execute, self.session)
         observation = self.executor.run(action_to_execute, state)
+        complete_execution(state, execution_id, observation, self.session)
         record_execution_metrics(state, observation)
         state.last_observation = observation
         if self.trace is not None:

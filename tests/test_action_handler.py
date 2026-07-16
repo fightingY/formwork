@@ -84,3 +84,27 @@ def test_action_handler_traces_action_and_policy_error_observation() -> None:
     ]
     assert trace.events[0]["action"]["type"] == "bash"
     assert trace.events[1]["decision_type"] == "deny"
+
+
+def test_action_handler_persists_ambiguous_execution_before_executor_failure(tmp_path) -> None:
+    class FailingExecutor:
+        def run(self, action: BashAction, state: RunState) -> Observation:
+            raise RuntimeError("process disappeared")
+
+    state = RunState.start("ambiguous", run_dir=tmp_path)
+
+    try:
+        ActionHandler(FailingExecutor()).handle(BashAction(command="write-change"), state)
+    except RuntimeError as exc:
+        assert "process disappeared" in str(exc)
+    else:
+        raise AssertionError("Expected executor failure")
+
+    assert state.execution_journal == [
+        {
+            "execution_id": "execution-0001",
+            "status": "started",
+            "command": "write-change",
+            "started_at": state.execution_journal[0]["started_at"],
+        }
+    ]
