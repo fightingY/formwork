@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "checkpoint_id": "checkpoint-0005",
+  "sequence": 5,
+  "created_at": "2026-07-16T14:01:19.817348+00:00",
+  "reason": "resume_started",
+  "run_id": "20260716-220053-493581e9",
+  "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\20260716-220053-493581e9",
+  "workspace_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\20260716-220053-493581e9\\workspace",
+  "workspace_fingerprint": "295e02eb92d58a9a05139f4e117dabb2708397134b1af4d9ba10185dee753b3b",
+  "state": {
+    "run_id": "20260716-220053-493581e9",
+    "goal": "创建V2_CHECKPOINT_ACCEPTANCE.md并写入V2-Checkpoint-Resume和status:verified，验证后返回final",
+    "status": "running",
+    "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\20260716-220053-493581e9",
+    "artifacts_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\20260716-220053-493581e9\\artifacts",
+    "workspace_host_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\20260716-220053-493581e9\\workspace",
+    "container_name": "minicc-20260716-220053-493581e9",
+    "current_plan": [],
+    "constraints": [],
+    "open_questions": [],
+    "approvals": [],
+    "artifacts": [],
+    "metrics": {
+      "started_at": "2026-07-16T14:01:01.052515+00:00",
+      "completed_at": "2026-07-16T14:01:11.978764+00:00",
+      "total_duration_ms": 10926,
+      "turns": 1,
+      "bash_actions": 1,
+      "protocol_errors": 0,
+      "provider_errors": 0,
+      "infrastructure_errors": 0,
+      "command_failures": 0,
+      "timeouts": 0,
+      "prompt_tokens": 423,
+      "completion_tokens": 148,
+      "total_tokens": 571,
+      "cached_tokens": 0,
+      "prompt_cache_hit_tokens": 0,
+      "prompt_cache_miss_tokens": 423,
+      "cache_hit_rate": 0.0,
+      "latency_ms": 9807,
+      "artifact_bytes": 0,
+      "policy_denials": 0,
+      "approvals_requested": 0,
+      "context_compactions": 0,
+      "context_compacted_steps": 0,
+      "checkpoints_created": 5,
+      "resumes_completed": 1,
+      "resume_drift_errors": 0,
+      "max_turns": 12,
+      "interrupted_after_steps": 1
+    },
+    "state_summary": "",
+    "final_answer": null,
+    "pending_action": null,
+    "approval_question": null,
+    "last_observation": {
+      "kind": "no_output",
+      "exit_code": 0,
+      "stdout_preview": "",
+      "stderr_preview": "",
+      "artifact_ids": [],
+      "message": "Command exited successfully with no output.",
+      "duration_ms": 245
+    },
+    "checkpoint_sequence": 5,
+    "latest_checkpoint_id": "checkpoint-0005",
+    "resume_count": 1,
+    "execution_journal": [
+      {
+        "execution_id": "execution-0001",
+        "status": "completed",
+        "command": "echo -e 'V2-Checkpoint-Resume\nstatus:verified' > V2_CHECKPOINT_ACCEPTANCE.md",
+        "started_at": "2026-07-16T14:01:11.194626+00:00",
+        "completed_at": "2026-07-16T14:01:11.441928+00:00",
+        "observation_kind": "no_output",
+        "exit_code": 0
+      }
+    ]
+  },
+  "trajectory": [
+    {
+      "action": {
+        "type": "bash",
+        "command": "echo -e 'V2-Checkpoint-Resume\nstatus:verified' > V2_CHECKPOINT_ACCEPTANCE.md",
+        "timeout_sec": 60,
+        "purpose": "Create V2_CHECKPOINT_ACCEPTANCE.md with required content"
+      },
+      "observation": {
+        "kind": "no_output",
+        "exit_code": 0,
+        "stdout_preview": "",
+        "stderr_preview": "",
+        "artifact_ids": [],
+        "message": "Command exited successfully with no output.",
+        "duration_ms": 245
+      }
+    }
+  ]
+}

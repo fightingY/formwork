@@ -1,0 +1,8 @@
+diff --git a/V2_CHECKPOINT_ACCEPTANCE.md b/V2_CHECKPOINT_ACCEPTANCE.md
+new file mode 100644
+index 0000000..8da0ad1
+--- /dev/null
++++ b/V2_CHECKPOINT_ACCEPTANCE.md
+@@ -0,0 +1,2 @@
++V2-Checkpoint-Resume
++status:verified

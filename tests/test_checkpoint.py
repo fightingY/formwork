@@ -13,6 +13,7 @@ from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState, TrajectoryStep, save_run_state
+from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
 from minicc.trace.recorder import TraceRecorder
 
 
@@ -256,7 +257,10 @@ def _step(command, kind, *, exit_code=0):
     ],
 )
 def test_checkpoint_resume_matrix_completes_ten_state_scenarios(tmp_path, scenario, trajectory) -> None:
-    state, manager = _checkpoint_state(tmp_path)
+    state, manager = _git_checkpoint_state(tmp_path, scenario)
+    if scenario in {"after_modification", "after_multiple_actions"}:
+        (state.workspace_host_path / "app.py").write_text("changed\n", encoding="utf-8")
+    expected_diff = write_workspace_diff(state.workspace_host_path, state.artifacts_dir).read_text(encoding="utf-8")
     state.state_summary = f"scenario={scenario}"
     manager.create(state, trajectory, reason=scenario)
 
@@ -272,6 +276,8 @@ def test_checkpoint_resume_matrix_completes_ten_state_scenarios(tmp_path, scenar
     assert result.state.final_answer == "resumed"
     assert result.state.state_summary == f"scenario={scenario}"
     assert len(restored.trajectory) == len(trajectory)
+    actual_diff = write_workspace_diff(state.workspace_host_path, state.artifacts_dir).read_text(encoding="utf-8")
+    assert actual_diff == expected_diff
 
 
 def _checkpoint_state(tmp_path):
@@ -289,3 +295,19 @@ def _checkpoint_state(tmp_path):
     )
     save_run_state(state)
     return state, CheckpointManager(run_dir)
+
+
+def _git_checkpoint_state(tmp_path, scenario):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "app.py").write_text("original\n", encoding="utf-8")
+    workspace = prepare_run_workspace(source, run_id=scenario, runs_root=tmp_path / "runs")
+    state = RunState.start(
+        f"checkpoint matrix {scenario}",
+        run_dir=workspace.run_dir,
+        workspace_host_path=workspace.workspace_dir,
+        artifacts_dir=workspace.artifacts_dir,
+    )
+    state.run_id = scenario
+    save_run_state(state)
+    return state, CheckpointManager(workspace.run_dir)

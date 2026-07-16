@@ -1,0 +1,77 @@
+{
+  "version": "2.0.0",
+  "result": "PASS",
+  "acceptance_date": "2026-07-16",
+  "git_commit": "8b6d3216400af367818d9983d51abe272d6b4f82",
+  "unit_tests": {
+    "passed": 118,
+    "failed": 0
+  },
+  "checkpoint_tests": {
+    "passed": 19,
+    "failed": 0
+  },
+  "resume_matrix": {
+    "passed": 10,
+    "total": 10,
+    "scenarios": [
+      "before_modification",
+      "after_repository_read",
+      "after_modification",
+      "after_failed_verification",
+      "after_successful_verification",
+      "after_policy_denial",
+      "after_protocol_error",
+      "after_timeout",
+      "after_multiple_actions",
+      "after_approval_observation"
+    ]
+  },
+  "execution_scenarios": {
+    "passed": 3,
+    "total": 3,
+    "scenarios": [
+      "修改前中断",
+      "修改后验证前中断",
+      "验证失败后中断"
+    ]
+  },
+  "state_fidelity": {
+    "workspace": "10/10 PASS",
+    "run_status": "10/10 PASS",
+    "trajectory": "10/10 PASS",
+    "diff": "10/10 PASS"
+  },
+  "drift_rejection": {
+    "passed": 3,
+    "total": 3,
+    "scenarios": [
+      "workspace 内容漂移",
+      "checkpoint 指针属于错误 run",
+      "action 执行状态不明确，禁止自动重放"
+    ]
+  },
+  "real_model_resume": {
+    "result": "PASS",
+    "run_id": "20260716-220053-493581e9",
+    "initial_status": "interrupted",
+    "final_status": "completed",
+    "checkpoint_restored": "checkpoint-0004",
+    "resume_count": 1,
+    "turns": 3,
+    "bash_actions": 2,
+    "file_creation_executions": 1,
+    "duplicate_executions": 0,
+    "workspace_verified": true,
+    "trajectory_verified": true,
+    "diff_verified": true,
+    "provider_errors": 0,
+    "infrastructure_errors": 0
+  },
+  "v1_3_regression": {
+    "result": "PASS",
+    "passed_runs": 15,
+    "total_runs": 15,
+    "report": "v1.3-regression/eval_report.json"
+  }
+}

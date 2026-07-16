@@ -23,9 +23,9 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V1.3
+## 当前稳定版本：Stable V2.0
 
-Stable V1.3 已在固定 provider、模型、temperature、不可变 Docker 镜像和 locked sandbox 配置下完成 C01-C04 与 C09 各 3 次真实运行：15/15 总结果、任务结果、Agent 终态和基础设施状态全部通过。C01-C04 固定回归为 12/12 PASS，C09 三次均稳定进入 HITL 审批，完整证据见 `acceptance/stable-v1.3/`。开发期失败和局部重跑统一归档到 `acceptance/archive/stable-v1.3-development/`，不参与正式通过率计算。
+Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
 M1 已实现基础闭环：
 
@@ -353,7 +353,7 @@ uv run pytest -q
 uv run minicc traces
 ```
 
-版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/`、`acceptance/stable-v1.2/` 和 `acceptance/stable-v1.3/`。Stable V1.3 的固定命令与发布门禁说明见 `acceptance/stable-v1.3/README.md`。
+版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/`、`acceptance/stable-v1.2/`、`acceptance/stable-v1.3/` 和 `acceptance/stable-v2.0/`。V2.0 的 checkpoint/resume 场景、真实模型证据和 V1.3 回归说明见 `acceptance/stable-v2.0/README.md`。
 
 ```bash
 uv run minicc eval eval_cases \
