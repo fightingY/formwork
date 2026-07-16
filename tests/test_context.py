@@ -78,6 +78,20 @@ def test_context_builder_injects_skill_catalog_and_feedback_memory(tmp_path) -> 
     assert "caution: Use rg before broad file reads." in messages[1]["content"]
 
 
+def test_context_builder_adds_budget_pressure_after_thresholds() -> None:
+    builder = ContextBuilder()
+    state = RunState.start("Finish task")
+    state.metrics["max_turns"] = 10
+    state.metrics["turns"] = 6
+
+    at_sixty = builder.build_messages(state, [])[1]["content"]
+    state.metrics["turns"] = 8
+    at_eighty = builder.build_messages(state, [])[1]["content"]
+
+    assert "Converge now" in at_sixty
+    assert "Stop exploring" in at_eighty
+
+
 def _step(command: str, message: str, artifact_ids: list[str] | None = None) -> TrajectoryStep:
     return TrajectoryStep(
         action=BashAction(command=command, purpose=message),

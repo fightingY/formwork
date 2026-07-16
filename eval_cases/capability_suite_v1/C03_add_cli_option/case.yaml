@@ -6,6 +6,8 @@ prompt: >
   请补充或更新仓库现有的 unittest 测试，禁止联网或安装依赖，
   最后使用 `python -m unittest discover -s tests` 验证。
 sandbox_mode: locked
+workspace:
+  writable_paths: ["src/demo_cli.py", "tests/test_cli.py"]
 budget:
   max_turns: 12
   max_bash_actions: 30

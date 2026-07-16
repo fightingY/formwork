@@ -8,6 +8,7 @@ from typing import Protocol
 from minicc.core.protocol import BashAction
 from minicc.core.state import Observation, RunState, load_run_state, save_run_state, state_path_for_run
 from minicc.policy.base import PolicyDecision
+from minicc.trace.recorder import TraceRecorder
 
 
 class BashExecutorProtocol(Protocol):
@@ -87,6 +88,8 @@ class SessionManager:
         self,
         state: RunState,
         executor: BashExecutorProtocol,
+        *,
+        trace: TraceRecorder | None = None,
     ) -> None:
         if state.pending_action is None:
             latest = latest_approval_result(state)
@@ -96,6 +99,13 @@ class SessionManager:
                     kind="approval_result",
                     message=f"User response for pending question: {reason}",
                 )
+                state.status = "failed"
+                state.state_summary = "Run terminated because the pending request was denied."
+                if trace is not None:
+                    trace.approval_resolved(state, "denied", reason)
+                    trace.observation_created(state, state.last_observation)
+                self.save(state)
+                return
             state.status = "running"
             state.approval_question = None
             return
@@ -109,9 +119,15 @@ class SessionManager:
             state.pending_action = None
             state.approval_question = None
             state.status = "running"
+            if trace is not None:
+                trace.approval_resolved(state, "approved")
+                trace.sandbox_exec_started(state, action.command)
             observation = executor.run(action, state)
             record_execution_metrics(state, observation)
             state.last_observation = observation
+            if trace is not None:
+                trace.sandbox_exec_finished(state, observation)
+                trace.observation_created(state, observation)
             state.state_summary = "Approved pending action was executed before resuming the agent loop."
             return
 
@@ -120,16 +136,17 @@ class SessionManager:
             action_text = state.pending_action.command
             state.pending_action = None
             state.approval_question = None
-            state.status = "running"
+            state.status = "failed"
             state.last_observation = Observation(
                 kind="approval_result",
                 message=f"User denied the pending action. Reason: {reason}",
                 stderr_preview=action_text,
             )
-            state.state_summary = (
-                "The previous pending action was denied by the user. "
-                "Choose a safer alternative or ask a clarifying question."
-            )
+            state.state_summary = "Run terminated because the pending action was denied by the user."
+            if trace is not None:
+                trace.approval_resolved(state, "denied", reason)
+                trace.observation_created(state, state.last_observation)
+            self.save(state)
 
 
 def latest_approval_result(state: RunState) -> dict | None:

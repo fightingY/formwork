@@ -70,6 +70,7 @@ class AgentLoop:
 
     def run(self, state: RunState) -> AgentLoopResult:
         trajectory: list[TrajectoryStep] = []
+        state.metrics["max_turns"] = self.config.max_turns
         self.lifecycle.start(state)
 
         while state.status == "running":

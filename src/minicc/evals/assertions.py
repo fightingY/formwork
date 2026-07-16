@@ -74,6 +74,8 @@ def _assert_command(assertion: dict[str, Any], workspace_dir: Path) -> Assertion
         cwd=workspace_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=int(assertion.get("timeout_sec", 120)),
     )
     passed = completed.returncode == expected
@@ -145,9 +147,16 @@ def _assert_run_status(assertion: dict[str, Any], metrics: dict[str, Any]) -> As
 
 def _assert_trace_contains_event(assertion: dict[str, Any], run_dir: Path) -> AssertionResult:
     event_type = str(assertion.get("event_type") or "")
+    raw_fields = assertion.get("fields", {})
+    expected_fields = {str(key): value for key, value in raw_fields.items()} if isinstance(raw_fields, dict) else {}
     events = _read_trace(run_dir)
-    passed = any(event.get("event") == event_type for event in events)
-    return AssertionResult("trace_contains_event", passed, f"trace contains event: {event_type}")
+    passed = any(
+        event.get("event") == event_type
+        and all(event.get(key) == value for key, value in expected_fields.items())
+        for event in events
+    )
+    fields_message = f" with fields {expected_fields}" if expected_fields else ""
+    return AssertionResult("trace_contains_event", passed, f"trace contains event: {event_type}{fields_message}")
 
 
 def _assert_no_trace_event(run_dir: Path, event_type: str, **fields: str) -> AssertionResult:

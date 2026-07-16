@@ -78,6 +78,28 @@ def test_policy_chain_denies_dangerous_rm_before_approval() -> None:
     assert decision.policy_name == "CommandPolicy"
 
 
+def test_policy_chain_allows_normal_locked_command_without_approval() -> None:
+    decision = PolicyChain(
+        [
+            CommandPolicy(),
+            PathPolicy(),
+            NetworkPolicy(mode="locked", require_approval=True),
+            ApprovalPolicy(),
+        ]
+    ).evaluate(BashAction(command="python -m unittest discover -s tests"), RunState.start("test"))
+
+    assert decision.type == "allow"
+
+
+def test_network_policy_can_deny_in_locked_mode_without_approval() -> None:
+    decision = NetworkPolicy(mode="locked", require_approval=False).evaluate(
+        BashAction(command="curl https://example.test"),
+        RunState.start("test"),
+    )
+
+    assert decision.type == "deny"
+
+
 def test_approval_policy_can_be_disabled() -> None:
     decision = ApprovalPolicy(enabled=False).evaluate(BashAction(command="rm -r build"), RunState.start("test"))
 

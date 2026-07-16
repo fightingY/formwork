@@ -30,8 +30,14 @@ class DockerSandboxRunner:
         run_id: str,
         workspace_dir: Path,
         artifacts_dir: Path | None = None,
+        writable_paths: tuple[str, ...] | None = None,
     ) -> str:
         container_name = f"minicc-{run_id}"
+        if artifacts_dir is not None:
+            # The workspace root may be mounted read-only. Docker cannot create
+            # a nested mountpoint inside it during container initialization, so
+            # prepare the ignored mountpoint on the host first.
+            (workspace_dir / ".minicc_artifacts").mkdir(parents=True, exist_ok=True)
         command = [
             "docker",
             "run",
@@ -41,8 +47,19 @@ class DockerSandboxRunner:
             "--workdir",
             "/workspace",
             "--mount",
-            f"type=bind,source={workspace_dir.resolve()},target=/workspace",
+            (
+                f"type=bind,source={workspace_dir.resolve()},target=/workspace"
+                + (",readonly" if writable_paths is not None else "")
+            ),
         ]
+        for relative_path in writable_paths or ():
+            source = _prepare_writable_mount(workspace_dir, relative_path)
+            command.extend(
+                [
+                    "--mount",
+                    f"type=bind,source={source},target=/workspace/{relative_path}",
+                ]
+            )
         if artifacts_dir is not None:
             command.extend(
                 [
@@ -169,3 +186,18 @@ def _decode_timeout_output(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def _prepare_writable_mount(workspace_dir: Path, relative_path: str) -> Path:
+    root = workspace_dir.resolve()
+    target = (root / relative_path).resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"Writable path escapes workspace: {relative_path}")
+    if target.exists():
+        return target
+    if relative_path.endswith("/"):
+        target.mkdir(parents=True, exist_ok=True)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch(exist_ok=True)
+    return target

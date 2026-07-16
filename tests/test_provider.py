@@ -1,4 +1,4 @@
-from minicc.core.provider import OpenAICompatibleProvider, ProviderError, extract_chat_text, parse_model_usage
+from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider, ProviderError, extract_chat_text, parse_model_usage
 
 
 def test_parse_deepseek_style_cache_usage() -> None:
@@ -75,3 +75,45 @@ def test_provider_retries_transient_request_failures(monkeypatch) -> None:
 
     assert calls == 3
     assert response.text == '{"type":"final","answer":"done"}'
+
+
+def test_provider_prefers_native_json_mode(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://api.siliconflow.cn/v1",
+        api_key="key",
+        model="deepseek-ai/DeepSeek-V4-Flash",
+    )
+    payloads = []
+
+    def fake_post_json(payload):
+        payloads.append(payload)
+        return {"choices": [{"message": {"content": '{"type":"final","answer":"done"}'}}]}
+
+    monkeypatch.setattr(provider, "_post_json", fake_post_json)
+
+    provider.complete([], options=CompletionOptions(json_mode=True))
+
+    assert payloads[0]["response_format"] == {"type": "json_object"}
+
+
+def test_provider_falls_back_when_native_json_mode_is_unsupported(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="legacy-model",
+    )
+    payloads = []
+
+    def fake_post_json(payload):
+        payloads.append(dict(payload))
+        if "response_format" in payload:
+            raise ProviderError("unsupported response_format", status_code=400)
+        return {"choices": [{"message": {"content": 'text {"type":"final","answer":"done"}'}}]}
+
+    monkeypatch.setattr(provider, "_post_json", fake_post_json)
+
+    response = provider.complete([])
+
+    assert "response_format" in payloads[0]
+    assert "response_format" not in payloads[1]
+    assert response.text.startswith("text ")

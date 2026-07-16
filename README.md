@@ -23,7 +23,7 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V1.2
+## 当前稳定版本：Stable V1.2（V1.3.0 开发完成，等待不可变矩阵验收）
 
 Stable V1.2 已在固定 provider、模型、temperature、预算和 locked Docker sandbox 配置下完成 C01-C04 四个固定回归任务各 3 次真实运行：12/12 `completed`、12/12 Verifier 通过，且没有非预期审批、provider error 或 workspace 污染。完整汇总见 `acceptance/stable-v1.2/`。Semantic compaction、Skill Registry 和 Feedback Memory 虽然已有原型及单元测试，但在完成独立效果实验前统一视为 experimental，不计入 Stable V1.2 的稳定能力。
 
@@ -231,6 +231,10 @@ uv run minicc resume <run_id>
 `resume` 会重新启动执行环境，继续使用该 run 的 workspace 和 artifacts。
 
 ## Action 协议
+
+默认优先请求供应商原生 JSON mode（`MINICC_JSON_MODE=true`）；若兼容供应商明确返回
+400/422 不支持，Provider 会自动降级为文本响应，再由本地唯一顶层 JSON 解码器和 action schema
+严格校验。评测 case 可通过 `workspace.writable_paths` 把 Docker 工作区根目录挂为只读，仅开放声明路径。
 
 模型每轮必须只输出一个 JSON object，不能输出 Markdown。
 

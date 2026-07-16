@@ -32,6 +32,7 @@ class CompletionOptions:
     temperature: float = 0.0
     stream: bool = False
     include_usage: bool = True
+    json_mode: bool = True
 
 
 class ModelProvider(Protocol):
@@ -46,6 +47,10 @@ class ModelProvider(Protocol):
 
 class ProviderError(RuntimeError):
     """Expected failure while communicating with a model provider."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class OpenAICompatibleProvider:
@@ -79,6 +84,10 @@ class OpenAICompatibleProvider:
         }
         if options.stream and options.include_usage:
             payload["stream_options"] = {"include_usage": True}
+        if options.json_mode:
+            # Prefer the provider's native structured-output mode. Local
+            # protocol validation still handles truncated responses.
+            payload["response_format"] = {"type": "json_object"}
 
         started = time.perf_counter()
         last_error: ProviderError | None = None
@@ -93,6 +102,12 @@ class OpenAICompatibleProvider:
                 break
             except ProviderError as exc:
                 last_error = exc
+                if "response_format" in payload and exc.status_code in {400, 422}:
+                    # Some OpenAI-compatible providers or model variants do not
+                    # implement native JSON mode. Fall back to local extraction
+                    # and schema validation without requiring configuration edits.
+                    payload.pop("response_format", None)
+                    continue
                 if attempt == 2:
                     raise
                 time.sleep(0.5)
@@ -123,6 +138,11 @@ class OpenAICompatibleProvider:
                 )
                 response.raise_for_status()
                 data = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(
+                f"Provider HTTP request failed: {type(exc).__name__}",
+                status_code=exc.response.status_code,
+            ) from exc
         except httpx.HTTPError as exc:
             raise ProviderError(f"Provider HTTP request failed: {type(exc).__name__}") from exc
         if not isinstance(data, dict):
@@ -165,6 +185,11 @@ class OpenAICompatibleProvider:
                             piece = delta.get("content")
                             if piece:
                                 content_parts.append(str(piece))
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(
+                f"Provider HTTP request failed: {type(exc).__name__}",
+                status_code=exc.response.status_code,
+            ) from exc
         except httpx.HTTPError as exc:
             raise ProviderError(f"Provider HTTP request failed: {type(exc).__name__}") from exc
 

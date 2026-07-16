@@ -2,7 +2,10 @@ name: C02_fix_failing_test
 capability: debugging
 prompt: >
   当前仓库测试失败。请定位根因并最小修改修复，最后确保测试通过。
+  只能修改 src/ 下的业务代码，不要修改 tests/ 或测试导入路径。
 sandbox_mode: locked
+workspace:
+  writable_paths: ["src/"]
 budget:
   max_turns: 10
   max_bash_actions: 25

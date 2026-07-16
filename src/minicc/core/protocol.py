@@ -71,14 +71,29 @@ def parse_action(
 
 
 def _unwrap_model_json(text: str) -> str:
-    """Accept common provider wrappers while preserving strict JSON validation."""
+    """Extract exactly one top-level JSON object from optional provider text."""
     value = text.strip()
-    if value.startswith("<function>") and value.endswith("</function>"):
-        value = value[len("<function>") : -len("</function>")].strip()
-    if value.startswith("```") and value.endswith("```"):
-        first_newline = value.find("\n")
-        if first_newline > 0:
-            value = value[first_newline + 1 : -3].strip()
+    decoder = json.JSONDecoder()
+    objects: list[tuple[int, int, dict[str, Any]]] = []
+    cursor = 0
+    while cursor < len(value):
+        start = value.find("{", cursor)
+        if start < 0:
+            break
+        try:
+            payload, end = decoder.raw_decode(value, start)
+        except json.JSONDecodeError:
+            cursor = start + 1
+            continue
+        if isinstance(payload, dict):
+            objects.append((start, end, payload))
+            cursor = end
+        else:
+            cursor = start + 1
+
+    if len(objects) == 1:
+        start, end, _ = objects[0]
+        return value[start:end]
     return value
 
 

@@ -18,6 +18,7 @@ class EvalCase:
     proves: str = ""
     budget: dict[str, Any] = field(default_factory=dict)
     assertions: list[dict[str, Any]] = field(default_factory=list)
+    writable_paths: tuple[str, ...] | None = None
 
 
 def discover_cases(path: Path) -> list[EvalCase]:
@@ -53,6 +54,17 @@ def load_case(path: Path) -> EvalCase:
     if not isinstance(budget, dict):
         budget = {}
 
+    workspace = data.get("workspace", {})
+    if not isinstance(workspace, dict):
+        workspace = {}
+    raw_writable_paths = workspace.get("writable_paths")
+    if raw_writable_paths is None:
+        writable_paths = None
+    elif not isinstance(raw_writable_paths, list):
+        raise ValueError(f"workspace.writable_paths must be a list: {path}")
+    else:
+        writable_paths = tuple(_safe_relative_path(item, path) for item in raw_writable_paths)
+
     return EvalCase(
         name=str(data.get("name") or case_dir.name),
         prompt=prompt.strip(),
@@ -63,4 +75,13 @@ def load_case(path: Path) -> EvalCase:
         proves=str(data.get("proves") or ""),
         budget=budget,
         assertions=[item for item in assertions if isinstance(item, dict)],
+        writable_paths=writable_paths,
     )
+
+
+def _safe_relative_path(value: Any, case_path: Path) -> str:
+    normalized = str(value).replace("\\", "/").strip().strip("/")
+    parts = Path(normalized).parts
+    if not normalized or Path(normalized).is_absolute() or ".." in parts:
+        raise ValueError(f"workspace.writable_paths contains an unsafe path in {case_path}: {value}")
+    return normalized

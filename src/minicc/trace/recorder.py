@@ -62,6 +62,9 @@ class TraceRecorder:
     def action_parsed(self, state: RunState, action: Action | None) -> None:
         self.record("action_parsed", state, action=action_to_dict(action) if action is not None else None)
 
+    def action_started(self, state: RunState, action: Action) -> None:
+        self.record("action_started", state, action=action_to_dict(action))
+
     def policy_decision(self, state: RunState, decision: PolicyDecision) -> None:
         self.record(
             "policy_decision",
@@ -87,6 +90,9 @@ class TraceRecorder:
 
     def approval_requested(self, state: RunState, question: str) -> None:
         self.record("approval_requested", state, question=question)
+
+    def approval_resolved(self, state: RunState, status: str, reason: str = "") -> None:
+        self.record("approval_resolved", state, approval_status=status, reason=reason)
 
     def run_completed(self, state: RunState) -> None:
         self.record("run_completed", state, final_answer=state.final_answer)

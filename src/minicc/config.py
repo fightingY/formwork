@@ -16,6 +16,7 @@ class ProviderSettings:
     temperature: float = 0.0
     stream: bool = False
     include_usage: bool = True
+    json_mode: bool = True
     timeout_sec: float = 120.0
 
 
@@ -102,6 +103,12 @@ def load_settings() -> Settings:
                 "MINICC_INCLUDE_USAGE",
                 provider_config,
                 "include_usage",
+                True,
+            ),
+            json_mode=_bool_env_or_config(
+                "MINICC_JSON_MODE",
+                provider_config,
+                "json_mode",
                 True,
             ),
             timeout_sec=_float_env_or_config(

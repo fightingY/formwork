@@ -1,6 +1,7 @@
 from minicc.core.protocol import BashAction
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState
+from minicc.trace.recorder import TraceRecorder
 
 
 class FakeExecutor:
@@ -40,7 +41,7 @@ def test_session_manager_save_uses_configured_runs_root(tmp_path) -> None:
     assert path.exists()
 
 
-def test_session_manager_deny_then_apply_returns_approval_observation(tmp_path) -> None:
+def test_session_manager_deny_then_apply_terminates_run(tmp_path) -> None:
     state = RunState.start("deny", run_dir=tmp_path)
     state.status = "waiting_approval"
     state.pending_action = BashAction(command="pip install pytest")
@@ -49,8 +50,25 @@ def test_session_manager_deny_then_apply_returns_approval_observation(tmp_path) 
     session.deny(state, "no network")
     session.apply_pending_approval_result(state, FakeExecutor())
 
-    assert state.status == "running"
+    assert state.status == "failed"
     assert state.pending_action is None
     assert state.last_observation is not None
     assert state.last_observation.kind == "approval_result"
     assert "no network" in state.last_observation.message
+
+
+def test_session_manager_approval_resume_writes_trace_events(tmp_path) -> None:
+    state = RunState.start("approve trace", run_dir=tmp_path)
+    state.status = "waiting_approval"
+    state.pending_action = BashAction(command="echo ok")
+    session = SessionManager()
+    trace = TraceRecorder(tmp_path / "trace.jsonl")
+
+    session.approve(state)
+    session.apply_pending_approval_result(state, FakeExecutor(), trace=trace)
+
+    event_names = [event["event"] for event in trace.events]
+    assert "approval_resolved" in event_names
+    assert "sandbox_exec_started" in event_names
+    assert "sandbox_exec_finished" in event_names
+    assert "observation_created" in event_names

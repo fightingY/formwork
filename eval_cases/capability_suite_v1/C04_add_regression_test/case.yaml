@@ -5,6 +5,8 @@ prompt: >
   请在现有 `ParserTests` unittest 类内补充一个空输入返回空列表的测试方法，不改变业务代码。
   使用 `python -m unittest discover -s tests` 验证一次，通过后立即返回 final，不要重复检查。
 sandbox_mode: locked
+workspace:
+  writable_paths: ["tests/test_parser.py"]
 budget:
   max_turns: 10
   max_bash_actions: 20

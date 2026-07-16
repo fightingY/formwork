@@ -5,11 +5,12 @@ import os
 import shlex
 import shutil
 import stat
+import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
-from minicc.core.state import RunState, new_run_id
+from minicc.core.state import RunState, new_run_id, save_run_state
 from minicc.evals.assertions import AssertionResult, run_assertions
 from minicc.evals.case import EvalCase, discover_cases
 from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
@@ -32,6 +33,9 @@ class EvalCaseResult:
     sandbox_mode: str = "locked"
     budget: dict | None = None
     proves: str = ""
+    task_success: bool = False
+    agent_success: bool = False
+    infrastructure_success: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,7 +106,13 @@ def run_eval_case(
         artifacts_dir=workspace.artifacts_dir,
     )
     state.run_id = workspace.run_id
-    state = agent_runner(case, state)
+    try:
+        state = agent_runner(case, state)
+    except Exception as exc:
+        state.status = "failed"
+        state.state_summary = _format_infrastructure_error(exc)
+        state.metrics["infrastructure_errors"] = state.metrics.get("infrastructure_errors", 0) + 1
+        save_run_state(state)
     write_workspace_diff(workspace.workspace_dir, workspace.artifacts_dir)
     metrics = _load_metrics(workspace.run_dir)
     assertion_results = run_assertions(
@@ -112,8 +122,15 @@ def run_eval_case(
         metrics=metrics or state.metrics,
     )
     expected_status = _expected_run_status(case)
-    status_passed = state.status == expected_status
-    passed = status_passed and all(result.passed for result in assertion_results)
+    agent_success = state.status == expected_status
+    task_assertions = [result for result in assertion_results if result.type != "run_status"]
+    task_success = all(result.passed for result in task_assertions)
+    result_metrics = metrics or state.metrics
+    infrastructure_success = (
+        int(result_metrics.get("provider_errors", 0)) == 0
+        and int(result_metrics.get("infrastructure_errors", 0)) == 0
+    )
+    passed = agent_success and infrastructure_success and all(result.passed for result in assertion_results)
     result = EvalCaseResult(
         name=case.name,
         capability=case.capability,
@@ -127,6 +144,9 @@ def run_eval_case(
         sandbox_mode=case.sandbox_mode,
         budget=dict(case.budget),
         proves=case.proves,
+        task_success=task_success,
+        agent_success=agent_success,
+        infrastructure_success=infrastructure_success,
     )
     write_eval_case_report(result, workspace.run_dir)
     return result
@@ -159,6 +179,9 @@ def suite_to_dict(result: EvalSuiteResult) -> dict:
                 "sandbox_mode": case.sandbox_mode,
                 "budget": case.budget or {},
                 "proves": case.proves,
+                "task_success": case.task_success,
+                "agent_success": case.agent_success,
+                "infrastructure_success": case.infrastructure_success,
                 "metrics": case.metrics,
                 "assertions": [asdict(assertion) for assertion in case.assertions],
             }
@@ -185,6 +208,9 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
         lines.append(
             f"- {summary['name']}: {summary['passed_runs']}/{summary['attempts']} passed "
             f"(pass_rate={summary['pass_rate']:.3f}), "
+            f"task={summary['task_success_runs']}/{summary['attempts']}, "
+            f"agent={summary['agent_success_runs']}/{summary['attempts']}, "
+            f"infrastructure={summary['infrastructure_success_runs']}/{summary['attempts']}, "
             f"avg_turns={summary['average_turns']:.2f}, "
             f"avg_bash_actions={summary['average_bash_actions']:.2f}, "
             f"avg_duration_ms={summary['average_duration_ms']:.0f}, "
@@ -197,6 +223,12 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
         if case.proves:
             lines.append(case.proves)
         lines.append(f"Run: `{case.run_id}`")
+        lines.append(
+            "Outcome: "
+            f"task={'PASS' if case.task_success else 'FAIL'}, "
+            f"agent={'PASS' if case.agent_success else 'FAIL'}, "
+            f"infrastructure={'PASS' if case.infrastructure_success else 'FAIL'}"
+        )
         lines.append(
             "Metrics: "
             f"turns={case.metrics.get('turns', 0)}, "
@@ -235,6 +267,11 @@ def aggregate_case_results(cases: list[EvalCaseResult]) -> list[dict]:
                 "capability": results[0].capability,
                 "attempts": len(results),
                 "passed_runs": sum(result.passed for result in results),
+                "task_success_runs": sum(getattr(result, "task_success", result.passed) for result in results),
+                "agent_success_runs": sum(getattr(result, "agent_success", result.passed) for result in results),
+                "infrastructure_success_runs": sum(
+                    getattr(result, "infrastructure_success", result.passed) for result in results
+                ),
                 "pass_rate": sum(result.passed for result in results) / len(results),
                 "statuses": sorted({result.run_status for result in results}),
                 "average_turns": sum(result.metrics.get("turns", 0) for result in results) / len(results),
@@ -275,6 +312,9 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         "passed": result.passed,
         "run_id": result.run_id,
         "run_status": result.run_status,
+        "task_success": result.task_success,
+        "agent_success": result.agent_success,
+        "infrastructure_success": result.infrastructure_success,
         "sandbox_mode": result.sandbox_mode,
         "budget": result.budget or {},
         "metrics": result.metrics,
@@ -288,6 +328,9 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         "",
         f"- Passed: `{'true' if result.passed else 'false'}`",
         f"- Run status: `{payload['run_status']}`",
+        f"- Task success: `{'true' if result.task_success else 'false'}`",
+        f"- Agent success: `{'true' if result.agent_success else 'false'}`",
+        f"- Infrastructure success: `{'true' if result.infrastructure_success else 'false'}`",
         f"- Run id: `{result.run_id}`",
         f"- Sandbox mode: `{result.sandbox_mode}`",
         "",
@@ -336,3 +379,14 @@ def _make_writable_and_retry(function: Callable, path: str, excinfo: tuple) -> N
     except Exception:
         exc_type, exc, traceback = excinfo
         raise exc.with_traceback(traceback)
+
+
+def _format_infrastructure_error(exc: Exception) -> str:
+    message = f"Evaluation infrastructure failed: {type(exc).__name__}: {exc}"
+    if isinstance(exc, subprocess.CalledProcessError):
+        stderr = exc.stderr
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        if stderr:
+            message += f"\nstderr={str(stderr).strip()[-4000:]}"
+    return message

@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import pytest
 
@@ -6,7 +7,8 @@ from minicc.core.state import RunState
 from minicc.evals.assertions import run_assertions
 from minicc.evals.case import discover_cases, load_case
 from minicc.evals.runner import aggregate_case_results, run_eval_suite, write_eval_report
-from minicc.cli import _settings_for_eval_case
+from minicc.evals.runner import _format_infrastructure_error
+from minicc.cli import _case_constraints, _settings_for_eval_case
 from minicc.config import BudgetSettings, ContextSettings, PolicySettings, ProviderSettings, SandboxSettings, Settings
 from minicc.evals import assertions
 
@@ -31,6 +33,7 @@ assertions:
 
     assert case.name == "demo"
     assert case.fixture_dir == fixture.resolve()
+    assert case.writable_paths is None
     assert discover_cases(tmp_path / "cases") == [case]
 
 
@@ -41,7 +44,11 @@ def test_eval_assertions_cover_files_metrics_trace_and_diff(tmp_path) -> None:
     workspace.mkdir()
     artifacts.mkdir(parents=True)
     (workspace / "README.md").write_text("hello eval\n", encoding="utf-8")
-    (run_dir / "trace.jsonl").write_text('{"event":"artifact_written"}\n', encoding="utf-8")
+    (run_dir / "trace.jsonl").write_text(
+        '{"event":"artifact_written"}\n'
+        '{"event":"policy_decision","decision_type":"deny","policy_name":"CommandPolicy"}\n',
+        encoding="utf-8",
+    )
     (artifacts / "diff.patch").write_text("+++ b/README.md\n", encoding="utf-8")
 
     results = run_assertions(
@@ -52,6 +59,11 @@ def test_eval_assertions_cover_files_metrics_trace_and_diff(tmp_path) -> None:
             {"type": "metric_at_least", "name": "turns", "value": 2},
             {"type": "run_status", "value": "waiting_approval"},
             {"type": "trace_contains_event", "event_type": "artifact_written"},
+            {
+                "type": "trace_contains_event",
+                "event_type": "policy_decision",
+                "fields": {"decision_type": "deny", "policy_name": "CommandPolicy"},
+            },
             {"type": "diff_allowlist", "paths": ["README.md"]},
             {"type": "diff_does_not_delete", "paths": ["src/", "tests/"]},
         ],
@@ -100,6 +112,9 @@ assertions:
     )
     assert case_result["passed"] is True
     assert case_result["run_status"] == "completed"
+    assert case_result["task_success"] is True
+    assert case_result["agent_success"] is True
+    assert case_result["infrastructure_success"] is True
     assert (tmp_path / "runs" / "eval-demo" / "eval_result.md").exists()
 
 
@@ -223,6 +238,9 @@ assertions:
 
     assert result.passed is False
     assert result.cases[0].passed is False
+    assert result.cases[0].task_success is True
+    assert result.cases[0].agent_success is False
+    assert result.cases[0].infrastructure_success is True
 
 
 def test_eval_runner_allows_explicit_hitl_waiting_status(tmp_path) -> None:
@@ -250,6 +268,29 @@ assertions:
 
     assert result.passed is True
     assert result.cases[0].passed is True
+
+
+def test_eval_runner_classifies_infrastructure_failure(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "broken"
+    (case_dir / "fixture").mkdir(parents=True)
+    (case_dir / "case.yaml").write_text(
+        "name: broken\nprompt: Finish.\nassertions: []\n",
+        encoding="utf-8",
+    )
+
+    def broken_agent(case, state):
+        raise RuntimeError("docker unavailable")
+
+    result = run_eval_suite(
+        tmp_path / "cases",
+        runs_root=tmp_path / "runs",
+        agent_runner=broken_agent,
+    )
+
+    assert result.passed is False
+    assert result.cases[0].task_success is True
+    assert result.cases[0].agent_success is False
+    assert result.cases[0].infrastructure_success is False
 
 
 def test_eval_case_budget_overrides_settings(tmp_path) -> None:
@@ -282,9 +323,81 @@ budget:
     assert adjusted.budget.max_action_timeout_sec == 5
 
 
+def test_ordinary_eval_denies_network_instead_of_waiting_for_approval(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "ordinary"
+    (case_dir / "fixture").mkdir(parents=True)
+    (case_dir / "case.yaml").write_text(
+        "name: ordinary\ncapability: debugging\nprompt: Fix it.\nassertions: []\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        provider=ProviderSettings(),
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(),
+        context=ContextSettings(),
+        policy=PolicySettings(require_approval_for_network=True),
+    )
+
+    adjusted = _settings_for_eval_case(settings, load_case(case_dir / "case.yaml"))
+
+    assert adjusted.policy.require_approval_for_network is False
+
+
+def test_case_constraints_reuse_verifier_commands(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "debug"
+    (case_dir / "fixture").mkdir(parents=True)
+    (case_dir / "case.yaml").write_text(
+        """
+name: debug
+prompt: Fix it.
+workspace:
+  writable_paths: ["src/"]
+assertions:
+  - type: command
+    command: python -m unittest discover -s tests
+""",
+        encoding="utf-8",
+    )
+
+    constraints = _case_constraints(load_case(case_dir / "case.yaml"))
+
+    assert any("read-only workspace" in item for item in constraints)
+    assert any("python -m unittest discover -s tests" in item for item in constraints)
+    assert any("do not install" in item for item in constraints)
+
+
 def test_windows_host_bash_command_normalizes_python(monkeypatch) -> None:
     monkeypatch.setattr(assertions.sys, "platform", "win32")
 
     assert assertions._normalize_command_for_host_bash(
         "python -m unittest discover -s tests | python -m json.tool"
     ) == "python3 -m unittest discover -s tests | python3 -m json.tool"
+
+
+def test_command_assertion_decodes_windows_output_as_utf8(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append(kwargs)
+        return Completed()
+
+    monkeypatch.setattr(assertions.subprocess, "run", fake_run)
+
+    result = assertions._assert_command({"command": "python -V"}, tmp_path)
+
+    assert result.passed is True
+    assert calls[0]["encoding"] == "utf-8"
+    assert calls[0]["errors"] == "replace"
+
+
+def test_infrastructure_error_includes_subprocess_stderr() -> None:
+    error = subprocess.CalledProcessError(125, ["docker", "run"], stderr="mount failed")
+
+    message = _format_infrastructure_error(error)
+
+    assert "CalledProcessError" in message
+    assert "mount failed" in message

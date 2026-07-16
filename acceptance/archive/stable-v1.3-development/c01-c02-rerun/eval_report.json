@@ -1,0 +1,403 @@
+{
+  "passed": true,
+  "repeat": 3,
+  "configuration": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "deepseek-ai/DeepSeek-V4-Flash",
+    "temperature": 0.0,
+    "sandbox_mode": "locked",
+    "execute_local": false
+  },
+  "case_summary": [
+    {
+      "name": "C01_repo_onboarding",
+      "capability": "repo_understanding",
+      "attempts": 3,
+      "passed_runs": 3,
+      "pass_rate": 1.0,
+      "statuses": [
+        "completed"
+      ],
+      "average_turns": 7.666666666666667,
+      "average_bash_actions": 6.666666666666667,
+      "average_duration_ms": 142564.33333333334,
+      "diff_paths": [
+        "ONBOARDING.md"
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "attempts": 3,
+      "passed_runs": 3,
+      "pass_rate": 1.0,
+      "statuses": [
+        "completed"
+      ],
+      "average_turns": 8.333333333333334,
+      "average_bash_actions": 7.333333333333333,
+      "average_duration_ms": 147505.66666666666,
+      "diff_paths": [
+        "src/calculator.py"
+      ],
+      "failure_reasons": []
+    }
+  ],
+  "cases": [
+    {
+      "name": "C01_repo_onboarding",
+      "capability": "repo_understanding",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 1,
+      "run_id": "eval-C01_repo_onboarding-r1-20260714-094950-27f1f070",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C01_repo_onboarding-r1-20260714-094950-27f1f070",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 8,
+        "max_bash_actions": 20
+      },
+      "proves": "Agent 能在不改源码的情况下完成仓库理解和交接文档。",
+      "metrics": {
+        "started_at": "2026-07-14T01:49:53.569256+00:00",
+        "completed_at": "2026-07-14T01:51:34.746578+00:00",
+        "total_duration_ms": 101177,
+        "turns": 8,
+        "bash_actions": 7,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 8785,
+        "completion_tokens": 1450,
+        "total_tokens": 10235,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 8785,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 98692,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C01_repo_onboarding-r1-20260714-094950-27f1f070",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "file_exists",
+          "passed": true,
+          "message": "file exists: ONBOARDING.md"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in ONBOARDING.md: []"
+        },
+        {
+          "type": "no_source_diff",
+          "passed": true,
+          "message": "protected files changed: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 1,
+      "run_id": "eval-C02_fix_failing_test-r1-20260714-095136-a3cc8b05",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r1-20260714-095136-a3cc8b05",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "metrics": {
+        "started_at": "2026-07-14T01:51:38.465551+00:00",
+        "completed_at": "2026-07-14T01:53:26.256998+00:00",
+        "total_duration_ms": 107791,
+        "turns": 7,
+        "bash_actions": 6,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 1,
+        "timeouts": 0,
+        "prompt_tokens": 6444,
+        "completion_tokens": 1317,
+        "total_tokens": 7761,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 6444,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 105487,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C02_fix_failing_test-r1-20260714-095136-a3cc8b05",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C01_repo_onboarding",
+      "capability": "repo_understanding",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 2,
+      "run_id": "eval-C01_repo_onboarding-r2-20260714-095327-72f46b9d",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C01_repo_onboarding-r2-20260714-095327-72f46b9d",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 8,
+        "max_bash_actions": 20
+      },
+      "proves": "Agent 能在不改源码的情况下完成仓库理解和交接文档。",
+      "metrics": {
+        "started_at": "2026-07-14T01:53:29.876432+00:00",
+        "completed_at": "2026-07-14T01:56:43.720874+00:00",
+        "total_duration_ms": 193844,
+        "turns": 8,
+        "bash_actions": 7,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 9272,
+        "completion_tokens": 1603,
+        "total_tokens": 10875,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 9272,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 191951,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C01_repo_onboarding-r2-20260714-095327-72f46b9d",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "file_exists",
+          "passed": true,
+          "message": "file exists: ONBOARDING.md"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in ONBOARDING.md: []"
+        },
+        {
+          "type": "no_source_diff",
+          "passed": true,
+          "message": "protected files changed: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 2,
+      "run_id": "eval-C02_fix_failing_test-r2-20260714-095644-eb84c3be",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r2-20260714-095644-eb84c3be",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "metrics": {
+        "started_at": "2026-07-14T01:56:45.933746+00:00",
+        "completed_at": "2026-07-14T02:00:11.889220+00:00",
+        "total_duration_ms": 205955,
+        "turns": 9,
+        "bash_actions": 8,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 2,
+        "timeouts": 0,
+        "prompt_tokens": 9624,
+        "completion_tokens": 1400,
+        "total_tokens": 11024,
+        "cached_tokens": 256,
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 9368,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 203819,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C02_fix_failing_test-r2-20260714-095644-eb84c3be",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C01_repo_onboarding",
+      "capability": "repo_understanding",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 3,
+      "run_id": "eval-C01_repo_onboarding-r3-20260714-100012-2b8a76f6",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C01_repo_onboarding-r3-20260714-100012-2b8a76f6",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 8,
+        "max_bash_actions": 20
+      },
+      "proves": "Agent 能在不改源码的情况下完成仓库理解和交接文档。",
+      "metrics": {
+        "started_at": "2026-07-14T02:00:14.722593+00:00",
+        "completed_at": "2026-07-14T02:02:27.394791+00:00",
+        "total_duration_ms": 132672,
+        "turns": 7,
+        "bash_actions": 6,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 7207,
+        "completion_tokens": 540,
+        "total_tokens": 7747,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 7207,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 131213,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C01_repo_onboarding-r3-20260714-100012-2b8a76f6",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "file_exists",
+          "passed": true,
+          "message": "file exists: ONBOARDING.md"
+        },
+        {
+          "type": "file_contains",
+          "passed": true,
+          "message": "missing patterns in ONBOARDING.md: []"
+        },
+        {
+          "type": "no_source_diff",
+          "passed": true,
+          "message": "protected files changed: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 3,
+      "run_id": "eval-C02_fix_failing_test-r3-20260714-100227-cb9bed27",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r3-20260714-100227-cb9bed27",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "metrics": {
+        "started_at": "2026-07-14T02:02:29.598306+00:00",
+        "completed_at": "2026-07-14T02:04:38.370035+00:00",
+        "total_duration_ms": 128771,
+        "turns": 9,
+        "bash_actions": 8,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "command_failures": 3,
+        "timeouts": 0,
+        "prompt_tokens": 9179,
+        "completion_tokens": 4455,
+        "total_tokens": 13634,
+        "cached_tokens": 256,
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 8923,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 126342,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "run_id": "eval-C02_fix_failing_test-r3-20260714-100227-cb9bed27",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    }
+  ]
+}

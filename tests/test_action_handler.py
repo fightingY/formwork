@@ -2,6 +2,7 @@ from minicc.core.action_handler import ActionHandler
 from minicc.core.protocol import AskAction, BashAction, FinalAction
 from minicc.core.state import Observation, RunState
 from minicc.policy.base import PolicyChain, PolicyDecision
+from minicc.trace.recorder import TraceRecorder
 
 
 class FakeExecutor:
@@ -57,3 +58,29 @@ def test_action_handler_executes_rewritten_action() -> None:
     assert outcome.steps[0].action == BashAction(command="sleep 100", timeout_sec=5)
     assert executor.actions == [BashAction(command="sleep 100", timeout_sec=5)]
     assert state.metrics["bash_actions"] == 1
+
+
+def test_action_handler_traces_action_and_policy_error_observation() -> None:
+    class DenyPolicy:
+        name = "DenyPolicy"
+
+        def evaluate(self, action: BashAction, state: RunState) -> PolicyDecision:
+            return PolicyDecision(type="deny", reason="blocked", policy_name=self.name)
+
+    trace = TraceRecorder()
+    state = RunState.start("deny trace")
+
+    outcome = ActionHandler(
+        FakeExecutor(),
+        policy_chain=PolicyChain([DenyPolicy()]),
+        trace=trace,
+    ).handle(BashAction(command="rm -rf /"), state)
+
+    assert outcome.steps[0].observation.kind == "policy_violation"
+    assert [event["event"] for event in trace.events] == [
+        "action_started",
+        "policy_decision",
+        "observation_created",
+    ]
+    assert trace.events[0]["action"]["type"] == "bash"
+    assert trace.events[1]["decision_type"] == "deny"

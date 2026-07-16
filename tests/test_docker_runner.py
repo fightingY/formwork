@@ -41,6 +41,30 @@ def test_docker_runner_start_uses_restricted_container_args(monkeypatch, tmp_pat
     assert any("target=/workspace/.minicc_artifacts,readonly" in item for item in command)
     assert calls[0][1]["encoding"] == "utf-8"
     assert calls[0][1]["errors"] == "replace"
+    assert (tmp_path / ".minicc_artifacts").is_dir()
+
+
+def test_docker_runner_mounts_readonly_root_and_only_declared_writable_paths(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="container-id\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    runner = DockerSandboxRunner()
+
+    runner.start(
+        run_id="guarded",
+        workspace_dir=tmp_path,
+        writable_paths=("src/", "ONBOARDING.md"),
+    )
+
+    mounts = [calls[0][index + 1] for index, value in enumerate(calls[0]) if value == "--mount"]
+    assert any("target=/workspace,readonly" in mount for mount in mounts)
+    assert any("target=/workspace/src/" in mount and "readonly" not in mount for mount in mounts)
+    assert any("target=/workspace/ONBOARDING.md" in mount and "readonly" not in mount for mount in mounts)
+    assert (tmp_path / "ONBOARDING.md").exists()
 
 
 def test_docker_runner_exec_uses_bash_lc(monkeypatch) -> None:

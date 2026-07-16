@@ -1,4 +1,5 @@
 import argparse
+import json
 
 from minicc import cli
 from minicc.config import BudgetSettings, ContextSettings, PolicySettings, ProviderSettings, SandboxSettings, Settings
@@ -130,3 +131,64 @@ def test_resume_command_uses_normal_settings_after_approval(tmp_path, monkeypatc
     assert exit_code == 0
     assert loop_calls
     assert loop_calls[0]["settings"] is settings
+
+
+def test_resume_command_denial_terminates_without_agent_loop(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / ".minicc" / "runs" / "run-denied"
+    workspace = run_dir / "workspace"
+    artifacts = run_dir / "artifacts"
+    workspace.mkdir(parents=True)
+    artifacts.mkdir()
+    state = RunState.start(
+        "resume denied",
+        workspace_host_path=workspace,
+        run_dir=run_dir,
+        artifacts_dir=artifacts,
+    )
+    state.run_id = "run-denied"
+    state.status = "waiting_approval"
+    state.pending_action = BashAction(command="rm -r tmp_build")
+    state.approvals.append({"status": "denied", "reason": "too risky", "action": "rm -r tmp_build"})
+    save_run_state(state)
+
+    settings = Settings(
+        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(max_turns=2),
+        context=ContextSettings(),
+        policy=PolicySettings(),
+    )
+    loop_calls = []
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "_build_provider_or_print_error", lambda loaded: FakeProvider())
+    monkeypatch.setattr(cli, "LocalCommandExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_build_loop", lambda *args, **kwargs: loop_calls.append(kwargs))
+
+    exit_code = cli.resume_command(argparse.Namespace(run_id="run-denied", execute_local=True))
+
+    assert exit_code == 1
+    assert loop_calls == []
+    saved = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert saved["status"] == "failed"
+    assert saved["pending_action"] is None
+    trace_text = (run_dir / "trace.jsonl").read_text(encoding="utf-8")
+    assert "approval_resolved" in trace_text
+    assert "denied" in trace_text
+
+
+def test_release_gate_requires_clean_docker_commit_and_repeat_matrix() -> None:
+    valid = argparse.Namespace(execute_local=False, repeat=3, case_names=["C01", "C02"])
+
+    assert cli._release_gate_error(valid, "abc123", False) == ""
+    assert "uncommitted" in cli._release_gate_error(valid, "abc123", True)
+    assert "Docker" in cli._release_gate_error(
+        argparse.Namespace(execute_local=True, repeat=3, case_names=["C01"]),
+        "abc123",
+        False,
+    )
+    assert "--repeat 3" in cli._release_gate_error(
+        argparse.Namespace(execute_local=False, repeat=2, case_names=["C01"]),
+        "abc123",
+        False,
+    )

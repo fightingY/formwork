@@ -143,6 +143,9 @@ class ContextBuilder:
                 f"Run status: {state.status}",
             ]
         )
+        budget_guidance = _budget_guidance(state)
+        if budget_guidance:
+            dynamic_context.append(budget_guidance)
         if state.constraints:
             dynamic_context.append("Constraints:\n" + "\n".join(f"- {item}" for item in state.constraints))
         if state.state_summary:
@@ -250,3 +253,23 @@ def _trim_text(text: str, max_chars: int) -> str:
     head = keep // 2
     tail = keep - head
     return text[:head] + marker + text[-tail:]
+
+
+def _budget_guidance(state: RunState) -> str:
+    max_turns = state.metrics.get("max_turns")
+    turns = state.metrics.get("turns", 0)
+    if not isinstance(max_turns, int) or max_turns <= 0:
+        return ""
+    ratio = turns / max_turns
+    remaining = max(max_turns - turns, 0)
+    if ratio >= 0.8:
+        return (
+            f"Budget status: {remaining} model turn(s) remain. Stop exploring. "
+            "Run only the minimum verification still needed, then return final immediately."
+        )
+    if ratio >= 0.6:
+        return (
+            f"Budget status: {remaining} model turn(s) remain. Converge now: "
+            "finish the smallest correct change, verify once, and avoid repeated inspection."
+        )
+    return ""

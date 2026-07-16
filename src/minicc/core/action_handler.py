@@ -36,6 +36,9 @@ class ActionHandler:
         self.trace = trace
 
     def handle(self, action: Action, state: RunState) -> ActionOutcome:
+        if self.trace is not None:
+            self.trace.action_started(state, action)
+
         if isinstance(action, FinalAction):
             state.status = "completed"
             state.final_answer = action.answer

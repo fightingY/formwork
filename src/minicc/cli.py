@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
 from minicc import __version__
-from minicc.config import BudgetSettings, SandboxSettings, Settings, load_settings
+from minicc.config import BudgetSettings, PolicySettings, SandboxSettings, Settings, load_settings
 from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
@@ -110,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Run only the named case. Repeat this option to select multiple cases.",
+    )
+    eval_parser.add_argument(
+        "--release-gate",
+        action="store_true",
+        help="Require a clean immutable Git commit, Docker execution, and repeat >= 3.",
     )
     eval_parser.set_defaults(handler=eval_command)
 
@@ -261,7 +267,8 @@ def resume_command(args: argparse.Namespace) -> int:
             )
             executor = DockerCommandExecutor(runner, artifacts=artifacts)
 
-        session.apply_pending_approval_result(state, executor)
+        trace = TraceRecorder(trace_path_for(state))
+        session.apply_pending_approval_result(state, executor, trace=trace)
         if state.status == "running":
             loop = _build_loop(provider, executor, settings=settings, session=session, state=state)
             result = loop.run(state)
@@ -392,6 +399,7 @@ def _build_loop(
                 temperature=settings.temperature,
                 stream=settings.provider.stream if stream is None else stream,
                 include_usage=settings.provider.include_usage,
+                json_mode=settings.provider.json_mode,
             ),
         ),
     )
@@ -419,6 +427,12 @@ def _load_waiting_state(
 
 def eval_command(args: argparse.Namespace) -> int:
     settings = load_settings()
+    git_commit, worktree_dirty = _git_evidence(Path.cwd())
+    if args.release_gate:
+        gate_error = _release_gate_error(args, git_commit, worktree_dirty, settings.sandbox.image)
+        if gate_error:
+            print(f"Release gate rejected: {gate_error}", file=sys.stderr)
+            return 2
     provider = _build_provider_or_print_error(settings)
     if provider is None:
         return 2
@@ -426,6 +440,7 @@ def eval_command(args: argparse.Namespace) -> int:
     runs_root = Path.cwd() / ".minicc" / "runs"
 
     def agent_runner(case: EvalCase, state: RunState) -> RunState:
+        state.constraints.extend(_case_constraints(case))
         artifacts = ArtifactStore(
             state.artifacts_dir or state.run_dir / "artifacts",
             display_path_prefix=".minicc_artifacts",
@@ -452,6 +467,7 @@ def eval_command(args: argparse.Namespace) -> int:
                     run_id=state.run_id,
                     workspace_dir=state.workspace_host_path,
                     artifacts_dir=state.artifacts_dir,
+                    writable_paths=case.writable_paths,
                 )
                 executor = DockerCommandExecutor(runner, artifacts=artifacts)
             session = SessionManager()
@@ -476,6 +492,11 @@ def eval_command(args: argparse.Namespace) -> int:
         "temperature": settings.temperature,
         "sandbox_mode": settings.sandbox.mode,
         "execute_local": bool(args.execute_local),
+        "json_mode": settings.provider.json_mode,
+        "docker_image": settings.sandbox.image,
+        "git_commit": git_commit,
+        "worktree_dirty": worktree_dirty,
+        "release_gate": bool(args.release_gate),
     }
     result = run_eval_suite(
         Path(args.path),
@@ -510,13 +531,21 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
             ),
         )
 
+    case_policy = settings.policy
+    if not case.capability.startswith("hitl"):
+        case_policy = PolicySettings(
+            require_approval_for_network=False,
+            deny_sudo=settings.policy.deny_sudo,
+            require_approval_for_destructive=settings.policy.require_approval_for_destructive,
+        )
+
     if case.sandbox_mode not in {"dev", "local"}:
         return Settings(
             provider=settings.provider,
             sandbox=settings.sandbox,
             budget=budget,
             context=settings.context,
-            policy=settings.policy,
+            policy=case_policy,
         )
     sandbox = SandboxSettings(
         image=settings.sandbox.image,
@@ -531,7 +560,7 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
         sandbox=sandbox,
         budget=budget,
         context=settings.context,
-        policy=settings.policy,
+        policy=case_policy,
     )
 
 
@@ -541,6 +570,74 @@ def _case_int(case: EvalCase, name: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _case_constraints(case: EvalCase) -> list[str]:
+    constraints: list[str] = []
+    if case.writable_paths is not None:
+        allowed = ", ".join(case.writable_paths) if case.writable_paths else "none"
+        constraints.append(
+            f"The sandbox enforces a read-only workspace except these writable paths: {allowed}."
+        )
+    verification_commands = [
+        str(assertion.get("command"))
+        for assertion in case.assertions
+        if assertion.get("type") == "command" and assertion.get("command")
+    ]
+    if verification_commands:
+        constraints.append(
+            "Use these authoritative offline verification commands; do not install a different test runner: "
+            + " ; ".join(verification_commands)
+        )
+    return constraints
+
+
+def _git_evidence(cwd: Path) -> tuple[str, bool]:
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=True,
+        ).stdout
+        return commit, bool(status.strip())
+    except (OSError, subprocess.SubprocessError):
+        return "", True
+
+
+def _release_gate_error(
+    args: argparse.Namespace,
+    git_commit: str,
+    worktree_dirty: bool,
+    docker_image: str = "python:test@sha256:test",
+) -> str:
+    if not git_commit:
+        return "the workspace is not pinned to a Git commit"
+    if worktree_dirty:
+        return "the Git worktree has uncommitted changes"
+    if args.execute_local:
+        return "release acceptance must use Docker"
+    if "@sha256:" not in docker_image:
+        return "release acceptance requires a Docker image pinned by sha256 digest"
+    if args.repeat < 3:
+        return "release acceptance requires --repeat 3 or greater"
+    if not args.case_names:
+        return "release acceptance requires an explicit complete --case matrix"
+    return ""
 
 
 def traces_command(args: argparse.Namespace) -> int:

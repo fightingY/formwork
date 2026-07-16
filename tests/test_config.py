@@ -64,6 +64,7 @@ provider:
   temperature: 0.7
   stream: true
   include_usage: false
+  json_mode: false
 policy:
   require_approval_for_network: false
 """,
@@ -78,6 +79,7 @@ policy:
     assert settings.provider.temperature == 0.7
     assert settings.provider.stream is True
     assert settings.provider.include_usage is False
+    assert settings.provider.json_mode is False
     assert settings.sandbox.image == "python:3.12-slim"
     assert settings.sandbox.cpus == "2"
     assert settings.sandbox.memory == "2g"
