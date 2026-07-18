@@ -70,6 +70,9 @@ M5 已实现稳定的 Trace / Metrics 基础链路：
 
 - 新增 `TraceRecorder`，将 `run_started`、`prompt_built`、`model_response`、`action_parsed`、`policy_decision`、`sandbox_exec_*`、`observation_created`、`artifact_written`、`context_compacted`、`approval_requested`、`run_completed`、`run_failed` 写入 `trace.jsonl`。
 - 新增 `metrics.json` 落盘，保存 turns、bash actions、protocol errors、policy denials、context compactions、token/cache/latency 等 run 指标快照。
+- Run 级 Prompt Cache 命中率按所有已上报请求的 hit/miss token 加权计算；供应商未上报缓存字段时为
+  `null/unsupported`，与真实 `0%` 命中分开。Viewer 会从 trace 重新计算旧 run 的派生命中率，
+  不修改历史 `metrics.json` 和 acceptance 原始证据。
 - 每个结束的 run 生成 `run_report.json` 和 `run_report.md`，统一关联 state、trace、metrics 和 diff 证据。
 - `minicc traces` 可列出本地 `.minicc/runs/<run_id>/trace.jsonl` 和 `metrics.json`。
 - Skill Registry 和 Feedback Memory 暂按 experimental 保留，尚未声明对任务通过率或重复 I/O 的收益。
@@ -108,6 +111,24 @@ http://127.0.0.1:8765
 
 当前 Web viewer 不会随 `eval` 自动启动；它以 2 秒轮询方式读取 `.minicc/runs` 下已写入的
 `trace.jsonl`、`metrics.json` 和 `artifacts/diff.patch`，适合在另一个终端中陪跑 `eval` 或单次 `run`。
+
+运行记录同时会按 `minicc.yaml` 中的当前版本建立轻量索引：
+
+```yaml
+project:
+  milestone: v2.1
+```
+
+```text
+.minicc/versions/<版本>/manifest.json
+.minicc/versions/<版本>/<中文分类>/<中文标题>--<run_id>.json
+```
+
+版本索引只保存标题、分类和原始 run 路径，不移动或复制 `.minicc/runs`，因此不会破坏 checkpoint、
+报告和历史证据路径。`minicc web` 会自动回填 V1.3/V2.0 的正式验收、开发预检、失败复现、
+修复后重跑、回归验证和 Checkpoint 恢复记录；页面优先打开有记录的 `project.milestone`，当前版本
+尚无记录时回退到最近的非空版本，并展示该版本的全部记录。需要临时归入其他版本时，可对
+`run` 或 `eval` 使用 `--milestone <版本>`。
 
 ## 快速开始
 

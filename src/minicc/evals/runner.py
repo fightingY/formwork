@@ -17,6 +17,7 @@ from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
 
 
 AgentRunCallable = Callable[[EvalCase, RunState], RunState]
+EvalCaseCompletedCallable = Callable[["EvalCaseResult"], None]
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ def run_eval_suite(
     configuration: dict | None = None,
     preserve_runs: bool = False,
     case_names: list[str] | None = None,
+    on_case_completed: EvalCaseCompletedCallable | None = None,
 ) -> EvalSuiteResult:
     if repeat < 1:
         raise ValueError("repeat must be at least 1")
@@ -66,17 +68,19 @@ def run_eval_suite(
         if missing:
             raise ValueError(f"Unknown eval case(s): {', '.join(missing)}")
         cases = [case for case in cases if case.name in requested]
-    results = [
-        run_eval_case(
-            case,
-            runs_root=runs_root,
-            agent_runner=agent_runner,
-            attempt=attempt,
-            preserve_run=preserve_runs or repeat > 1,
-        )
-        for attempt in range(1, repeat + 1)
-        for case in cases
-    ]
+    results: list[EvalCaseResult] = []
+    for attempt in range(1, repeat + 1):
+        for case in cases:
+            case_result = run_eval_case(
+                case,
+                runs_root=runs_root,
+                agent_runner=agent_runner,
+                attempt=attempt,
+                preserve_run=preserve_runs or repeat > 1,
+            )
+            results.append(case_result)
+            if on_case_completed is not None:
+                on_case_completed(case_result)
     return EvalSuiteResult(
         passed=all(result.passed for result in results),
         cases=results,

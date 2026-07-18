@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -53,12 +53,18 @@ class PolicySettings:
 
 
 @dataclass(frozen=True)
+class ProjectSettings:
+    milestone: str = ""
+
+
+@dataclass(frozen=True)
 class Settings:
     provider: ProviderSettings
     sandbox: SandboxSettings
     budget: BudgetSettings
     context: ContextSettings
     policy: PolicySettings
+    project: ProjectSettings = field(default_factory=ProjectSettings)
 
     @property
     def base_url(self) -> str | None:
@@ -86,6 +92,7 @@ def load_settings() -> Settings:
     budget_config = _dict_at(config, "budget")
     context_config = _dict_at(config, "context")
     policy_config = _dict_at(config, "policy")
+    project_config = _dict_at(config, "project")
 
     return Settings(
         provider=ProviderSettings(
@@ -149,6 +156,9 @@ def load_settings() -> Settings:
                 "require_approval_for_destructive",
                 True,
             ),
+        ),
+        project=ProjectSettings(
+            milestone=_str_config(project_config, "milestone", ""),
         ),
     )
 

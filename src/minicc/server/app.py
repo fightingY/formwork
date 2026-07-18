@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
+
+from minicc.core.run_catalog import RunCatalog
 
 
-def serve_trace_viewer(*, runs_root: Path, host: str = "127.0.0.1", port: int = 8765) -> None:
-    handler = _handler_for(runs_root)
+def serve_trace_viewer(
+    *,
+    runs_root: Path,
+    versions_root: Path | None = None,
+    current_milestone: str = "",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+) -> None:
+    handler = _handler_for(runs_root, versions_root=versions_root, current_milestone=current_milestone)
     server = ThreadingHTTPServer((host, port), handler)
     print(f"miniCC trace viewer: http://{host}:{port}")
     try:
@@ -20,15 +30,32 @@ def serve_trace_viewer(*, runs_root: Path, host: str = "127.0.0.1", port: int = 
         server.server_close()
 
 
-def _handler_for(runs_root: Path) -> type[BaseHTTPRequestHandler]:
+def _handler_for(
+    runs_root: Path,
+    *,
+    versions_root: Path | None = None,
+    current_milestone: str = "",
+) -> type[BaseHTTPRequestHandler]:
     class TraceViewerHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            path = unquote(self.path.split("?", 1)[0])
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            query = parse_qs(parsed.query)
             if path == "/":
-                self._send_html(render_index(runs_root))
+                self._send_html(
+                    render_index(
+                        runs_root,
+                        versions_root=versions_root,
+                        current_milestone=current_milestone,
+                    )
+                )
+                return
+            if path == "/versions":
+                self._send_json(list_versions(versions_root, current_milestone=current_milestone))
                 return
             if path == "/runs":
-                self._send_json(list_runs(runs_root))
+                milestone = str((query.get("version") or [""])[0])
+                self._send_json(list_runs(runs_root, versions_root=versions_root, milestone=milestone))
                 return
             if path.startswith("/runs/") and path.endswith("/trace"):
                 run_id = path.removeprefix("/runs/").removesuffix("/trace").strip("/")
@@ -42,7 +69,7 @@ def _handler_for(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                 if not _is_safe_run_id(run_id):
                     self.send_error(404, "Run not found")
                     return
-                self._send_json(read_json(_run_dir(runs_root, run_id) / "metrics.json"))
+                self._send_json(read_run_metrics(_run_dir(runs_root, run_id)))
                 return
             if path.startswith("/runs/") and path.endswith("/diff"):
                 run_id = path.removeprefix("/runs/").removesuffix("/diff").strip("/")
@@ -78,28 +105,50 @@ def _handler_for(runs_root: Path) -> type[BaseHTTPRequestHandler]:
     return TraceViewerHandler
 
 
-def list_runs(runs_root: Path) -> list[dict[str, Any]]:
+def list_runs(
+    runs_root: Path,
+    *,
+    versions_root: Path | None = None,
+    milestone: str = "",
+) -> list[dict[str, Any]]:
     if not runs_root.exists():
         return []
+    catalog_entries: dict[str, dict[str, Any]] = {}
+    if versions_root is not None and milestone:
+        manifest = RunCatalog(versions_root).read_manifest(milestone)
+        catalog_entries = {
+            str(item.get("run_id")): item
+            for item in manifest.get("entries", [])
+            if isinstance(item, dict) and item.get("run_id")
+        }
+        run_dirs = [runs_root / run_id for run_id in catalog_entries if _is_safe_run_id(run_id)]
+    else:
+        run_dirs = [item for item in runs_root.iterdir() if item.is_dir() and item.name != "eval_reports"]
     runs: list[dict[str, Any]] = []
-    for run_dir in sorted((item for item in runs_root.iterdir() if item.is_dir()), reverse=True):
-        if run_dir.name == "eval_reports":
+    for run_dir in run_dirs:
+        if not run_dir.is_dir():
             continue
-        metrics = read_json(run_dir / "metrics.json")
+        metrics = read_run_metrics(run_dir)
         state = read_json(run_dir / "state.json")
         trace_summary = summarize_trace(run_dir / "trace.jsonl")
+        catalog_entry = catalog_entries.get(run_dir.name, {})
         runs.append(
             {
                 "run_id": run_dir.name,
+                "title": catalog_entry.get("title") or run_dir.name,
+                "milestone": catalog_entry.get("milestone") or "",
+                "stage": catalog_entry.get("stage") or "",
+                "stage_label": catalog_entry.get("stage_label") or "",
+                "result": catalog_entry.get("result") or "",
                 "status": metrics.get("status") or state.get("status"),
-                "goal": state.get("goal", ""),
+                "goal": state.get("goal") or catalog_entry.get("goal", ""),
                 "turns": metrics.get("turns", 0),
                 "bash_actions": metrics.get("bash_actions", 0),
                 "policy_denials": metrics.get("policy_denials", 0),
                 "approvals_requested": metrics.get("approvals_requested", 0),
                 "artifact_bytes": metrics.get("artifact_bytes", 0),
-                "started_at": metrics.get("started_at"),
-                "completed_at": metrics.get("completed_at"),
+                "started_at": metrics.get("started_at") or catalog_entry.get("started_at"),
+                "completed_at": metrics.get("completed_at") or catalog_entry.get("completed_at"),
                 "total_duration_ms": metrics.get("total_duration_ms"),
                 "event_count": trace_summary["event_count"],
                 "last_event": trace_summary["last_event"],
@@ -107,7 +156,34 @@ def list_runs(runs_root: Path) -> list[dict[str, Any]]:
                 "metrics_path": str(run_dir / "metrics.json"),
             }
         )
-    return runs
+    return sorted(
+        runs,
+        key=lambda item: (str(item.get("started_at") or ""), str(item.get("run_id") or "")),
+        reverse=True,
+    )
+
+
+def list_versions(versions_root: Path | None, *, current_milestone: str = "") -> list[dict[str, Any]]:
+    if versions_root is None:
+        return []
+    catalog = RunCatalog(versions_root)
+    versions: list[dict[str, Any]] = []
+    for milestone in catalog.milestones():
+        manifest = catalog.read_manifest(milestone)
+        entries = manifest.get("entries", [])
+        versions.append(
+            {
+                "milestone": milestone,
+                "entry_count": len(entries),
+                "updated_at": manifest.get("updated_at", ""),
+                "is_current": milestone == current_milestone,
+            }
+        )
+    return sorted(
+        versions,
+        key=lambda item: (bool(item["is_current"]), _version_sort_key(str(item["milestone"]))),
+        reverse=True,
+    )
 
 
 def read_trace(runs_root: Path, run_id: str) -> list[dict[str, Any]]:
@@ -125,6 +201,60 @@ def read_trace(runs_root: Path, run_id: str) -> list[dict[str, Any]]:
         if isinstance(event, dict):
             events.append(event)
     return events
+
+
+def read_run_metrics(run_dir: Path) -> dict[str, Any]:
+    """Read metrics and correct historical run-level cache aggregation from trace evidence."""
+
+    metrics = read_json(run_dir / "metrics.json")
+    observed_hit = 0
+    observed_prompt = 0
+    reported_requests = 0
+    unreported_requests = 0
+    for event in read_trace(run_dir.parent, run_dir.name):
+        if event.get("event") != "model_response":
+            continue
+        usage = event.get("usage")
+        if not isinstance(usage, dict):
+            unreported_requests += 1
+            continue
+        hit = _int_or_none(usage.get("cache_hit_tokens"))
+        miss = _int_or_none(usage.get("cache_miss_tokens"))
+        cached = _int_or_none(usage.get("cached_tokens"))
+        prompt = _int_or_none(usage.get("prompt_tokens"))
+        if hit is not None and miss is not None:
+            observed_hit += hit
+            observed_prompt += hit + miss
+            reported_requests += 1
+        elif cached is not None and prompt is not None:
+            observed_hit += cached
+            observed_prompt += prompt
+            reported_requests += 1
+        else:
+            unreported_requests += 1
+    if reported_requests:
+        metrics.update(
+            {
+                "cache_metrics_available": True,
+                "cache_metric_requests": reported_requests,
+                "cache_unreported_requests": unreported_requests,
+                "cache_observed_hit_tokens": observed_hit,
+                "cache_observed_prompt_tokens": observed_prompt,
+                "cache_hit_rate": observed_hit / observed_prompt if observed_prompt else 0.0,
+            }
+        )
+    elif unreported_requests:
+        metrics.update(
+            {
+                "cache_metrics_available": False,
+                "cache_metric_requests": 0,
+                "cache_unreported_requests": unreported_requests,
+                "cache_observed_hit_tokens": 0,
+                "cache_observed_prompt_tokens": 0,
+                "cache_hit_rate": None,
+            }
+        )
+    return metrics
 
 
 def summarize_trace(trace_path: Path) -> dict[str, Any]:
@@ -153,6 +283,15 @@ def read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _is_safe_run_id(run_id: str) -> bool:
     return bool(run_id) and "/" not in run_id and "\\" not in run_id and run_id not in {".", "..", "eval_reports"}
 
@@ -161,7 +300,20 @@ def _run_dir(runs_root: Path, run_id: str) -> Path:
     return runs_root / run_id
 
 
-def render_index(runs_root: Path) -> str:
+def _version_sort_key(milestone: str) -> tuple[int, ...]:
+    match = re.search(r"v(\d+(?:\.\d+)*)", milestone, flags=re.IGNORECASE)
+    if not match:
+        return (0,)
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def render_index(
+    runs_root: Path,
+    *,
+    versions_root: Path | None = None,
+    current_milestone: str = "",
+) -> str:
+    initial_milestone = json.dumps(current_milestone, ensure_ascii=False)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -424,7 +576,8 @@ def render_index(runs_root: Path) -> str:
     <header>
       <div>
         <h1>miniCC Trace Viewer</h1>
-        <div class="subtle">Read-only over <code>{html.escape(str(runs_root))}</code></div>
+        <div class="subtle">运行目录：<code>{html.escape(str(runs_root))}</code></div>
+        <div class="subtle">版本索引：<code>{html.escape(str(versions_root or '未配置'))}</code></div>
       </div>
       <div class="header-actions">
         <span class="subtle"><span class="status-dot"></span><span id="refreshState">Live refresh on</span></span>
@@ -435,6 +588,9 @@ def render_index(runs_root: Path) -> str:
     <main>
       <aside>
         <div class="run-tools">
+          <select id="versionFilter" aria-label="按版本筛选">
+            <option value="">全部未分组记录</option>
+          </select>
           <input id="runSearch" type="search" placeholder="Search runs or goals">
           <select id="statusFilter" aria-label="Filter by status">
             <option value="">All statuses</option>
@@ -475,6 +631,7 @@ def render_index(runs_root: Path) -> str:
   </div>
   <script>
     const state = {{
+      versions: [],
       runs: [],
       trace: [],
       metrics: {{}},
@@ -482,7 +639,8 @@ def render_index(runs_root: Path) -> str:
       selectedRunId: '',
       activeTab: 'timeline',
       autoRefresh: true,
-      intervalId: null
+      intervalId: null,
+      selectedVersion: {initial_milestone}
     }};
 
     const eventFocus = {{
@@ -535,8 +693,23 @@ def render_index(runs_root: Path) -> str:
       return response.text();
     }}
 
+    async function refreshVersions() {{
+      state.versions = await fetchJson('/versions');
+      const selected = state.versions.find(version => version.milestone === state.selectedVersion);
+      if (!selected || (selected.entry_count === 0 && state.versions.some(version => version.entry_count > 0))) {{
+        state.selectedVersion = state.versions.find(version => version.is_current && version.entry_count > 0)?.milestone
+          || state.versions.find(version => version.entry_count > 0)?.milestone
+          || '';
+      }}
+      $('versionFilter').innerHTML = state.versions.map(version => (
+        `<option value="${{escapeHtml(version.milestone)}}">${{escapeHtml(version.milestone)}} · ${{formatNumber(version.entry_count)}} 条</option>`
+      )).join('') + '<option value="">全部未分组记录</option>';
+      $('versionFilter').value = state.selectedVersion;
+    }}
+
     async function refreshRuns() {{
-      state.runs = await fetchJson('/runs');
+      const suffix = state.selectedVersion ? `?version=${{encodeURIComponent(state.selectedVersion)}}` : '';
+      state.runs = await fetchJson('/runs' + suffix);
       if (!state.selectedRunId && state.runs.length) {{
         state.selectedRunId = state.runs[0].run_id;
       }}
@@ -567,7 +740,7 @@ def render_index(runs_root: Path) -> str:
       const query = $('runSearch').value.trim().toLowerCase();
       const status = $('statusFilter').value;
       return state.runs.filter(run => {{
-        const text = `${{run.run_id}} ${{run.goal || ''}}`.toLowerCase();
+        const text = `${{run.title || ''}} ${{run.run_id}} ${{run.goal || ''}} ${{run.stage_label || ''}}`.toLowerCase();
         return (!query || text.includes(query)) && (!status || run.status === status);
       }});
     }}
@@ -580,9 +753,10 @@ def render_index(runs_root: Path) -> str:
       }}
       $('runList').innerHTML = runs.map(run => `
         <button class="run-item ${{run.run_id === state.selectedRunId ? 'active' : ''}}" type="button" data-run-id="${{escapeHtml(run.run_id)}}">
-          <span class="run-title">${{escapeHtml(run.run_id)}}</span>
+          <span class="run-title">${{escapeHtml(run.title || run.run_id)}}</span>
           <span class="pill ${{escapeHtml(run.status || '')}}">${{escapeHtml(run.status || 'unknown')}}</span>
           <span class="run-goal">${{escapeHtml(run.goal || 'No goal recorded.')}}</span>
+          <span class="subtle">${{escapeHtml(run.stage_label || run.milestone || '')}}</span>
           <span class="subtle">${{formatNumber(run.event_count)}} events</span>
           <span class="subtle">${{escapeHtml(run.last_event || '')}}</span>
         </button>
@@ -595,6 +769,8 @@ def render_index(runs_root: Path) -> str:
     function renderSummary() {{
       const run = state.runs.find(item => item.run_id === state.selectedRunId) || {{}};
       const items = [
+        ['Version', run.milestone || 'unassigned'],
+        ['Category', run.stage_label || 'unassigned'],
         ['Status', run.status || state.metrics.status || 'unknown'],
         ['Turns', formatNumber(state.metrics.turns)],
         ['Bash Actions', formatNumber(state.metrics.bash_actions)],
@@ -708,6 +884,11 @@ def render_index(runs_root: Path) -> str:
 
     $('runSearch').addEventListener('input', renderRuns);
     $('statusFilter').addEventListener('change', renderRuns);
+    $('versionFilter').addEventListener('change', () => {{
+      state.selectedVersion = $('versionFilter').value;
+      state.selectedRunId = '';
+      refreshRuns().catch(console.error);
+    }});
     $('eventSearch').addEventListener('input', renderTimeline);
     $('eventTypeFilter').addEventListener('change', renderTimeline);
     $('eventFocusFilter').addEventListener('change', renderTimeline);
@@ -721,7 +902,7 @@ def render_index(runs_root: Path) -> str:
     }});
 
     setAutoRefresh(true);
-    refreshRuns().catch(error => {{
+    refreshVersions().then(refreshRuns).catch(error => {{
       $('runList').innerHTML = `<div class="empty">${{escapeHtml(error.message)}}</div>`;
     }});
   </script>

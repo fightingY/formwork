@@ -11,6 +11,7 @@ from minicc.core.checkpoint import CheckpointError, CheckpointManager
 from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
+from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
 from minicc.evals.case import EvalCase
@@ -44,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     run_parser = subparsers.add_parser("run", help="Run a goal through the miniCC agent loop.")
     run_parser.add_argument("goal", help="User goal for the agent.")
+    run_parser.add_argument("--milestone", default=None, help="Override project.milestone for run indexing.")
     run_parser.add_argument("--max-turns", type=int, default=None, help="Override budget.max_turns.")
     run_parser.add_argument(
         "--execute-local",
@@ -89,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     eval_parser = subparsers.add_parser("eval", help="Run eval cases and write JSON/Markdown reports.")
     eval_parser.add_argument("path", nargs="?", default="eval_cases", help="Eval cases directory.")
+    eval_parser.add_argument("--milestone", default=None, help="Override project.milestone for run indexing.")
     eval_parser.add_argument(
         "--execute-local",
         action="store_true",
@@ -143,6 +146,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_command(args: argparse.Namespace) -> int:
     settings = load_settings()
+    milestone = _effective_milestone(settings, args)
+    catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     provider = _build_provider_or_print_error(settings)
     if provider is None:
         return 2
@@ -221,6 +226,7 @@ def run_command(args: argparse.Namespace) -> int:
                 write_workspace_diff(workspace.workspace_dir, workspace.artifacts_dir)
             except Exception as exc:
                 print(f"Failed to write workspace diff: {exc}", file=sys.stderr)
+        catalog.register_state(milestone, state, git_commit=_git_evidence(Path.cwd())[0])
 
     if result is None:
         return 1
@@ -232,6 +238,7 @@ def run_command(args: argparse.Namespace) -> int:
 
 def resume_command(args: argparse.Namespace) -> int:
     settings = load_settings()
+    catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     provider = _build_provider_or_print_error(settings)
     if provider is None:
         return 2
@@ -313,6 +320,7 @@ def resume_command(args: argparse.Namespace) -> int:
                 write_workspace_diff(state.workspace_host_path, state.artifacts_dir)
             except Exception as exc:
                 print(f"Failed to write workspace diff: {exc}", file=sys.stderr)
+        catalog.update_existing_state(state, fallback_milestone=settings.project.milestone)
 
     _print_run_result(result.state, result.state.run_dir)
     return 1 if result.state.status == "failed" else 0
@@ -460,6 +468,8 @@ def _load_waiting_state(
 
 def eval_command(args: argparse.Namespace) -> int:
     settings = load_settings()
+    milestone = _effective_milestone(settings, args)
+    catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     git_commit, worktree_dirty = _git_evidence(Path.cwd())
     if args.release_gate:
         gate_error = _release_gate_error(args, git_commit, worktree_dirty, settings.sandbox.image)
@@ -530,7 +540,24 @@ def eval_command(args: argparse.Namespace) -> int:
         "git_commit": git_commit,
         "worktree_dirty": worktree_dirty,
         "release_gate": bool(args.release_gate),
+        "milestone": milestone,
     }
+
+    def on_case_completed(case_result) -> None:
+        if args.release_gate and case_result.passed:
+            stage = "formal_acceptance"
+        elif case_result.passed:
+            stage = "development_precheck"
+        else:
+            stage = "failure_reproduction"
+        catalog.register_eval_result(
+            milestone,
+            case_result,
+            stage=stage,
+            git_commit=git_commit,
+            report_path=str(args.output_dir or ""),
+        )
+
     result = run_eval_suite(
         Path(args.path),
         runs_root=runs_root,
@@ -539,6 +566,7 @@ def eval_command(args: argparse.Namespace) -> int:
         configuration=configuration,
         preserve_runs=True,
         case_names=args.case_names,
+        on_case_completed=on_case_completed,
     )
     if args.output_dir is None:
         json_path, markdown_path = copy_report_to_run_root(result, runs_root)
@@ -579,6 +607,7 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
             budget=budget,
             context=settings.context,
             policy=case_policy,
+            project=settings.project,
         )
     sandbox = SandboxSettings(
         image=settings.sandbox.image,
@@ -594,6 +623,7 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
         budget=budget,
         context=settings.context,
         policy=case_policy,
+        project=settings.project,
     )
 
 
@@ -698,8 +728,30 @@ def traces_command(args: argparse.Namespace) -> int:
 def web_command(args: argparse.Namespace) -> int:
     from minicc.server.app import serve_trace_viewer
 
-    serve_trace_viewer(runs_root=Path.cwd() / ".minicc" / "runs", host=args.host, port=args.port)
+    settings = load_settings()
+    project_root = Path.cwd()
+    versions_root = project_root / ".minicc" / "versions"
+    catalog = RunCatalog(versions_root)
+    index_acceptance_history(project_root, catalog)
+    catalog.ensure_version(settings.project.milestone)
+    serve_trace_viewer(
+        runs_root=project_root / ".minicc" / "runs",
+        versions_root=versions_root,
+        current_milestone=settings.project.milestone,
+        host=args.host,
+        port=args.port,
+    )
     return 0
+
+
+def _effective_milestone(settings: Settings, args: argparse.Namespace) -> str:
+    override = str(getattr(args, "milestone", "") or "").strip()
+    if override:
+        return override
+    output_dir = getattr(args, "output_dir", None)
+    if output_dir is not None and str(Path(output_dir).name).startswith("stable-v"):
+        return str(Path(output_dir).name)
+    return settings.project.milestone
 
 
 if __name__ == "__main__":

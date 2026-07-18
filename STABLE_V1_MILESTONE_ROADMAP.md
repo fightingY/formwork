@@ -62,6 +62,7 @@ git switch -c stable-v1 8f19cd3
 6. 非 HITL 专用实验不得进入 `waiting_approval`。
 7. 失败必须归因，禁止用提高预算掩盖 harness、policy 或 case 问题。
 8. 当前版本文档只声明已经通过验收的能力。
+9. 正式 run 必须登记版本、阶段、case/轮次和原始 run 路径，并能从版本索引与 Viewer 定位。
 
 任意一项不满足，版本不得打 tag，也不得进入下一阶段。
 
@@ -178,6 +179,9 @@ git switch -c stable-v1 8f19cd3
 
 实验配置只保留 A0 无语义压缩、A1 语义压缩。先运行 1 个 case 各 3 次；稳定后扩展到至少 3 个 case。
 
+实验开始前必须先校准缓存统计：run 级命中率按累计 hit/miss token 加权计算，供应商未返回缓存字段时
+显示 `unsupported`，不得与真实 `0%` 命中混为一谈。该阶段只修指标，不宣称缓存优化收益。
+
 验收标准：
 
 - 所有实验均真实触发预期压缩事件，不接受“配置开启但未触发”。
@@ -188,6 +192,28 @@ git switch -c stable-v1 8f19cd3
 - 连续两轮独立复跑得到同方向结论。
 
 失败回退：回到 `stable-v2.0`，压缩继续保留为 experimental，不进入简历主叙事。通过后标记 `stable-v2.1`。
+
+### V2.1.1：Prompt Cache 命中优化 A/B
+
+目标：在已经校准的统计口径上，单独验证稳定前缀布局能否提高供应商 Prompt Cache 的实际复用，
+不同时改变 compaction、working memory、模型或任务断言。
+
+进入条件：`stable-v2.1` 已验收。若供应商不返回缓存字段，则记录为 `unsupported`，该实验保留为
+experimental，但不阻塞 V2.2。
+
+实验配置只保留 P0 当前消息布局、P1 缓存优化布局。先对一个固定 prompt 序列各运行至少 5 次，
+再在一个真实 case 上各运行 3 次；每轮固定 provider、model、temperature、system prefix 和动态输入顺序。
+
+验收标准：
+
+- P0/P1 均报告请求数、hit tokens、miss tokens、加权命中率、prompt tokens、延迟和任务结果。
+- `unsupported`、真实 `0%` 和非零命中三种状态能够明确区分。
+- P1 的任务通过率不得低于 P0，且稳定前缀的可复用 token 数不得下降。
+- 只有连续两轮独立复跑均显示 P1 命中率或缓存 token 数提高，才允许声明缓存优化有效。
+- 不设绝对命中率目标，不用增加重复请求、扩大 token 或降低验证强度制造虚假提升。
+
+失败回退：保持 V2.1 消息布局，Prompt Cache 优化继续标记为 experimental。成功后标记
+`stable-v2.1.1`，再进入 V2.2；失败不阻塞 V2.2。
 
 ### V2.2：分层记忆与 Follow-up
 
@@ -221,6 +247,12 @@ git switch -c stable-v1 8f19cd3
 - 固定 benchmark 能一条命令运行并生成 JSON、Markdown 和 CSV。
 - 报告至少覆盖系统回归、上下文治理、记忆收益、断点恢复四个维度；未启用维度显示 empty/experimental，不伪造结果。
 - 每个简历数字都有 case、run id、配置、原始 artifact 和复跑命令。
+- 必须交付 `docs/ETCLOVG_CAPABILITY_MATRIX.md`，逐层记录能力声明、代码入口、测试、验收命令、
+  run id、原始证据、当前状态和已知边界。
+- ETCLOVG 矩阵中的状态只允许使用 `stable`、`experimental`、`not implemented`；只有已经通过
+  版本验收且能从 Viewer 或验收归档定位原始 run 的能力才允许标记为 `stable`。
+- V2.1/V2.2 未通过时不阻塞 V3.0，但 Context 层必须如实标记为 `experimental`，并保留对应的
+  后续验收版本和复跑入口，不能用已有基础实现代替收益证据。
 - 新机器按照 runbook 可以完成安装、单 case 运行和报告查看。
 - Web Viewer 缺少可选 artifact 时不崩溃。
 
@@ -258,13 +290,13 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                     |
 8f19cd3 -> V1.0 -> V1.1 -> V1.2 -> V1.3 -> V2.0 -> V3.0
                                       |        |
-                                      |        +-> V2.1 compaction -> V2.2 memory
+                                      |        +-> V2.1 compaction -> V2.1.1 prompt cache -> V2.2 memory
                                       |
                                       +-> experimental/runtime-tools
                                       +-> experimental/meta-review
 ```
 
-V2.1 和 V2.2 是增强线，不应阻塞 V3.0 的 Harness 发布。这样即使实验能力没有产生收益，稳定项目仍然可以完成并用于面试。
+V2.1 和 V2.2 是增强线，不应阻塞 V3.0 的 Harness 发布。这样即使实验能力没有产生收益，稳定项目仍然可以完成并用于面试。V3.0 仍必须通过 ETCLOVG 能力证据矩阵完整披露七层状态；“不阻塞发布”只表示允许标记为 `experimental`，不表示可以省略或宣称已经稳定。
 
 ## 7. 最终可声明的项目效果
 

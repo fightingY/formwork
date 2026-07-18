@@ -88,7 +88,30 @@ def _accumulate_usage(state: RunState, usage: ModelUsage, latency_ms: int) -> No
     }
     for key, value in metric_map.items():
         if value is not None:
-            state.metrics[key] += value
-    if usage.cache_hit_rate is not None:
-        state.metrics["cache_hit_rate"] = usage.cache_hit_rate
-    state.metrics["latency_ms"] += latency_ms
+            state.metrics[key] = state.metrics.get(key, 0) + value
+
+    observed_hit_tokens: int | None = None
+    observed_prompt_tokens: int | None = None
+    if usage.cache_hit_tokens is not None and usage.cache_miss_tokens is not None:
+        observed_hit_tokens = usage.cache_hit_tokens
+        observed_prompt_tokens = usage.cache_hit_tokens + usage.cache_miss_tokens
+    elif usage.cached_tokens is not None and usage.prompt_tokens is not None:
+        observed_hit_tokens = usage.cached_tokens
+        observed_prompt_tokens = usage.prompt_tokens
+
+    if observed_hit_tokens is None or observed_prompt_tokens is None:
+        state.metrics["cache_unreported_requests"] = state.metrics.get("cache_unreported_requests", 0) + 1
+    else:
+        state.metrics["cache_metrics_available"] = True
+        state.metrics["cache_metric_requests"] = state.metrics.get("cache_metric_requests", 0) + 1
+        state.metrics["cache_observed_hit_tokens"] = (
+            state.metrics.get("cache_observed_hit_tokens", 0) + observed_hit_tokens
+        )
+        state.metrics["cache_observed_prompt_tokens"] = (
+            state.metrics.get("cache_observed_prompt_tokens", 0) + observed_prompt_tokens
+        )
+        total_observed = state.metrics["cache_observed_prompt_tokens"]
+        state.metrics["cache_hit_rate"] = (
+            state.metrics["cache_observed_hit_tokens"] / total_observed if total_observed else 0.0
+        )
+    state.metrics["latency_ms"] = state.metrics.get("latency_ms", 0) + latency_ms

@@ -67,6 +67,8 @@ provider:
   json_mode: false
 policy:
   require_approval_for_network: false
+project:
+  milestone: stable-v2.1
 """,
         encoding="utf-8",
     )
@@ -89,6 +91,7 @@ policy:
     assert settings.budget.max_action_timeout_sec == 9
     assert settings.context.artifact_preview_chars == 42
     assert settings.policy.require_approval_for_network is False
+    assert settings.project.milestone == "stable-v2.1"
 
 
 def test_env_overrides_minicc_yaml_provider_fields(tmp_path, monkeypatch) -> None:
