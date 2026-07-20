@@ -54,14 +54,14 @@ git switch -c stable-v1 8f19cd3
 
 - `archive/long-run-11-of-60` branch 和 `archive-long-run-11-of-60` tag 已存在，旧 5x12 cognition
   结果不再参与 Stable 主线开发或统计。
-- `stable-v1.0` 至 `stable-v2.0.1` tag 已存在；当前正式能力基线为 Stable V2.0.1 acceptance。
+- `stable-v1.0` 至 `stable-v2.0.2` tag 已存在；当前正式能力基线为 Stable V2.0.2 acceptance。
 - 本地旧 SWE、5x12 run、旧式 memory、开发报告副本和未被正式验收引用的 run 已清理；Git 中的
   archive ref 与 `acceptance/` 正式证据未删除。
-- `.minicc/runs` 当前只保留 48 个正式 Stable eval run 和 1 个 V2.0 真实模型 checkpoint/resume run；
-  版本索引已重建且 dangling pointer 为 0。
-- 当前代码回归为 `132 passed`；V2.0.1 的 C02 release gate 为 3/3 PASS。
-- Stable V2.0.1 已完成 workspace 证据一致性；下一开发阶段固定为 V2.0.2，账本验收后才能开始
-  context compaction A/B。
+- `.minicc/runs` 当前保留 102 个 Stable eval run 和 1 个 V2.0 真实模型 checkpoint/resume run；
+  V2.0.2 发布门中间批次作为归因证据保留，不混入最终提交口径。
+- 当前代码回归为 `147 passed`；V2.0.2 最终提交的 C02 release gate 为 3/3 PASS，V1.3 五案例
+  回归为 15/15 PASS，18/18 正式 run 证据完整且可计入指标。
+- Stable V2.0.2 已完成 run/suite/report 技术账本；下一开发阶段固定为 V2.1 context compaction A/B。
 - C05-C08、SWE-bench v2、working memory、runtime tools 和 meta review 均不属于 V2.0.1/V2.0.2，
   不得借技术债治理之名提前混入。
 
@@ -320,6 +320,13 @@ state / trace / metrics / diff / report paths
 - cleanup 命令 dry-run 与真实清理使用同一选择结果；默认保护所有正式 acceptance 引用。
 - `uv run pytest -q`、`git diff --check`、V1.3 的 15-run 回归和 V2.0 checkpoint 回归不下降。
 - 使用新账本完成一次 C02 `repeat=3`，结果必须形成 1 个 suite、3 个 run 和 1 组不可变报告。
+
+验收归档（2026-07-20）：最终实现提交 `3c1cd53b9fd46681edafcbb256e89241adb55003`
+在 clean worktree、固定 Docker digest 和 `release_gate=True` 下完成 C02 三连与 V1.3 五案例三轮回归，
+结果分别为 3/3 和 15/15 PASS；18/18 最终正式 run 的 evidence 与 metric eligibility 均有效，缺失
+证据和重复 run id 均为 0。完整代码回归为 147/147 PASS，cleanup dry-run 候选为 0。归档位于
+`acceptance/stable-v2.0.2/`，稳定标签为 `stable-v2.0.2`。发布门发现的 HITL 指标资格误判和
+NetworkPolicy here-doc 正文误报均已通过最小回归测试修复，失败/预修复 suite 保留在归档 history。
 
 失败回退：回到 `stable-v2.0.1`。不得通过手工复制报告或手改 manifest 让验收通过；账本未能做到
 零覆盖、零 dangling pointer 时不得进入 V2.1。通过后标记 `stable-v2.0.2`。

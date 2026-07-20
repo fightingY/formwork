@@ -23,7 +23,7 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V2.0.1
+## 当前稳定版本：Stable V2.0.2
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -31,6 +31,12 @@ Stable V2.0.1 已修复 workspace 可见文件、Git baseline 和最终 diff 的
 commit 建立快照，dirty/untracked 状态显式固化，ignored 文件默认排除，敏感目录受硬性 deny，
 每个 run 生成 `workspace_manifest.json`。C02 正式 release gate 为 3/3 PASS，完整回归为 132/132
 PASS，证据见 `acceptance/stable-v2.0.1/`。
+
+Stable V2.0.2 已把 run、suite、version index 和 report 拆成 schema v2 技术账本：每次 eval 使用
+唯一 suite/run ID，报告不可覆盖，正式指标只接纳证据完整且语义明确的记录，Viewer 与 cleanup
+能够处理 legacy、orphaned 和缺失可选 artifact。最终提交上的 C02 账本验收为 3/3 PASS，V1.3
+五案例回归为 15/15 PASS，18 个正式 run 的证据与指标资格均为 18/18；完整归档见
+`acceptance/stable-v2.0.2/`。
 
 M1 已实现基础闭环：
 
@@ -60,7 +66,7 @@ M3 已实现策略中间件和 HITL 基础链路：
 - 实现 `PolicyChain`，bash action 在进入 executor 前必须先经过策略链。
 - 实现 `CommandPolicy`，拦截 `sudo`、危险 `rm -rf /`、`shutdown`、`mkfs`、`mount` 等高危命令。
 - 实现 `PathPolicy`，拦截 `/mnt`、`/var/run/docker.sock`、`/root/.ssh` 等敏感路径。
-- 实现 `NetworkPolicy`，locked mode 下对 `curl`、`wget`、`git clone`、`pip install`、`npm install` 等联网动作要求审批或拒绝。
+- 实现 `NetworkPolicy`，locked mode 下对实际执行的 `curl`、`wget`、`git clone`、`pip install`、`npm install` 等联网动作要求审批或拒绝；here-doc 文档正文中的同名文字不误判为命令。
 - 实现 `BudgetPolicy`，限制 bash action 次数，并把超长 timeout 改写到配置上限。
 - 实现 `ApprovalPolicy`，对删除类高风险动作触发人工审批。
 - `ask` 和 `require_approval` 会让 run 进入 `waiting_approval`，并把状态保存到 `state.json`。

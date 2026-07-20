@@ -1,0 +1,4 @@
+schema_version,suite_id,run_id,milestone,stage,case_name,attempt,status,result,task_success,agent_success,infrastructure_success,policy_outcome
+2,suite-20260720-232453-22af7432,eval-C02_fix_failing_test-r1-20260720-232453-814570e0,stable-v2.0.2,formal_acceptance,C02_fix_failing_test,1,completed,PASS,True,True,True,clear
+2,suite-20260720-232453-22af7432,eval-C02_fix_failing_test-r2-20260720-232533-f73f420a,stable-v2.0.2,formal_acceptance,C02_fix_failing_test,2,completed,PASS,True,True,True,clear
+2,suite-20260720-232453-22af7432,eval-C02_fix_failing_test-r3-20260720-232603-bb7cb88b,stable-v2.0.2,formal_acceptance,C02_fix_failing_test,3,completed,PASS,True,True,True,clear
