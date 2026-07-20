@@ -50,6 +50,21 @@ git switch -c stable-v1 8f19cd3
 提交: fix(eval): prevent approval in locked benchmark case
 ```
 
+### 2.4 当前稳定线交接状态（2026-07-20）
+
+- `archive/long-run-11-of-60` branch 和 `archive-long-run-11-of-60` tag 已存在，旧 5x12 cognition
+  结果不再参与 Stable 主线开发或统计。
+- `stable-v1.0` 至 `stable-v2.0` tag 已存在；当前正式能力基线仍以 Stable V2.0 acceptance 为准。
+- 本地旧 SWE、5x12 run、旧式 memory、开发报告副本和未被正式验收引用的 run 已清理；Git 中的
+  archive ref 与 `acceptance/` 正式证据未删除。
+- `.minicc/runs` 当前只保留 45 个正式 Stable eval run 和 1 个 V2.0 真实模型 checkpoint/resume run；
+  版本索引已重建且 dangling pointer 为 0。
+- 当前代码回归为 `125 passed`。该数字只记录交接时快照，后续以各版本实际验收报告为准。
+- Stable V2.0 之后不得直接开始 V2.1；下一开发阶段固定为 V2.0.1，完成 workspace 证据一致性后
+  才能进入 V2.0.2，账本验收后才能开始 context compaction A/B。
+- C05-C08、SWE-bench v2、working memory、runtime tools 和 meta review 均不属于 V2.0.1/V2.0.2，
+  不得借技术债治理之名提前混入。
+
 ## 3. 通用验收门
 
 所有版本都必须满足：
@@ -171,11 +186,144 @@ git switch -c stable-v1 8f19cd3
 
 失败回退：3 个基础场景未全过时，不得扩到 10 个；回到 `stable-v1.3`。通过后标记 `stable-v2.0`。
 
+### V2.0.1：Workspace Snapshot 证据一致性
+
+目标：修复当前 `copytree + git init` 造成的 workspace 可见文件、Git 初始快照和最终 diff
+范围不一致问题，保证 Agent 能看到和修改的项目文件都处于可解释、可审计的 workspace 边界内。
+
+进入条件：`stable-v2.0` 已验收。旧 SWE-bench、`long_run_cognition_v1`、旧式 memory 和非正式
+开发 run 已完成归档或本地清理，不再参与 Stable 主线统计。
+
+本阶段只允许修改：
+
+- workspace 的创建、复制和初始快照逻辑；
+- ignored/untracked 文件进入 workspace 的显式规则；
+- workspace manifest、diff 生成和相关测试；
+- 为保持 V1.3/V2.0 行为所必需的最小 CLI 接线。
+
+本阶段禁止同时引入：
+
+- semantic compaction、working memory、runtime tools 或 meta review；
+- 新 action/tool 类型；
+- 新 benchmark case 或 SWE-bench 实验；
+- run catalog、Viewer 信息架构或报告 schema 的大规模重构，这些属于 V2.0.2。
+
+实现顺序：
+
+1. 先增加回归测试，稳定复现“原仓库 tracked 文件因匹配 `.gitignore`，在新 workspace 中变成
+   ignored/untracked，修改后不进入 diff”的问题。
+2. Git 仓库优先从固定 `HEAD`/commit 创建独立 worktree 或等价的 Git 原生快照，不再通过重新
+   `git init` 猜测原仓库的 tracked 状态。
+3. 源工作区存在未提交修改时，显式记录 dirty 状态和 patch hash，并以可测试方式应用到 run
+   workspace；不得静默丢失，也不得把 `.minicc/` 递归带入。
+4. Git ignored 文件默认不复制。确有运行需要的 ignored 文件必须通过显式 allowlist 声明；敏感
+   文件仍受硬性 deny 规则保护。
+5. 非 Git 项目保留受控复制 fallback，并使用统一 ignore matcher，不再继续扩大散落在代码中的
+   硬编码目录名单。
+6. 每个新 run 生成 `workspace_manifest.json`，至少记录 source root、source commit、dirty 状态、
+   dirty patch hash、snapshot mode、included/excluded 路径摘要和 ignore/allow 规则来源。
+
+验收标准：
+
+- 原仓库 tracked 文件即使匹配当前 `.gitignore`，进入 workspace 后仍保持 tracked，并且修改可被
+  `diff.patch` 捕获。
+- `.workbuddy/`、`.minicc/`、`.env`、虚拟环境、缓存和构建产物等 ignored/untracked 内容默认不进入
+  普通 run workspace；显式 allowlist 的文件除外。
+- 源工作区 tracked dirty change 能进入 workspace，且 manifest 中有确定性证据；未声明的 ignored
+  文件不能因目录复制而混入。
+- workspace 中所有允许 Agent 修改的项目文件，要么属于初始 Git snapshot，要么作为明确的
+  untracked candidate 出现在最终 diff；不存在“可修改但不可审计”的文件。
+- fixture eval 仍只从 case 的 `fixture/` 构建，不读取项目根目录的 `docs/`、`.workbuddy/`、历史 run
+  或 acceptance 文件。
+- `uv run pytest -q`、`git diff --check`、C02 连续 3 次和 V2.0 checkpoint 确定性回归全部通过。
+- 每个验收 run 都生成 workspace manifest、state、trace、metrics 和 diff，且路径之间可相互定位。
+
+失败回退：回到 `stable-v2.0`。不得用新增更多 ignore 名称掩盖 Git tracked 语义错误；不得在
+workspace 证据仍不一致时进入 V2.0.2 或 V2.1。通过后标记 `stable-v2.0.1`。
+
+### V2.0.2：Run / Suite / Report 技术账本
+
+目标：把单次运行、一次评测套件、版本索引和人类可读报告拆成清晰实体，使新产生的证据不可变、
+可定位、可迁移，并停止把正式 run、开发预检、报告副本和批次容器混放在 `.minicc/runs` 顶层。
+
+进入条件：`stable-v2.0.1` 已验收，workspace manifest 与 diff 已可信。
+
+本阶段只治理 V2.0.2 以后产生的新记录。历史 Stable acceptance 证据保持只读；已归档或已清理的
+旧 SWE/5x12 实验不迁回主线，也不为追求历史字段齐全而伪造数据。
+
+目标结构：
+
+```text
+.minicc/
+  runs/<run-id>/
+  suites/<suite-id>/
+    manifest.json
+    report.json
+    report.md
+  versions/<milestone>/
+  artifacts/<content-hash-or-run-id>/
+```
+
+其中：
+
+- `run` 表示一次 Agent 执行，目录创建后只追加运行证据，不被后续同名评测覆盖；
+- `suite` 表示固定配置下一组 case/attempt，拥有唯一 `suite_id` 和不可变汇总；
+- `version` 只保存指向真实 run/suite/acceptance 的轻量索引，不复制原始证据；
+- `report` 是 suite 的派生产物，不再写入固定的 `eval_reports/eval_report.json` 覆盖上一轮结果；
+- `artifact` 与 run 绑定，缺失时 Viewer 必须降级显示而不是崩溃。
+
+统一新记录 schema，至少包含：
+
+```text
+schema_version
+run_id
+suite_id
+milestone
+stage
+case_name / attempt
+source_commit / workspace_manifest
+provider / model / temperature
+sandbox mode / image digest
+status / result
+task_success / agent_success / infrastructure_success / policy_outcome
+started_at / completed_at
+state / trace / metrics / diff / report paths
+```
+
+实现顺序：
+
+1. 为 state、metrics、eval result、suite manifest 和 version entry 增加明确 `schema_version`，并为
+   当前正式 Stable 证据提供只读兼容解析，不原地重写历史原始文件。
+2. 引入唯一 `suite_id`；同一 suite 的所有 case run 必须记录相同配置快照和 suite 归属。
+3. 报告按 suite 写入独立目录，连续运行两次不得覆盖第一次的 JSON、Markdown、CSV 或 run 指针。
+4. 明确定义终态：`completed`、`failed`、`waiting_approval`、`interrupted`、`orphaned`。启动索引或
+   Viewer 时识别长期残留的 `running`，但不得擅自把它计为任务失败或正式样本。
+5. 版本索引只登记存在且 schema 可解析的 run/suite；缺 state、trace、metrics、diff 或 verifier
+   结果的记录不得进入正式通过率分母。
+6. Viewer 默认展示当前 milestone 的正式记录，并提供 development/history 过滤，不再把目录名猜测
+   当作 run 类型。
+7. 增加 retention/dry-run 清理入口：默认只列出可清理项，正式 acceptance 和被版本索引引用的 run
+   永远不自动删除。
+
+验收标准：
+
+- 连续执行两个 suite 后，两套 manifest 和报告均保留，run id、suite id、version entry 可双向定位。
+- 强制中断一次运行后，恢复扫描能将其识别为 `interrupted` 或 `orphaned`，不再永久显示 `running`。
+- 正式报告的 task、agent、infrastructure、policy 四类结果语义独立且与原始 state/verifier 一致。
+- 新 schema 报告不依赖“字段不存在等于 false”；旧 schema 显示 `legacy/unknown`，不参与不兼容指标。
+- catalog 中 dangling run/suite 指针为 0；Viewer 面对缺少可选 artifact 的记录不崩溃。
+- cleanup 命令 dry-run 与真实清理使用同一选择结果；默认保护所有正式 acceptance 引用。
+- `uv run pytest -q`、`git diff --check`、V1.3 的 15-run 回归和 V2.0 checkpoint 回归不下降。
+- 使用新账本完成一次 C02 `repeat=3`，结果必须形成 1 个 suite、3 个 run 和 1 组不可变报告。
+
+失败回退：回到 `stable-v2.0.1`。不得通过手工复制报告或手改 manifest 让验收通过；账本未能做到
+零覆盖、零 dangling pointer 时不得进入 V2.1。通过后标记 `stable-v2.0.2`。
+
 ### V2.1：上下文压缩 A/B
 
 目标：单独证明 context compaction 的收益，不同时引入 working memory。
 
-进入条件：`stable-v2.0` 已验收。
+进入条件：`stable-v2.0.2` 已验收，workspace 与 run/suite/report 证据链均可信。
 
 实验配置只保留 A0 无语义压缩、A1 语义压缩。先运行 1 个 case 各 3 次；稳定后扩展到至少 3 个 case。
 
@@ -239,7 +387,8 @@ experimental，但不阻塞 V2.2。
 
 目标：形成可演示、可复跑、可用于简历陈述的发布版本。
 
-进入条件：V1.2、V2.0 已通过；V2.1、V2.2 可选择性通过，未通过的能力必须明确标为 experimental。
+进入条件：V1.2、V2.0、V2.0.1、V2.0.2 已通过；V2.1、V2.2 可选择性通过，未通过的能力必须
+明确标为 experimental。
 
 验收标准：
 
@@ -280,6 +429,8 @@ Runtime tool synthesis 和 meta review 不属于 V3.0 的必需项。每次只�
 - run 没有结束状态，或报告状态与真实 state 不一致。
 - 为了通过实验需要同时修改 harness、case、断言和报告生成器。
 - 单次里程碑需要新增超过约 10 个生产文件或同时触及 3 个以上能力域。
+- workspace 可见文件无法被 manifest/diff 解释，或 version catalog 出现 dangling pointer。
+- 同一次 suite 的报告覆盖上一轮结果，或新旧 schema 被混入同一通过率口径。
 
 停止后只做：归因、最小复现、回归测试、单点修复。不得继续跑更大的矩阵。
 
@@ -288,9 +439,19 @@ Runtime tool synthesis 和 meta review 不属于 V3.0 的必需项。每次只�
 ```text
 archive/long-run-11-of-60 (5d7f163，仅归档)
                     |
-8f19cd3 -> V1.0 -> V1.1 -> V1.2 -> V1.3 -> V2.0 -> V3.0
+8f19cd3 -> V1.0 -> V1.1 -> V1.2 -> V1.3 -> V2.0
                                       |        |
-                                      |        +-> V2.1 compaction -> V2.1.1 prompt cache -> V2.2 memory
+                                      |        +-> V2.0.1 workspace snapshot
+                                      |                  |
+                                      |                  +-> V2.0.2 run/suite/report ledger
+                                      |                             |
+                                      |                             +-> V3.0
+                                      |                             |
+                                      |                             +-> V2.1 compaction
+                                      |                                    |
+                                      |                                    +-> V2.1.1 prompt cache
+                                      |                                               |
+                                      |                                               +-> V2.2 memory
                                       |
                                       +-> experimental/runtime-tools
                                       +-> experimental/meta-review
