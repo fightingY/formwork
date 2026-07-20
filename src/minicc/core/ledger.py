@@ -164,10 +164,13 @@ def inspect_run(
         semantics = "legacy/unknown"
 
     complete = run_evidence_complete(run_dir, require_verifier=bool(state.get("suite_id")))
+    metric_terminal = status in FORMAL_METRIC_STATUSES or (
+        status == "waiting_approval" and result_record.get("passed") is True
+    )
     formal_metric_eligible = (
         schema_version >= LEDGER_SCHEMA_VERSION
         and complete
-        and status in FORMAL_METRIC_STATUSES
+        and metric_terminal
         and task_success is not None
         and agent_success is not None
         and infrastructure_success is not None

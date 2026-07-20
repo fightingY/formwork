@@ -93,6 +93,43 @@ def test_inspect_legacy_run_uses_unknown_instead_of_false(tmp_path) -> None:
     assert record["formal_metric_eligible"] is False
 
 
+def test_inspect_run_accepts_only_verified_hitl_waiting_state_for_formal_metrics(tmp_path) -> None:
+    run_dir = tmp_path / "runs" / "run-hitl"
+    (run_dir / "artifacts").mkdir(parents=True)
+    (run_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": LEDGER_SCHEMA_VERSION,
+                "run_id": "run-hitl",
+                "suite_id": "suite-hitl",
+                "status": "waiting_approval",
+            }
+        ),
+        encoding="utf-8",
+    )
+    for relative in ["trace.jsonl", "metrics.json", "workspace_manifest.json"]:
+        (run_dir / relative).write_text("{}", encoding="utf-8")
+    (run_dir / "artifacts" / "diff.patch").write_text("", encoding="utf-8")
+    result_path = run_dir / "eval_result.json"
+    result = {
+        "schema_version": LEDGER_SCHEMA_VERSION,
+        "run_id": "run-hitl",
+        "suite_id": "suite-hitl",
+        "passed": True,
+        "task_success": True,
+        "agent_success": True,
+        "infrastructure_success": True,
+        "policy_outcome": "clear",
+    }
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    assert inspect_run(run_dir)["formal_metric_eligible"] is True
+
+    result["passed"] = False
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    assert inspect_run(run_dir)["formal_metric_eligible"] is False
+
+
 def test_cleanup_plan_and_apply_share_selection_and_protect_indexed_acceptance(tmp_path) -> None:
     runs_root = tmp_path / ".minicc" / "runs"
     versions_root = tmp_path / ".minicc" / "versions"

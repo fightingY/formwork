@@ -104,9 +104,12 @@ class RunCatalog:
         agent_success = getattr(result, "agent_success", None)
         infrastructure_success = getattr(result, "infrastructure_success", None)
         policy_outcome = str(getattr(result, "policy_outcome", "unknown") or "unknown")
+        metric_terminal = str(result.run_status) in {"completed", "failed"} or (
+            str(result.run_status) == "waiting_approval" and bool(result.passed)
+        )
         formal_metric_eligible = (
             str(stage) == "formal_acceptance"
-            and str(result.run_status) in {"completed", "failed"}
+            and metric_terminal
             and all(isinstance(value, bool) for value in (task_success, agent_success, infrastructure_success))
             and policy_outcome != "unknown"
         )
