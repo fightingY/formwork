@@ -2,7 +2,10 @@ provider:
   json_mode: true
 
 project:
-  milestone: v2.1
+  milestone: v2.0.1
+
+workspace:
+  ignored_allowlist: []
 
 sandbox:
   image: python@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0

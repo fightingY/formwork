@@ -82,6 +82,7 @@ def test_run_command_fake_provider_writes_complete_evidence_bundle(tmp_path, mon
         "state.json",
         "trace.jsonl",
         "metrics.json",
+        "workspace_manifest.json",
         "artifacts/diff.patch",
         "run_report.json",
         "run_report.md",

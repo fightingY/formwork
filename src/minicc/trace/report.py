@@ -35,6 +35,7 @@ def run_report_snapshot(state: RunState) -> dict[str, Any]:
             "trace": _evidence_path(state.run_dir, "trace.jsonl"),
             "metrics": _evidence_path(state.run_dir, "metrics.json"),
             "diff": _evidence_path(artifacts_dir, "diff.patch"),
+            "workspace_manifest": _evidence_path(state.run_dir, "workspace_manifest.json"),
             "latest_checkpoint": _evidence_path(state.run_dir, "checkpoints/latest.json"),
         },
     }
@@ -66,6 +67,7 @@ def format_run_report(report: dict[str, Any]) -> str:
         f"- Trace：`{evidence['trace']}`",
         f"- Metrics：`{evidence['metrics']}`",
         f"- Diff：`{evidence['diff']}`",
+        f"- Workspace manifest：`{evidence['workspace_manifest']}`",
         f"- 最新 checkpoint：`{evidence['latest_checkpoint']}`",
     ]
     if report.get("final_answer"):

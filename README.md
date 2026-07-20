@@ -38,11 +38,13 @@ M1 已实现基础闭环：
 - 提供可注入 executor，方便后续替换为 Docker sandbox。
 - 补充单元测试覆盖 Provider、Protocol 和 Loop。
 
-M2 已实现执行与结果治理层：
+M2/V2.0.1 已实现执行与 workspace 证据治理层：
 
-- 每个 run 会复制当前 workspace 到 `.minicc/runs/<run_id>/workspace`。
-- workspace copy 会忽略 `.git`、`.venv`、`node_modules`、`.minicc`、`.env` 等目录或敏感文件。
-- run workspace 内会初始化 git baseline，任务结束后生成 `artifacts/diff.patch`。
+- Git 项目从固定 source commit 创建独立快照；源目录的 tracked dirty patch 和允许的 untracked 文件会显式固化为 run baseline。
+- 非 Git 项目使用受控 copy fallback；嵌套的 eval fixture 不会借用父仓库作为 Git 根。
+- `.workbuddy`、`.minicc`、`.env`、虚拟环境、缓存和构建目录受硬性 deny 保护；Git ignored 文件默认不进入 workspace。
+- 必需的 ignored 文件只能通过 `workspace.ignored_allowlist` 显式声明，硬性 deny 始终优先。
+- 每个 run 会生成 `workspace_manifest.json`，任务结束后相对固定 baseline 生成 `artifacts/diff.patch`。
 - 默认使用 Docker sandbox 执行 bash action。
 - Docker 容器默认禁网，并限制 CPU、内存、PID、capabilities 和 no-new-privileges。
 - 命令结果会标准化为 `Observation`：`command_result`、`no_output`、`command_error`、`timeout` 等。
@@ -116,7 +118,7 @@ http://127.0.0.1:8765
 
 ```yaml
 project:
-  milestone: v2.1
+  milestone: v2.0.1
 ```
 
 ```text
@@ -190,9 +192,15 @@ policy:
   require_approval_for_network: true
   deny_sudo: true
   require_approval_for_destructive: true
+
+workspace:
+  ignored_allowlist: []
 ```
 
 其中 `MINICC_BASE_URL`、`MINICC_MODEL`、`MINICC_TEMPERATURE` 可以通过环境变量覆盖 `minicc.yaml`；`MINICC_API_KEY` 只建议放在 `.env` 或系统环境变量里，不写入 `minicc.yaml`。
+
+`workspace.ignored_allowlist` 只用于确实需要进入普通 run 的 ignored 项目文件，例如
+`generated/runtime.json`。它不能放行 `.env`、`.minicc/`、`.workbuddy/`、虚拟环境、缓存或构建产物。
 
 示例：
 
@@ -205,6 +213,7 @@ uv run minicc run "分析这个仓库并给出测试计划"
 ```text
 .minicc/runs/<run_id>/workspace
 .minicc/runs/<run_id>/artifacts
+.minicc/runs/<run_id>/workspace_manifest.json
 .minicc/runs/<run_id>/artifacts/diff.patch
 .minicc/runs/<run_id>/state.json
 .minicc/runs/<run_id>/trace.jsonl

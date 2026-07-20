@@ -58,6 +58,11 @@ class ProjectSettings:
 
 
 @dataclass(frozen=True)
+class WorkspaceSettings:
+    ignored_allowlist: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Settings:
     provider: ProviderSettings
     sandbox: SandboxSettings
@@ -65,6 +70,7 @@ class Settings:
     context: ContextSettings
     policy: PolicySettings
     project: ProjectSettings = field(default_factory=ProjectSettings)
+    workspace: WorkspaceSettings = field(default_factory=WorkspaceSettings)
 
     @property
     def base_url(self) -> str | None:
@@ -93,6 +99,7 @@ def load_settings() -> Settings:
     context_config = _dict_at(config, "context")
     policy_config = _dict_at(config, "policy")
     project_config = _dict_at(config, "project")
+    workspace_config = _dict_at(config, "workspace")
 
     return Settings(
         provider=ProviderSettings(
@@ -160,6 +167,9 @@ def load_settings() -> Settings:
         project=ProjectSettings(
             milestone=_str_config(project_config, "milestone", ""),
         ),
+        workspace=WorkspaceSettings(
+            ignored_allowlist=_str_tuple_config(workspace_config, "ignored_allowlist"),
+        ),
     )
 
 
@@ -225,6 +235,13 @@ def _int_config(config: dict[str, Any], key: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _str_tuple_config(config: dict[str, Any], key: str) -> tuple[str, ...]:
+    value = config.get(key, ())
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value if str(item).strip())
 
 
 def _float_env_or_config(

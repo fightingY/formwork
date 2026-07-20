@@ -69,6 +69,10 @@ policy:
   require_approval_for_network: false
 project:
   milestone: stable-v2.1
+workspace:
+  ignored_allowlist:
+    - generated/runtime.json
+    - fixtures/*.db
 """,
         encoding="utf-8",
     )
@@ -92,6 +96,10 @@ project:
     assert settings.context.artifact_preview_chars == 42
     assert settings.policy.require_approval_for_network is False
     assert settings.project.milestone == "stable-v2.1"
+    assert settings.workspace.ignored_allowlist == (
+        "generated/runtime.json",
+        "fixtures/*.db",
+    )
 
 
 def test_env_overrides_minicc_yaml_provider_fields(tmp_path, monkeypatch) -> None:

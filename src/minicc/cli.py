@@ -164,7 +164,12 @@ def run_command(args: argparse.Namespace) -> int:
             state.workspace_host_path = Path.cwd()
             executor = LocalCommandExecutor()
         else:
-            workspace = prepare_run_workspace(Path.cwd(), run_id=state.run_id)
+            workspace = prepare_run_workspace(
+                Path.cwd(),
+                run_id=state.run_id,
+                ignored_allowlist=settings.workspace.ignored_allowlist,
+                allowlist_source="minicc.yaml:workspace.ignored_allowlist",
+            )
             state.run_dir = workspace.run_dir
             state.workspace_host_path = workspace.workspace_dir
             state.artifacts_dir = workspace.artifacts_dir
@@ -608,6 +613,7 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
             context=settings.context,
             policy=case_policy,
             project=settings.project,
+            workspace=settings.workspace,
         )
     sandbox = SandboxSettings(
         image=settings.sandbox.image,
@@ -624,6 +630,7 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
         context=settings.context,
         policy=case_policy,
         project=settings.project,
+        workspace=settings.workspace,
     )
 
 
