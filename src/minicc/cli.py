@@ -3,19 +3,21 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 from minicc import __version__
 from minicc.config import BudgetSettings, PolicySettings, SandboxSettings, Settings, load_settings
 from minicc.core.checkpoint import CheckpointError, CheckpointManager
 from minicc.core.context import ContextBuilder, ContextConfig
+from minicc.core.ledger import apply_cleanup_plan, build_cleanup_plan, write_artifact_index
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
 from minicc.evals.case import EvalCase
-from minicc.evals.runner import copy_report_to_run_root, run_eval_suite, write_eval_report
+from minicc.evals.runner import run_eval_suite, write_eval_report, write_suite_report
 from minicc.memory.feedback import FeedbackMemory
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
@@ -137,6 +139,23 @@ def build_parser() -> argparse.ArgumentParser:
     traces_parser = subparsers.add_parser("traces", help="List runs that have trace or metrics files.")
     traces_parser.set_defaults(handler=traces_command)
 
+    cleanup_parser = subparsers.add_parser(
+        "cleanup",
+        help="List unreferenced old runs; delete only when --apply is supplied.",
+    )
+    cleanup_parser.add_argument(
+        "--older-than-hours",
+        type=float,
+        default=168.0,
+        help="Select unreferenced runs older than this many hours (default: 168).",
+    )
+    cleanup_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Delete exactly the runs selected by the displayed cleanup plan.",
+    )
+    cleanup_parser.set_defaults(handler=cleanup_command)
+
     web_parser = subparsers.add_parser("web", help="Serve a read-only trace viewer.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
     web_parser.add_argument("--port", type=int, default=8765, help="Port to bind.")
@@ -154,7 +173,7 @@ def run_command(args: argparse.Namespace) -> int:
 
     workspace = None
     runner = None
-    state = RunState.start(args.goal)
+    state = RunState.start(args.goal, milestone=milestone, stage="daily_development")
     result = None
     try:
         if args.no_workspace_copy:
@@ -229,8 +248,9 @@ def run_command(args: argparse.Namespace) -> int:
         if workspace is not None:
             try:
                 write_workspace_diff(workspace.workspace_dir, workspace.artifacts_dir)
+                _write_run_artifact_index(state)
             except Exception as exc:
-                print(f"Failed to write workspace diff: {exc}", file=sys.stderr)
+                print(f"Failed to finalize run evidence: {exc}", file=sys.stderr)
         catalog.register_state(milestone, state, git_commit=_git_evidence(Path.cwd())[0])
 
     if result is None:
@@ -323,8 +343,9 @@ def resume_command(args: argparse.Namespace) -> int:
         if state.workspace_host_path is not None and state.artifacts_dir is not None:
             try:
                 write_workspace_diff(state.workspace_host_path, state.artifacts_dir)
+                _write_run_artifact_index(state)
             except Exception as exc:
-                print(f"Failed to write workspace diff: {exc}", file=sys.stderr)
+                print(f"Failed to finalize run evidence: {exc}", file=sys.stderr)
         catalog.update_existing_state(state, fallback_milestone=settings.project.milestone)
 
     _print_run_result(result.state, result.state.run_dir)
@@ -486,6 +507,8 @@ def eval_command(args: argparse.Namespace) -> int:
         return 2
 
     runs_root = Path.cwd() / ".minicc" / "runs"
+    suites_root = Path.cwd() / ".minicc" / "suites"
+    suite_stage = "formal_acceptance" if args.release_gate else "development_precheck"
 
     def agent_runner(case: EvalCase, state: RunState) -> RunState:
         state.constraints.extend(_case_constraints(case))
@@ -548,21 +571,6 @@ def eval_command(args: argparse.Namespace) -> int:
         "milestone": milestone,
     }
 
-    def on_case_completed(case_result) -> None:
-        if args.release_gate and case_result.passed:
-            stage = "formal_acceptance"
-        elif case_result.passed:
-            stage = "development_precheck"
-        else:
-            stage = "failure_reproduction"
-        catalog.register_eval_result(
-            milestone,
-            case_result,
-            stage=stage,
-            git_commit=git_commit,
-            report_path=str(args.output_dir or ""),
-        )
-
     result = run_eval_suite(
         Path(args.path),
         runs_root=runs_root,
@@ -571,16 +579,35 @@ def eval_command(args: argparse.Namespace) -> int:
         configuration=configuration,
         preserve_runs=True,
         case_names=args.case_names,
-        on_case_completed=on_case_completed,
+        milestone=milestone,
+        stage=suite_stage,
     )
-    if args.output_dir is None:
-        json_path, markdown_path = copy_report_to_run_root(result, runs_root)
-    else:
-        json_path, markdown_path = write_eval_report(result, args.output_dir)
+    bundle = write_suite_report(result, suites_root)
+    json_path = bundle.report_json_path
+    markdown_path = bundle.report_markdown_path
+    if args.output_dir is not None:
+        export_dir = args.output_dir / result.suite_id
+        json_path, markdown_path = write_eval_report(result, export_dir)
+    catalog_entries = []
+    for case_result in result.cases:
+        catalog_entries.append(
+            catalog.register_eval_result(
+                milestone,
+                case_result,
+                stage=suite_stage,
+                git_commit=git_commit,
+                report_path=str(bundle.report_json_path),
+                suite_path=str(bundle.manifest_path),
+            )
+        )
+    ledger_complete = all(entry is not None for entry in catalog_entries)
     print(f"eval_status: {'PASS' if result.passed else 'FAIL'}")
+    print(f"ledger_status: {'COMPLETE' if ledger_complete else 'INCOMPLETE'}")
+    print(f"suite_id: {result.suite_id}")
+    print(f"suite_manifest: {bundle.manifest_path}")
     print(f"json_report: {json_path}")
     print(f"markdown_report: {markdown_path}")
-    return 0 if result.passed else 1
+    return 0 if result.passed and ledger_complete else 1
 
 
 def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
@@ -751,6 +778,28 @@ def web_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def cleanup_command(args: argparse.Namespace) -> int:
+    if args.older_than_hours < 0:
+        print("--older-than-hours must be non-negative.", file=sys.stderr)
+        return 2
+    project_root = Path.cwd()
+    plan = build_cleanup_plan(
+        project_root / ".minicc" / "runs",
+        versions_root=project_root / ".minicc" / "versions",
+        acceptance_root=project_root / "acceptance",
+        older_than=timedelta(hours=args.older_than_hours),
+    )
+    mode = "APPLY" if args.apply else "DRY-RUN"
+    print(f"cleanup_mode: {mode}")
+    print(f"protected_runs: {len(plan.protected_run_ids)}")
+    print(f"candidates: {len(plan.candidates)}")
+    for candidate in plan.candidates:
+        print(f"  {candidate.run_id}: {candidate.reason}")
+    result = apply_cleanup_plan(plan, apply=bool(args.apply))
+    print(f"deleted: {len(result.deleted_run_ids)}")
+    return 0
+
+
 def _effective_milestone(settings: Settings, args: argparse.Namespace) -> str:
     override = str(getattr(args, "milestone", "") or "").strip()
     if override:
@@ -759,6 +808,26 @@ def _effective_milestone(settings: Settings, args: argparse.Namespace) -> str:
     if output_dir is not None and str(Path(output_dir).name).startswith("stable-v"):
         return str(Path(output_dir).name)
     return settings.project.milestone
+
+
+def _write_run_artifact_index(state: RunState) -> Path | None:
+    if state.run_dir is None:
+        return None
+    run_dir = state.run_dir.resolve()
+    evidence = {
+        "state": str(run_dir / "state.json"),
+        "trace": str(run_dir / "trace.jsonl"),
+        "metrics": str(run_dir / "metrics.json"),
+        "workspace_manifest": str(run_dir / "workspace_manifest.json"),
+        "diff": str(run_dir / "artifacts" / "diff.patch"),
+        "run_report": str(run_dir / "run_report.json"),
+    }
+    return write_artifact_index(
+        run_dir.parent.parent / "artifacts",
+        run_id=state.run_id,
+        run_dir=run_dir,
+        evidence=evidence,
+    )
 
 
 if __name__ == "__main__":

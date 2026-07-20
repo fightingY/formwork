@@ -7,10 +7,18 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+from minicc.core.ledger import LEDGER_SCHEMA_VERSION
 from minicc.core.protocol import Action, BashAction, action_to_dict, parse_action
 
 
-RunStatus = Literal["running", "waiting_approval", "interrupted", "completed", "failed"]
+RunStatus = Literal[
+    "running",
+    "waiting_approval",
+    "interrupted",
+    "orphaned",
+    "completed",
+    "failed",
+]
 ObservationKind = Literal[
     "command_result",
     "no_output",
@@ -48,6 +56,10 @@ class TrajectoryStep:
 class RunState:
     run_id: str
     goal: str
+    schema_version: int = LEDGER_SCHEMA_VERSION
+    suite_id: str | None = None
+    milestone: str = ""
+    stage: str = "daily_development"
     status: RunStatus = "running"
     run_dir: Path | None = None
     artifacts_dir: Path | None = None
@@ -77,6 +89,9 @@ class RunState:
         workspace_host_path: Path | None = None,
         run_dir: Path | None = None,
         artifacts_dir: Path | None = None,
+        suite_id: str | None = None,
+        milestone: str = "",
+        stage: str = "daily_development",
     ) -> "RunState":
         return cls(
             run_id=new_run_id(),
@@ -84,6 +99,9 @@ class RunState:
             workspace_host_path=workspace_host_path,
             run_dir=run_dir,
             artifacts_dir=artifacts_dir,
+            suite_id=suite_id,
+            milestone=milestone,
+            stage=stage,
             metrics=initial_metrics(),
         )
 
@@ -110,6 +128,10 @@ class RunState:
         return cls(
             run_id=str(data["run_id"]),
             goal=str(data["goal"]),
+            schema_version=int(data.get("schema_version", 1)),
+            suite_id=data.get("suite_id"),
+            milestone=str(data.get("milestone") or ""),
+            stage=str(data.get("stage") or "daily_development"),
             status=data.get("status", "running"),
             run_dir=_path_or_none(data.get("run_dir")),
             artifacts_dir=_path_or_none(data.get("artifacts_dir")),

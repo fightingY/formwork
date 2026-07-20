@@ -48,6 +48,7 @@ def test_trace_viewer_filters_and_orders_runs_by_version(tmp_path) -> None:
         RunCatalog(versions_root).upsert(
             "stable-v2.0",
             {
+                "schema_version": 2,
                 "run_id": run_id,
                 "run_dir": str(run_dir),
                 "stage": "formal_acceptance",
@@ -98,3 +99,50 @@ def test_trace_viewer_corrects_historical_cache_rate_from_trace(tmp_path) -> Non
     assert metrics["cache_observed_hit_tokens"] == 250
     assert metrics["cache_observed_prompt_tokens"] == 1100
     assert metrics["cache_hit_rate"] == 250 / 1100
+
+
+def test_trace_viewer_filters_record_stage_and_degrades_missing_artifacts(tmp_path) -> None:
+    runs_root = tmp_path / "runs"
+    versions_root = tmp_path / "versions"
+    for run_id, stage in [("formal", "formal_acceptance"), ("dev", "development_precheck")]:
+        run_dir = runs_root / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "state.json").write_text(
+            '{"schema_version":2,"goal":"demo","status":"completed"}',
+            encoding="utf-8",
+        )
+        RunCatalog(versions_root).upsert(
+            "stable-v2.0.2",
+            {
+                "schema_version": 2,
+                "run_id": run_id,
+                "run_dir": str(run_dir),
+                "stage": stage,
+                "status": "completed",
+                "result": "PASS",
+            },
+        )
+
+    formal = list_runs(
+        runs_root,
+        versions_root=versions_root,
+        milestone="stable-v2.0.2",
+        record_view="formal",
+    )
+    development = list_runs(
+        runs_root,
+        versions_root=versions_root,
+        milestone="stable-v2.0.2",
+        record_view="development",
+    )
+
+    assert [run["run_id"] for run in formal] == ["formal"]
+    assert [run["run_id"] for run in development] == ["dev"]
+    assert formal[0]["trace_available"] is False
+    assert formal[0]["metrics_available"] is False
+    assert formal[0]["diff_available"] is False
+    assert "recordViewFilter" in render_index(
+        runs_root,
+        versions_root=versions_root,
+        current_milestone="stable-v2.0.2",
+    )

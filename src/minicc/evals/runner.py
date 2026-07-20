@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
-import os
 import shlex
-import shutil
-import stat
 import subprocess
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from minicc.core.ledger import (
+    LEDGER_SCHEMA_VERSION,
+    SuiteBundle,
+    new_suite_id,
+    write_artifact_index,
+    write_immutable_suite,
+)
 from minicc.core.state import RunState, new_run_id, save_run_state
 from minicc.evals.assertions import AssertionResult, run_assertions
 from minicc.evals.case import EvalCase, discover_cases
@@ -37,6 +44,11 @@ class EvalCaseResult:
     task_success: bool = False
     agent_success: bool = False
     infrastructure_success: bool = False
+    policy_outcome: str = "unknown"
+    suite_id: str = ""
+    milestone: str = ""
+    stage: str = "development_precheck"
+    configuration: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +57,10 @@ class EvalSuiteResult:
     cases: list[EvalCaseResult]
     repeat: int = 1
     configuration: dict | None = None
+    suite_id: str = ""
+    milestone: str = ""
+    stage: str = "development_precheck"
+    created_at: str = ""
 
 
 def run_eval_suite(
@@ -57,9 +73,16 @@ def run_eval_suite(
     preserve_runs: bool = False,
     case_names: list[str] | None = None,
     on_case_completed: EvalCaseCompletedCallable | None = None,
+    suite_id: str | None = None,
+    milestone: str = "",
+    stage: str = "development_precheck",
 ) -> EvalSuiteResult:
+    del preserve_runs  # Kept as a source-compatible no-op; V2.0.2 always preserves runs.
     if repeat < 1:
         raise ValueError("repeat must be at least 1")
+    suite_id = suite_id or new_suite_id()
+    created_at = datetime.now(timezone.utc).isoformat()
+    configuration_snapshot = dict(configuration or {})
     cases = discover_cases(path)
     if case_names:
         requested = set(case_names)
@@ -76,7 +99,11 @@ def run_eval_suite(
                 runs_root=runs_root,
                 agent_runner=agent_runner,
                 attempt=attempt,
-                preserve_run=preserve_runs or repeat > 1,
+                preserve_run=True,
+                suite_id=suite_id,
+                milestone=milestone,
+                stage=stage,
+                configuration=configuration_snapshot,
             )
             results.append(case_result)
             if on_case_completed is not None:
@@ -85,7 +112,11 @@ def run_eval_suite(
         passed=all(result.passed for result in results),
         cases=results,
         repeat=repeat,
-        configuration=configuration,
+        configuration=configuration_snapshot,
+        suite_id=suite_id,
+        milestone=milestone,
+        stage=stage,
+        created_at=created_at,
     )
 
 
@@ -96,18 +127,23 @@ def run_eval_case(
     agent_runner: AgentRunCallable,
     attempt: int = 1,
     preserve_run: bool = False,
+    suite_id: str = "",
+    milestone: str = "",
+    stage: str = "development_precheck",
+    configuration: dict | None = None,
 ) -> EvalCaseResult:
-    if preserve_run:
-        run_id = f"eval-{case.name}-r{attempt}-{new_run_id()}"
-    else:
-        clean_eval_run(runs_root, case.name)
-        run_id = f"eval-{case.name}"
+    del preserve_run  # V2.0.2 run evidence is always uniquely named and never overwritten.
+    suite_id = suite_id or new_suite_id()
+    run_id = f"eval-{case.name}-r{attempt}-{new_run_id()}"
     workspace = prepare_run_workspace(case.fixture_dir, run_id=run_id, runs_root=runs_root)
     state = RunState.start(
         case.prompt,
         workspace_host_path=workspace.workspace_dir,
         run_dir=workspace.run_dir,
         artifacts_dir=workspace.artifacts_dir,
+        suite_id=suite_id,
+        milestone=milestone,
+        stage=stage,
     )
     state.run_id = workspace.run_id
     try:
@@ -134,6 +170,7 @@ def run_eval_case(
         int(result_metrics.get("provider_errors", 0)) == 0
         and int(result_metrics.get("infrastructure_errors", 0)) == 0
     )
+    policy_outcome = "denied" if int(result_metrics.get("policy_denials", 0) or 0) else "clear"
     passed = agent_success and infrastructure_success and all(result.passed for result in assertion_results)
     result = EvalCaseResult(
         name=case.name,
@@ -151,22 +188,60 @@ def run_eval_case(
         task_success=task_success,
         agent_success=agent_success,
         infrastructure_success=infrastructure_success,
+        policy_outcome=policy_outcome,
+        suite_id=suite_id,
+        milestone=milestone,
+        stage=stage,
+        configuration=dict(configuration or {}),
     )
     write_eval_case_report(result, workspace.run_dir)
+    write_artifact_index(
+        workspace.run_dir.parent.parent / "artifacts",
+        run_id=result.run_id,
+        run_dir=workspace.run_dir,
+        evidence=_run_evidence_paths(result),
+    )
     return result
 
 
 def write_eval_report(result: EvalSuiteResult, output_dir: Path) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    json_path = output_dir / "eval_report.json"
-    markdown_path = output_dir / "eval_report.md"
-    json_path.write_text(json.dumps(suite_to_dict(result), ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path = output_dir / "report.json"
+    markdown_path = output_dir / "report.md"
+    csv_path = output_dir / "report.csv"
+    manifest_path = output_dir / "manifest.json"
+    existing = [path for path in (json_path, markdown_path, csv_path, manifest_path) if path.exists()]
+    if existing:
+        raise FileExistsError(f"Suite report export is immutable and already exists: {existing[0]}")
+    report, manifest = _suite_payloads(result)
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(format_markdown_report(result), encoding="utf-8")
+    csv_path.write_text(format_csv_report(result), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return json_path, markdown_path
+
+
+def write_suite_report(result: EvalSuiteResult, suites_root: Path) -> SuiteBundle:
+    report, manifest = _suite_payloads(result)
+    return write_immutable_suite(
+        suites_root,
+        suite_id=result.suite_id,
+        manifest=manifest,
+        report=report,
+        markdown=format_markdown_report(result),
+        csv_text=format_csv_report(result),
+    )
 
 
 def suite_to_dict(result: EvalSuiteResult) -> dict:
     return {
+        "schema_version": LEDGER_SCHEMA_VERSION,
+        "entity_type": "suite_report",
+        "suite_id": result.suite_id,
+        "milestone": result.milestone,
+        "stage": result.stage,
+        "status": "completed",
+        "result": "PASS" if result.passed else "FAIL",
         "passed": result.passed,
         "repeat": result.repeat,
         "configuration": result.configuration or {},
@@ -174,6 +249,10 @@ def suite_to_dict(result: EvalSuiteResult) -> dict:
         "cases": [
             {
                 "name": case.name,
+                "schema_version": LEDGER_SCHEMA_VERSION,
+                "suite_id": case.suite_id,
+                "milestone": case.milestone,
+                "stage": case.stage,
                 "capability": case.capability,
                 "passed": case.passed,
                 "run_status": case.run_status,
@@ -186,6 +265,9 @@ def suite_to_dict(result: EvalSuiteResult) -> dict:
                 "task_success": case.task_success,
                 "agent_success": case.agent_success,
                 "infrastructure_success": case.infrastructure_success,
+                "policy_outcome": case.policy_outcome,
+                "formal_metric_eligible": _formal_metric_eligible(case),
+                "evidence": _run_evidence_paths(case),
                 "metrics": case.metrics,
                 "assertions": [asdict(assertion) for assertion in case.assertions],
             }
@@ -199,6 +281,9 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
         "# miniCC eval report",
         "",
         f"Overall: {'PASS' if result.passed else 'FAIL'}",
+        f"Suite: `{result.suite_id}`",
+        f"Milestone: `{result.milestone}`",
+        f"Stage: `{result.stage}`",
         f"Repeat: {result.repeat}",
         "",
     ]
@@ -215,6 +300,7 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
             f"task={summary['task_success_runs']}/{summary['attempts']}, "
             f"agent={summary['agent_success_runs']}/{summary['attempts']}, "
             f"infrastructure={summary['infrastructure_success_runs']}/{summary['attempts']}, "
+            f"policy_clear={summary['policy_clear_runs']}/{summary['attempts']}, "
             f"avg_turns={summary['average_turns']:.2f}, "
             f"avg_bash_actions={summary['average_bash_actions']:.2f}, "
             f"avg_duration_ms={summary['average_duration_ms']:.0f}, "
@@ -233,6 +319,7 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
             f"agent={'PASS' if case.agent_success else 'FAIL'}, "
             f"infrastructure={'PASS' if case.infrastructure_success else 'FAIL'}"
         )
+        lines.append(f"Policy outcome: `{case.policy_outcome}`")
         lines.append(
             "Metrics: "
             f"turns={case.metrics.get('turns', 0)}, "
@@ -244,6 +331,47 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
             lines.append(f"- {'PASS' if assertion.passed else 'FAIL'} {assertion.type}: {assertion.message}")
         lines.append("")
     return "\n".join(lines)
+
+
+def format_csv_report(result: EvalSuiteResult) -> str:
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(
+        [
+            "schema_version",
+            "suite_id",
+            "run_id",
+            "milestone",
+            "stage",
+            "case_name",
+            "attempt",
+            "status",
+            "result",
+            "task_success",
+            "agent_success",
+            "infrastructure_success",
+            "policy_outcome",
+        ]
+    )
+    for case in result.cases:
+        writer.writerow(
+            [
+                LEDGER_SCHEMA_VERSION,
+                case.suite_id,
+                case.run_id,
+                case.milestone,
+                case.stage,
+                case.name,
+                case.attempt,
+                case.run_status,
+                "PASS" if case.passed else "FAIL",
+                case.task_success,
+                case.agent_success,
+                case.infrastructure_success,
+                case.policy_outcome,
+            ]
+        )
+    return buffer.getvalue()
 
 
 def aggregate_case_results(cases: list[EvalCaseResult]) -> list[dict]:
@@ -275,6 +403,9 @@ def aggregate_case_results(cases: list[EvalCaseResult]) -> list[dict]:
                 "agent_success_runs": sum(getattr(result, "agent_success", result.passed) for result in results),
                 "infrastructure_success_runs": sum(
                     getattr(result, "infrastructure_success", result.passed) for result in results
+                ),
+                "policy_clear_runs": sum(
+                    getattr(result, "policy_outcome", "unknown") == "clear" for result in results
                 ),
                 "pass_rate": sum(result.passed for result in results) / len(results),
                 "statuses": sorted({result.run_status for result in results}),
@@ -310,7 +441,13 @@ def _changed_paths(run_dir: str) -> list[str]:
 
 def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path, Path]:
     payload = {
+        "schema_version": LEDGER_SCHEMA_VERSION,
+        "entity_type": "run_result",
+        "suite_id": result.suite_id,
+        "milestone": result.milestone,
+        "stage": result.stage,
         "name": result.name,
+        "case_name": result.name,
         "capability": result.capability,
         "attempt": result.attempt,
         "passed": result.passed,
@@ -319,6 +456,22 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         "task_success": result.task_success,
         "agent_success": result.agent_success,
         "infrastructure_success": result.infrastructure_success,
+        "policy_outcome": result.policy_outcome,
+        "result": "PASS" if result.passed else "FAIL",
+        "source_commit": str((result.configuration or {}).get("git_commit") or ""),
+        "workspace_manifest": str((run_dir / "workspace_manifest.json").resolve()),
+        "provider": {
+            "base_url": str((result.configuration or {}).get("base_url") or ""),
+            "model": str((result.configuration or {}).get("model") or ""),
+            "temperature": (result.configuration or {}).get("temperature"),
+        },
+        "sandbox": {
+            "mode": result.sandbox_mode,
+            "image": str((result.configuration or {}).get("docker_image") or ""),
+        },
+        "started_at": result.metrics.get("started_at"),
+        "completed_at": result.metrics.get("completed_at"),
+        "evidence": _run_evidence_paths(result),
         "sandbox_mode": result.sandbox_mode,
         "budget": result.budget or {},
         "metrics": result.metrics,
@@ -335,6 +488,8 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         f"- Task success: `{'true' if result.task_success else 'false'}`",
         f"- Agent success: `{'true' if result.agent_success else 'false'}`",
         f"- Infrastructure success: `{'true' if result.infrastructure_success else 'false'}`",
+        f"- Policy outcome: `{result.policy_outcome}`",
+        f"- Suite id: `{result.suite_id}`",
         f"- Run id: `{result.run_id}`",
         f"- Sandbox mode: `{result.sandbox_mode}`",
         "",
@@ -349,9 +504,81 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
 
 
 def copy_report_to_run_root(result: EvalSuiteResult, runs_root: Path) -> tuple[Path, Path]:
-    reports_dir = runs_root / "eval_reports"
-    json_path, markdown_path = write_eval_report(result, reports_dir)
-    return json_path, markdown_path
+    bundle = write_suite_report(result, runs_root.parent / "suites")
+    return bundle.report_json_path, bundle.report_markdown_path
+
+
+def _suite_payloads(result: EvalSuiteResult) -> tuple[dict, dict]:
+    report = suite_to_dict(result)
+    run_entries = [
+        {
+            "run_id": case.run_id,
+            "run_dir": str(Path(case.run_dir).resolve()),
+            "case_name": case.name,
+            "attempt": case.attempt,
+            "status": case.run_status,
+            "result": "PASS" if case.passed else "FAIL",
+            "task_success": case.task_success,
+            "agent_success": case.agent_success,
+            "infrastructure_success": case.infrastructure_success,
+            "policy_outcome": case.policy_outcome,
+            "evidence": _run_evidence_paths(case),
+        }
+        for case in result.cases
+    ]
+    manifest = {
+        "schema_version": LEDGER_SCHEMA_VERSION,
+        "entity_type": "suite",
+        "suite_id": result.suite_id,
+        "milestone": result.milestone,
+        "stage": result.stage,
+        "created_at": result.created_at,
+        "completed_at": _suite_completed_at(result),
+        "status": "completed",
+        "result": "PASS" if result.passed else "FAIL",
+        "task_success": all(case.task_success for case in result.cases),
+        "agent_success": all(case.agent_success for case in result.cases),
+        "infrastructure_success": all(case.infrastructure_success for case in result.cases),
+        "policy_outcome": (
+            "denied" if any(case.policy_outcome == "denied" for case in result.cases) else "clear"
+        ),
+        "configuration": dict(result.configuration or {}),
+        "run_ids": [case.run_id for case in result.cases],
+        "runs": run_entries,
+        "reports": {
+            "json": "report.json",
+            "markdown": "report.md",
+            "csv": "report.csv",
+        },
+    }
+    return report, manifest
+
+
+def _run_evidence_paths(result: EvalCaseResult) -> dict[str, str]:
+    run_dir = Path(result.run_dir).resolve()
+    suite_manifest = run_dir.parent.parent / "suites" / result.suite_id / "manifest.json"
+    return {
+        "state": str(run_dir / "state.json"),
+        "trace": str(run_dir / "trace.jsonl"),
+        "metrics": str(run_dir / "metrics.json"),
+        "workspace_manifest": str(run_dir / "workspace_manifest.json"),
+        "diff": str(run_dir / "artifacts" / "diff.patch"),
+        "run_report": str(run_dir / "eval_result.json"),
+        "suite_manifest": str(suite_manifest),
+    }
+
+
+def _formal_metric_eligible(result: EvalCaseResult) -> bool:
+    return (
+        result.stage == "formal_acceptance"
+        and result.run_status in {"completed", "failed"}
+        and all(Path(path).is_file() for key, path in _run_evidence_paths(result).items() if key != "suite_manifest")
+    )
+
+
+def _suite_completed_at(result: EvalSuiteResult) -> str | None:
+    timestamps = [str(case.metrics.get("completed_at")) for case in result.cases if case.metrics.get("completed_at")]
+    return max(timestamps) if timestamps else None
 
 
 def _load_metrics(run_dir: Path) -> dict | None:
@@ -368,21 +595,6 @@ def _expected_run_status(case: EvalCase) -> str:
             if expected == "waiting_approval" and case.capability.startswith("hitl"):
                 return expected
     return "completed"
-
-
-def clean_eval_run(runs_root: Path, name: str) -> None:
-    target = runs_root / f"eval-{name}"
-    if target.exists():
-        shutil.rmtree(target, onerror=_make_writable_and_retry)
-
-
-def _make_writable_and_retry(function: Callable, path: str, excinfo: tuple) -> None:
-    try:
-        os.chmod(path, stat.S_IWRITE)
-        function(path)
-    except Exception:
-        exc_type, exc, traceback = excinfo
-        raise exc.with_traceback(traceback)
 
 
 def _format_infrastructure_error(exc: Exception) -> str:

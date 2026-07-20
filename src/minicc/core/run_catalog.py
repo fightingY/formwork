@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from minicc.core.ledger import LEDGER_SCHEMA_VERSION, run_evidence_complete
 from minicc.core.state import RunState
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = LEDGER_SCHEMA_VERSION
 STAGE_LABELS = {
     "formal_acceptance": "正式验收",
     "development_precheck": "开发预检",
@@ -48,11 +49,15 @@ class RunCatalog:
         if state.run_dir is None:
             return None
         result = _result_from_status(state.status)
+        evidence_valid = run_evidence_complete(state.run_dir, require_verifier=False)
         return self.upsert(
             milestone,
             {
                 "run_id": state.run_id,
+                "schema_version": LEDGER_SCHEMA_VERSION,
+                "entity_type": "run",
                 "run_dir": str(state.run_dir.resolve()),
+                "suite_id": state.suite_id or "",
                 "stage": stage,
                 "source": source,
                 "status": state.status,
@@ -61,6 +66,8 @@ class RunCatalog:
                 "started_at": state.metrics.get("started_at") or _timestamp_from_run_id(state.run_id),
                 "completed_at": state.metrics.get("completed_at"),
                 "git_commit": git_commit,
+                "evidence_valid": evidence_valid,
+                "formal_metric_eligible": False,
             },
         )
 
@@ -73,13 +80,45 @@ class RunCatalog:
         source: str = "eval",
         git_commit: str = "",
         report_path: str = "",
+        suite_path: str = "",
     ) -> dict[str, Any] | None:
         metrics = dict(getattr(result, "metrics", {}) or {})
+        run_dir = Path(result.run_dir).resolve()
+        resolved_suite_path = Path(suite_path).resolve() if suite_path else None
+        if not run_evidence_complete(run_dir, require_verifier=True):
+            return None
+        if resolved_suite_path is None or not resolved_suite_path.is_file():
+            return None
+        suite_manifest = _read_json(resolved_suite_path)
+        eval_record = _read_json(run_dir / "eval_result.json")
+        suite_id = str(getattr(result, "suite_id", "") or "")
+        if (
+            _schema_version(suite_manifest, default=0) < LEDGER_SCHEMA_VERSION
+            or str(suite_manifest.get("suite_id") or "") != suite_id
+            or _schema_version(eval_record, default=0) < LEDGER_SCHEMA_VERSION
+            or str(eval_record.get("run_id") or "") != str(result.run_id)
+            or str(eval_record.get("suite_id") or "") != suite_id
+        ):
+            return None
+        task_success = getattr(result, "task_success", None)
+        agent_success = getattr(result, "agent_success", None)
+        infrastructure_success = getattr(result, "infrastructure_success", None)
+        policy_outcome = str(getattr(result, "policy_outcome", "unknown") or "unknown")
+        formal_metric_eligible = (
+            str(stage) == "formal_acceptance"
+            and str(result.run_status) in {"completed", "failed"}
+            and all(isinstance(value, bool) for value in (task_success, agent_success, infrastructure_success))
+            and policy_outcome != "unknown"
+        )
         return self.upsert(
             milestone,
             {
                 "run_id": str(result.run_id),
-                "run_dir": str(Path(result.run_dir).resolve()),
+                "schema_version": LEDGER_SCHEMA_VERSION,
+                "entity_type": "run",
+                "run_dir": str(run_dir),
+                "suite_id": suite_id,
+                "suite_path": str(resolved_suite_path),
                 "stage": stage,
                 "source": source,
                 "status": str(result.run_status),
@@ -91,6 +130,12 @@ class RunCatalog:
                 "completed_at": metrics.get("completed_at"),
                 "git_commit": git_commit,
                 "report_path": report_path,
+                "task_success": task_success,
+                "agent_success": agent_success,
+                "infrastructure_success": infrastructure_success,
+                "policy_outcome": policy_outcome,
+                "evidence_valid": True,
+                "formal_metric_eligible": formal_metric_eligible,
             },
         )
 
@@ -162,7 +207,7 @@ class RunCatalog:
         if not isinstance(entries, list):
             entries = []
         return {
-            "schema_version": int(data.get("schema_version", SCHEMA_VERSION)),
+            "schema_version": _schema_version(data, default=1),
             "milestone": milestone,
             "updated_at": str(data.get("updated_at") or ""),
             "entries": [item for item in entries if isinstance(item, dict)],
@@ -243,6 +288,11 @@ def index_acceptance_history(project_root: Path, catalog: RunCatalog | None = No
             project_root / "acceptance" / "stable-v2.0" / "v1.3-regression" / "eval_report.json",
             "stable-v2.0",
             "regression",
+        ),
+        (
+            project_root / "acceptance" / "stable-v2.0.1" / "eval_report.json",
+            "stable-v2.0.1",
+            "formal_acceptance",
         ),
     ]
     for report_path, milestone, stage in report_rules:
@@ -417,6 +467,7 @@ def _result_from_status(status: str) -> str:
         "waiting_approval": "WAITING",
         "interrupted": "INTERRUPTED",
         "running": "RUNNING",
+        "orphaned": "UNKNOWN",
     }.get(status, status.upper() or "UNKNOWN")
 
 
@@ -439,3 +490,10 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _schema_version(payload: dict[str, Any], *, default: int) -> int:
+    try:
+        return int(payload.get("schema_version", default))
+    except (TypeError, ValueError):
+        return default

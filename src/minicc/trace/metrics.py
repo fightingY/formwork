@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from minicc.core.ledger import LEDGER_SCHEMA_VERSION
 from minicc.core.state import RunState
 
 
@@ -24,7 +25,11 @@ def write_metrics(state: RunState, path: Path | None = None) -> Path | None:
 
 def metrics_snapshot(state: RunState) -> dict[str, Any]:
     data = dict(state.metrics)
+    data["schema_version"] = LEDGER_SCHEMA_VERSION
     data["run_id"] = state.run_id
+    data["suite_id"] = state.suite_id
+    data["milestone"] = state.milestone
+    data["stage"] = state.stage
     data["status"] = state.status
     data["final_answer_present"] = state.final_answer is not None
     return data

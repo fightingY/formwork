@@ -6,7 +6,12 @@ import pytest
 from minicc.core.state import RunState
 from minicc.evals.assertions import run_assertions
 from minicc.evals.case import discover_cases, load_case
-from minicc.evals.runner import aggregate_case_results, run_eval_suite, write_eval_report
+from minicc.evals.runner import (
+    aggregate_case_results,
+    run_eval_suite,
+    write_eval_report,
+    write_suite_report,
+)
 from minicc.evals.runner import _format_infrastructure_error
 from minicc.cli import _case_constraints, _settings_for_eval_case
 from minicc.config import BudgetSettings, ContextSettings, PolicySettings, ProviderSettings, SandboxSettings, Settings
@@ -107,15 +112,20 @@ assertions:
     report_data = json.loads(json_path.read_text(encoding="utf-8"))
     assert report_data["case_summary"][0]["pass_rate"] == 1.0
     assert report_data["case_summary"][0]["diff_paths"] == []
+    assert report_data["schema_version"] == 2
+    assert report_data["suite_id"] == result.suite_id
+    run_dir = tmp_path / "runs" / result.cases[0].run_id
     case_result = json.loads(
-        (tmp_path / "runs" / "eval-demo" / "eval_result.json").read_text(encoding="utf-8")
+        (run_dir / "eval_result.json").read_text(encoding="utf-8")
     )
     assert case_result["passed"] is True
     assert case_result["run_status"] == "completed"
     assert case_result["task_success"] is True
     assert case_result["agent_success"] is True
     assert case_result["infrastructure_success"] is True
-    assert (tmp_path / "runs" / "eval-demo" / "eval_result.md").exists()
+    assert (run_dir / "eval_result.md").exists()
+    assert (tmp_path / "reports" / "report.csv").exists()
+    assert (tmp_path / "reports" / "manifest.json").exists()
 
 
 def test_eval_repeat_preserves_independent_run_evidence(tmp_path) -> None:
@@ -151,6 +161,57 @@ assertions: []
     assert len({case.run_id for case in result.cases}) == 3
     assert all((tmp_path / "runs" / case.run_id / "eval_result.json").exists() for case in result.cases)
     assert result.configuration == {"model": "fixed-model", "temperature": 0}
+
+
+def test_two_eval_suites_keep_distinct_manifests_reports_and_run_pointers(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "demo"
+    fixture = case_dir / "fixture"
+    fixture.mkdir(parents=True)
+    (case_dir / "case.yaml").write_text(
+        "name: demo\nprompt: Finish.\nassertions: []\n",
+        encoding="utf-8",
+    )
+
+    def fake_agent_runner(case, state: RunState) -> RunState:
+        state.status = "completed"
+        return state
+
+    results = [
+        run_eval_suite(
+            tmp_path / "cases",
+            runs_root=tmp_path / ".minicc" / "runs",
+            agent_runner=fake_agent_runner,
+            configuration={"model": "fixed", "temperature": 0},
+            milestone="stable-v2.0.2",
+            stage="development_precheck",
+        )
+        for _ in range(2)
+    ]
+    bundles = [
+        write_suite_report(result, tmp_path / ".minicc" / "suites")
+        for result in results
+    ]
+
+    assert results[0].suite_id != results[1].suite_id
+    assert results[0].cases[0].run_id != results[1].cases[0].run_id
+    assert all(bundle.manifest_path.exists() for bundle in bundles)
+    assert all(bundle.report_json_path.exists() for bundle in bundles)
+    for result, bundle in zip(results, bundles, strict=True):
+        manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
+        run_result = json.loads(
+            (tmp_path / ".minicc" / "runs" / result.cases[0].run_id / "eval_result.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert manifest["suite_id"] == result.suite_id
+        assert manifest["runs"][0]["run_id"] == result.cases[0].run_id
+        assert run_result["suite_id"] == result.suite_id
+        assert run_result["evidence"]["suite_manifest"] == str(bundle.manifest_path.resolve())
+        assert run_result["schema_version"] == 2
+        assert run_result["task_success"] is True
+        assert run_result["agent_success"] is True
+        assert run_result["infrastructure_success"] is True
+        assert run_result["policy_outcome"] == "clear"
 
 
 def test_eval_suite_filters_named_cases_and_rejects_unknown_names(tmp_path) -> None:

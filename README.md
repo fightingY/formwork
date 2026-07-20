@@ -80,7 +80,7 @@ M5 已实现稳定的 Trace / Metrics 基础链路：
 - Run 级 Prompt Cache 命中率按所有已上报请求的 hit/miss token 加权计算；供应商未上报缓存字段时为
   `null/unsupported`，与真实 `0%` 命中分开。Viewer 会从 trace 重新计算旧 run 的派生命中率，
   不修改历史 `metrics.json` 和 acceptance 原始证据。
-- 每个结束的 run 生成 `run_report.json` 和 `run_report.md`，统一关联 state、trace、metrics 和 diff 证据。
+- 每个结束的 run 生成带 schema version 的 `run_report.json` 和 `run_report.md`，统一关联 state、trace、metrics、workspace manifest 和 diff 证据。
 - `minicc traces` 可列出本地 `.minicc/runs/<run_id>/trace.jsonl` 和 `metrics.json`。
 - Skill Registry 和 Feedback Memory 暂按 experimental 保留，尚未声明对任务通过率或重复 I/O 的收益。
 
@@ -88,8 +88,10 @@ M6 已实现 eval runner 和只读 trace viewer：
 
 - 新增 `minicc eval <path>`，读取 `case.yaml`，复制 fixture 到独立 run workspace，执行 agent，再运行确定性 assertions。
 - Eval 支持 `command`、`file_exists`、`file_not_exists`、`file_contains`、`file_not_contains`、`diff_allowlist`、`diff_does_not_delete`、`no_source_diff`、`max_changed_files`、`metric_at_least`、`trace_contains_event`、`no_policy_violation` 等断言。
-- Eval 报告写入 `.minicc/runs/eval_reports/eval_report.json` 和 `eval_report.md`。
-- 新增 `minicc web`，使用 Python 标准库启动只读 trace viewer，支持自动刷新、run 搜索、事件筛选、timeline、metrics 和 diff 查看。
+- 每次 eval 生成唯一 `suite_id`；不可变 manifest 与 JSON/Markdown/CSV 报告写入 `.minicc/suites/<suite_id>/`，不再覆盖上一次报告。
+- run、suite、version entry 使用 schema v2 双向关联；旧记录按 `legacy/unknown` 只读展示，不用缺失字段推断失败。
+- 新增 `minicc web`，使用 Python 标准库启动只读 trace viewer，支持 formal/development/history 分类、orphaned 识别，以及缺失可选 artifact 时降级显示。
+- 新增 `minicc cleanup` retention 入口；默认 dry-run，只选择未被 suite、version index 或 acceptance 引用的旧 run，传入 `--apply` 才执行相同计划。
 
 项目内置了一套 M6 capability suite，覆盖仓库理解、失败测试修复、小功能开发、回归测试、有限重构、环境配置修复、长日志调试和安全清理 8 类任务：
 
@@ -100,8 +102,10 @@ uv run minicc eval eval_cases/capability_suite_v1 --execute-local
 不加 `--execute-local` 时会按默认 Docker sandbox 执行。评测结束后可查看：
 
 ```text
-.minicc/runs/eval_reports/eval_report.json
-.minicc/runs/eval_reports/eval_report.md
+.minicc/suites/<suite_id>/manifest.json
+.minicc/suites/<suite_id>/report.json
+.minicc/suites/<suite_id>/report.md
+.minicc/suites/<suite_id>/report.csv
 ```
 
 如需查看 trace viewer，另开一个终端启动只读 Web 服务：
@@ -123,7 +127,7 @@ http://127.0.0.1:8765
 
 ```yaml
 project:
-  milestone: v2.0.1
+  milestone: v2.0.2
 ```
 
 ```text
@@ -225,7 +229,21 @@ uv run minicc run "分析这个仓库并给出测试计划"
 .minicc/runs/<run_id>/metrics.json
 .minicc/runs/<run_id>/run_report.json
 .minicc/runs/<run_id>/run_report.md
+.minicc/suites/<suite_id>/manifest.json
+.minicc/suites/<suite_id>/report.json
+.minicc/suites/<suite_id>/report.md
+.minicc/suites/<suite_id>/report.csv
+.minicc/artifacts/<run_id>/manifest.json
 ```
+
+查看 retention 计划不会删除任何内容：
+
+```bash
+uv run minicc cleanup --older-than-hours 168
+```
+
+确认列表后，只有显式添加 `--apply` 才会删除该次计划选中的未引用 run。被 suite、版本索引或
+`acceptance/` 引用的 run 始终受保护。
 
 若只做本地开发演示，可以显式开启本地执行：
 

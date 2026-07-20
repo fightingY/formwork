@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from minicc.core.ledger import inspect_run
 from minicc.core.run_catalog import RunCatalog
 
 
@@ -55,7 +56,15 @@ def _handler_for(
                 return
             if path == "/runs":
                 milestone = str((query.get("version") or [""])[0])
-                self._send_json(list_runs(runs_root, versions_root=versions_root, milestone=milestone))
+                record_view = str((query.get("view") or ["formal"])[0])
+                self._send_json(
+                    list_runs(
+                        runs_root,
+                        versions_root=versions_root,
+                        milestone=milestone,
+                        record_view=record_view,
+                    )
+                )
                 return
             if path.startswith("/runs/") and path.endswith("/trace"):
                 run_id = path.removeprefix("/runs/").removesuffix("/trace").strip("/")
@@ -110,6 +119,7 @@ def list_runs(
     *,
     versions_root: Path | None = None,
     milestone: str = "",
+    record_view: str = "all",
 ) -> list[dict[str, Any]]:
     if not runs_root.exists():
         return []
@@ -120,6 +130,11 @@ def list_runs(
             str(item.get("run_id")): item
             for item in manifest.get("entries", [])
             if isinstance(item, dict) and item.get("run_id")
+        }
+        catalog_entries = {
+            run_id: entry
+            for run_id, entry in catalog_entries.items()
+            if _record_view_matches(entry, record_view)
         }
         run_dirs = [runs_root / run_id for run_id in catalog_entries if _is_safe_run_id(run_id)]
     else:
@@ -132,6 +147,7 @@ def list_runs(
         state = read_json(run_dir / "state.json")
         trace_summary = summarize_trace(run_dir / "trace.jsonl")
         catalog_entry = catalog_entries.get(run_dir.name, {})
+        ledger_record = inspect_run(run_dir)
         runs.append(
             {
                 "run_id": run_dir.name,
@@ -140,7 +156,16 @@ def list_runs(
                 "stage": catalog_entry.get("stage") or "",
                 "stage_label": catalog_entry.get("stage_label") or "",
                 "result": catalog_entry.get("result") or "",
-                "status": metrics.get("status") or state.get("status"),
+                "schema_version": ledger_record["schema_version"],
+                "schema_semantics": ledger_record["schema_semantics"],
+                "suite_id": catalog_entry.get("suite_id") or ledger_record["suite_id"],
+                "status": ledger_record["status"],
+                "status_source": ledger_record["status_source"],
+                "task_success": ledger_record["task_success"],
+                "agent_success": ledger_record["agent_success"],
+                "infrastructure_success": ledger_record["infrastructure_success"],
+                "policy_outcome": ledger_record["policy_outcome"],
+                "formal_metric_eligible": ledger_record["formal_metric_eligible"],
                 "goal": state.get("goal") or catalog_entry.get("goal", ""),
                 "turns": metrics.get("turns", 0),
                 "bash_actions": metrics.get("bash_actions", 0),
@@ -154,6 +179,9 @@ def list_runs(
                 "last_event": trace_summary["last_event"],
                 "trace_path": str(run_dir / "trace.jsonl"),
                 "metrics_path": str(run_dir / "metrics.json"),
+                "trace_available": (run_dir / "trace.jsonl").is_file(),
+                "metrics_available": (run_dir / "metrics.json").is_file(),
+                "diff_available": (run_dir / "artifacts" / "diff.patch").is_file(),
             }
         )
     return sorted(
@@ -305,6 +333,22 @@ def _version_sort_key(milestone: str) -> tuple[int, ...]:
     if not match:
         return (0,)
     return tuple(int(part) for part in match.group(1).split("."))
+
+
+def _record_view_matches(entry: dict[str, Any], record_view: str) -> bool:
+    view = str(record_view or "all")
+    stage = str(entry.get("stage") or "")
+    try:
+        schema_version = int(entry.get("schema_version", 1))
+    except (TypeError, ValueError):
+        schema_version = 1
+    if view == "formal":
+        return stage == "formal_acceptance"
+    if view == "development":
+        return stage != "formal_acceptance" and schema_version >= 2
+    if view == "history":
+        return schema_version < 2
+    return True
 
 
 def render_index(
@@ -591,6 +635,12 @@ def render_index(
           <select id="versionFilter" aria-label="按版本筛选">
             <option value="">全部未分组记录</option>
           </select>
+          <select id="recordViewFilter" aria-label="按记录类型筛选">
+            <option value="formal">正式记录</option>
+            <option value="development">开发记录</option>
+            <option value="history">历史兼容记录</option>
+            <option value="all">全部记录</option>
+          </select>
           <input id="runSearch" type="search" placeholder="Search runs or goals">
           <select id="statusFilter" aria-label="Filter by status">
             <option value="">All statuses</option>
@@ -598,6 +648,8 @@ def render_index(
             <option value="waiting_approval">waiting_approval</option>
             <option value="completed">completed</option>
             <option value="failed">failed</option>
+            <option value="interrupted">interrupted</option>
+            <option value="orphaned">orphaned</option>
           </select>
         </div>
         <div id="runList" class="run-list"><div class="empty">Loading runs.</div></div>
@@ -637,6 +689,7 @@ def render_index(
       metrics: {{}},
       diff: '',
       selectedRunId: '',
+      selectedRecordView: 'formal',
       activeTab: 'timeline',
       autoRefresh: true,
       intervalId: null,
@@ -708,7 +761,10 @@ def render_index(
     }}
 
     async function refreshRuns() {{
-      const suffix = state.selectedVersion ? `?version=${{encodeURIComponent(state.selectedVersion)}}` : '';
+      const params = new URLSearchParams();
+      if (state.selectedVersion) params.set('version', state.selectedVersion);
+      params.set('view', state.selectedRecordView);
+      const suffix = '?' + params.toString();
       state.runs = await fetchJson('/runs' + suffix);
       if (!state.selectedRunId && state.runs.length) {{
         state.selectedRunId = state.runs[0].run_id;
@@ -886,6 +942,11 @@ def render_index(
     $('statusFilter').addEventListener('change', renderRuns);
     $('versionFilter').addEventListener('change', () => {{
       state.selectedVersion = $('versionFilter').value;
+      state.selectedRunId = '';
+      refreshRuns().catch(console.error);
+    }});
+    $('recordViewFilter').addEventListener('change', () => {{
+      state.selectedRecordView = $('recordViewFilter').value;
       state.selectedRunId = '';
       refreshRuns().catch(console.error);
     }});

@@ -33,3 +33,5 @@ def test_write_metrics_persists_snapshot(tmp_path) -> None:
     assert data == metrics_snapshot(state)
     assert data["turns"] == 2
     assert data["run_id"] == state.run_id
+    assert data["schema_version"] == 2
+    assert data["suite_id"] is None

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from minicc.core.ledger import LEDGER_SCHEMA_VERSION
 from minicc.core.state import RunState
 
 
@@ -23,9 +24,28 @@ def write_run_report(state: RunState) -> tuple[Path, Path] | None:
 def run_report_snapshot(state: RunState) -> dict[str, Any]:
     artifacts_dir = state.artifacts_dir or (state.run_dir / "artifacts" if state.run_dir else None)
     return {
+        "schema_version": LEDGER_SCHEMA_VERSION,
+        "entity_type": "run_report",
         "run_id": state.run_id,
+        "suite_id": state.suite_id,
+        "milestone": state.milestone,
+        "stage": state.stage,
         "goal": state.goal,
         "status": state.status,
+        "result": (
+            "PASS"
+            if state.status == "completed"
+            else "FAIL"
+            if state.status == "failed"
+            else "UNKNOWN"
+        ),
+        "task_success": None,
+        "agent_success": state.status == "completed" if state.status in {"completed", "failed"} else None,
+        "infrastructure_success": (
+            int(state.metrics.get("provider_errors", 0)) == 0
+            and int(state.metrics.get("infrastructure_errors", 0)) == 0
+        ),
+        "policy_outcome": "denied" if int(state.metrics.get("policy_denials", 0)) else "clear",
         "passed": state.status == "completed",
         "final_answer": state.final_answer,
         "state_summary": state.state_summary,

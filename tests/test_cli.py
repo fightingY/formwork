@@ -1,5 +1,7 @@
 import argparse
 import json
+import os
+from datetime import datetime, timezone
 
 from minicc import cli
 from minicc.config import BudgetSettings, ContextSettings, PolicySettings, ProviderSettings, SandboxSettings, Settings
@@ -88,6 +90,66 @@ def test_run_command_fake_provider_writes_complete_evidence_bundle(tmp_path, mon
         "run_report.md",
     ]:
         assert (run_dir / relative_path).exists()
+    assert (tmp_path / ".minicc" / "artifacts" / run_dir.name / "manifest.json").exists()
+
+
+def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    case_dir = tmp_path / "eval_cases" / "demo"
+    fixture = case_dir / "fixture"
+    fixture.mkdir(parents=True)
+    (fixture / "README.md").write_text("ready\n", encoding="utf-8")
+    (case_dir / "case.yaml").write_text(
+        "name: demo\nprompt: Finish.\nassertions: []\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(max_turns=2),
+        context=ContextSettings(),
+        policy=PolicySettings(),
+    )
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        cli,
+        "_build_provider_or_print_error",
+        lambda loaded: FakeProvider(['{"type":"final","answer":"done"}']),
+    )
+    monkeypatch.setattr(cli, "LocalCommandExecutor", FakeExecutor)
+
+    exit_code = cli.eval_command(
+        argparse.Namespace(
+            path=tmp_path / "eval_cases",
+            milestone="stable-v2.0.2",
+            execute_local=True,
+            repeat=1,
+            output_dir=None,
+            case_names=["demo"],
+            release_gate=False,
+        )
+    )
+
+    suites = list((tmp_path / ".minicc" / "suites").iterdir())
+    runs = list((tmp_path / ".minicc" / "runs").iterdir())
+    assert exit_code == 0
+    assert len(suites) == 1
+    assert len(runs) == 1
+    assert {path.name for path in suites[0].iterdir()} == {
+        "manifest.json",
+        "report.json",
+        "report.md",
+        "report.csv",
+    }
+    assert (tmp_path / ".minicc" / "artifacts" / runs[0].name / "manifest.json").exists()
+    version = json.loads(
+        (tmp_path / ".minicc" / "versions" / "stable-v2.0.2" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert version["entry_count"] == 1
+    assert version["entries"][0]["suite_id"] == suites[0].name
+    assert version["entries"][0]["evidence_valid"] is True
 
 
 def test_resume_command_uses_normal_settings_after_approval(tmp_path, monkeypatch) -> None:
@@ -193,3 +255,20 @@ def test_release_gate_requires_clean_docker_commit_and_repeat_matrix() -> None:
         "abc123",
         False,
     )
+
+
+def test_cleanup_command_defaults_to_dry_run_and_apply_uses_same_candidate(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / ".minicc" / "runs" / "old-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "state.json").write_text(
+        '{"run_id":"old-run","goal":"old","status":"failed"}',
+        encoding="utf-8",
+    )
+    old = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()
+    os.utime(run_dir, (old, old))
+
+    assert cli.cleanup_command(argparse.Namespace(older_than_hours=24, apply=False)) == 0
+    assert run_dir.exists()
+    assert cli.cleanup_command(argparse.Namespace(older_than_hours=24, apply=True)) == 0
+    assert not run_dir.exists()

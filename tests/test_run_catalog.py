@@ -77,3 +77,92 @@ def test_index_acceptance_history_imports_report_entries(tmp_path) -> None:
     assert counts["stable-v1.3"] == 1
     assert entries[0]["title"] == "[V1.3][正式验收][C01][第1轮][PASS]"
     assert entries[0]["git_commit"] == "abc123"
+
+
+def test_catalog_rejects_new_eval_entry_with_incomplete_evidence(tmp_path) -> None:
+    run_dir = tmp_path / ".minicc" / "runs" / "run-incomplete"
+    run_dir.mkdir(parents=True)
+    result = type(
+        "Result",
+        (),
+        {
+            "run_id": "run-incomplete",
+            "run_dir": str(run_dir),
+            "run_status": "completed",
+            "passed": True,
+            "name": "C02",
+            "attempt": 1,
+            "suite_id": "suite-1",
+            "milestone": "stable-v2.0.2",
+            "stage": "formal_acceptance",
+            "task_success": True,
+            "agent_success": True,
+            "infrastructure_success": True,
+            "policy_outcome": "clear",
+            "metrics": {},
+        },
+    )()
+
+    entry = RunCatalog(tmp_path / ".minicc" / "versions").register_eval_result(
+        "stable-v2.0.2",
+        result,
+        stage="formal_acceptance",
+        suite_path=str(tmp_path / ".minicc" / "suites" / "suite-1" / "manifest.json"),
+    )
+
+    assert entry is None
+    assert RunCatalog(tmp_path / ".minicc" / "versions").read_manifest("stable-v2.0.2")["entries"] == []
+
+
+def test_catalog_v2_entry_links_complete_run_and_suite_without_dangling_pointer(tmp_path) -> None:
+    run_dir = tmp_path / ".minicc" / "runs" / "run-complete"
+    (run_dir / "artifacts").mkdir(parents=True)
+    for relative in [
+        "state.json",
+        "trace.jsonl",
+        "metrics.json",
+        "workspace_manifest.json",
+    ]:
+        (run_dir / relative).write_text("{}", encoding="utf-8")
+    (run_dir / "eval_result.json").write_text(
+        '{"schema_version":2,"run_id":"run-complete","suite_id":"suite-1"}',
+        encoding="utf-8",
+    )
+    (run_dir / "artifacts" / "diff.patch").write_text("", encoding="utf-8")
+    suite_path = tmp_path / ".minicc" / "suites" / "suite-1" / "manifest.json"
+    suite_path.parent.mkdir(parents=True)
+    suite_path.write_text('{"schema_version":2,"suite_id":"suite-1"}', encoding="utf-8")
+    result = type(
+        "Result",
+        (),
+        {
+            "run_id": "run-complete",
+            "run_dir": str(run_dir),
+            "run_status": "completed",
+            "passed": True,
+            "name": "C02",
+            "attempt": 1,
+            "suite_id": "suite-1",
+            "task_success": True,
+            "agent_success": True,
+            "infrastructure_success": True,
+            "policy_outcome": "clear",
+            "metrics": {},
+        },
+    )()
+
+    catalog = RunCatalog(tmp_path / ".minicc" / "versions")
+    entry = catalog.register_eval_result(
+        "stable-v2.0.2",
+        result,
+        stage="formal_acceptance",
+        suite_path=str(suite_path),
+        report_path=str(suite_path.parent / "report.json"),
+    )
+
+    assert entry is not None
+    assert entry["schema_version"] == 2
+    assert entry["suite_id"] == "suite-1"
+    assert entry["suite_path"] == str(suite_path.resolve())
+    assert entry["evidence_valid"] is True
+    assert entry["formal_metric_eligible"] is True
