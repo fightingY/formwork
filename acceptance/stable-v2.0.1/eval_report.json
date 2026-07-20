@@ -1,0 +1,257 @@
+{
+  "passed": true,
+  "repeat": 3,
+  "configuration": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "deepseek-ai/DeepSeek-V4-Flash",
+    "temperature": 0.0,
+    "sandbox_mode": "locked",
+    "execute_local": false,
+    "json_mode": true,
+    "docker_image": "python@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0",
+    "git_commit": "15713620f67c86dc31b73ac38d0ca969279552e8",
+    "worktree_dirty": false,
+    "release_gate": true,
+    "milestone": "stable-v2.0.1"
+  },
+  "case_summary": [
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "attempts": 3,
+      "passed_runs": 3,
+      "task_success_runs": 3,
+      "agent_success_runs": 3,
+      "infrastructure_success_runs": 3,
+      "pass_rate": 1.0,
+      "statuses": [
+        "completed"
+      ],
+      "average_turns": 5.0,
+      "average_bash_actions": 4.0,
+      "average_duration_ms": 29853.0,
+      "diff_paths": [
+        "src/calculator.py"
+      ],
+      "failure_reasons": []
+    }
+  ],
+  "cases": [
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 1,
+      "run_id": "eval-C02_fix_failing_test-r1-20260720-212003-12a3d4d1",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r1-20260720-212003-12a3d4d1",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "metrics": {
+        "started_at": "2026-07-20T13:20:06.648174+00:00",
+        "completed_at": "2026-07-20T13:20:28.122861+00:00",
+        "total_duration_ms": 21474,
+        "turns": 4,
+        "bash_actions": 3,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "infrastructure_errors": 0,
+        "command_failures": 1,
+        "timeouts": 0,
+        "prompt_tokens": 2962,
+        "completion_tokens": 843,
+        "total_tokens": 3805,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 2962,
+        "cache_metrics_available": true,
+        "cache_metric_requests": 4,
+        "cache_unreported_requests": 0,
+        "cache_observed_hit_tokens": 0,
+        "cache_observed_prompt_tokens": 2962,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 19864,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "checkpoints_created": 5,
+        "resumes_completed": 0,
+        "resume_drift_errors": 0,
+        "max_turns": 10,
+        "run_id": "eval-C02_fix_failing_test-r1-20260720-212003-12a3d4d1",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 2,
+      "run_id": "eval-C02_fix_failing_test-r2-20260720-212029-e9192ba5",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r2-20260720-212029-e9192ba5",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "metrics": {
+        "started_at": "2026-07-20T13:20:33.695250+00:00",
+        "completed_at": "2026-07-20T13:21:09.260134+00:00",
+        "total_duration_ms": 35564,
+        "turns": 7,
+        "bash_actions": 6,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "infrastructure_errors": 0,
+        "command_failures": 0,
+        "timeouts": 0,
+        "prompt_tokens": 6833,
+        "completion_tokens": 993,
+        "total_tokens": 7826,
+        "cached_tokens": 256,
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 6577,
+        "cache_metrics_available": true,
+        "cache_metric_requests": 7,
+        "cache_unreported_requests": 0,
+        "cache_observed_hit_tokens": 256,
+        "cache_observed_prompt_tokens": 6833,
+        "cache_hit_rate": 0.03746524220693692,
+        "latency_ms": 33053,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "checkpoints_created": 8,
+        "resumes_completed": 0,
+        "resume_drift_errors": 0,
+        "max_turns": 10,
+        "run_id": "eval-C02_fix_failing_test-r2-20260720-212029-e9192ba5",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    },
+    {
+      "name": "C02_fix_failing_test",
+      "capability": "debugging",
+      "passed": true,
+      "run_status": "completed",
+      "attempt": 3,
+      "run_id": "eval-C02_fix_failing_test-r3-20260720-212110-9e5a4e92",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-C02_fix_failing_test-r3-20260720-212110-9e5a4e92",
+      "sandbox_mode": "locked",
+      "budget": {
+        "max_turns": 10,
+        "max_bash_actions": 25
+      },
+      "proves": "Agent 能读失败信息、定位代码并做最小修复。",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "metrics": {
+        "started_at": "2026-07-20T13:21:13.654114+00:00",
+        "completed_at": "2026-07-20T13:21:46.175335+00:00",
+        "total_duration_ms": 32521,
+        "turns": 4,
+        "bash_actions": 3,
+        "protocol_errors": 0,
+        "provider_errors": 0,
+        "infrastructure_errors": 0,
+        "command_failures": 1,
+        "timeouts": 0,
+        "prompt_tokens": 3072,
+        "completion_tokens": 1114,
+        "total_tokens": 4186,
+        "cached_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 3072,
+        "cache_metrics_available": true,
+        "cache_metric_requests": 4,
+        "cache_unreported_requests": 0,
+        "cache_observed_hit_tokens": 0,
+        "cache_observed_prompt_tokens": 3072,
+        "cache_hit_rate": 0.0,
+        "latency_ms": 30972,
+        "artifact_bytes": 0,
+        "policy_denials": 0,
+        "approvals_requested": 0,
+        "context_compactions": 0,
+        "context_compacted_steps": 0,
+        "checkpoints_created": 5,
+        "resumes_completed": 0,
+        "resume_drift_errors": 0,
+        "max_turns": 10,
+        "run_id": "eval-C02_fix_failing_test-r3-20260720-212110-9e5a4e92",
+        "status": "completed",
+        "final_answer_present": true
+      },
+      "assertions": [
+        {
+          "type": "command",
+          "passed": true,
+          "message": "command exit_code=0, expected=0: python -m unittest discover -s tests"
+        },
+        {
+          "type": "diff_allowlist",
+          "passed": true,
+          "message": "changed files outside allowlist: []"
+        },
+        {
+          "type": "file_not_contains",
+          "passed": true,
+          "message": "unexpected patterns in src/calculator.py: []"
+        }
+      ]
+    }
+  ]
+}

@@ -23,9 +23,14 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V2.0
+## 当前稳定版本：Stable V2.0.1
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
+
+Stable V2.0.1 已修复 workspace 可见文件、Git baseline 和最终 diff 的证据不一致：Git 项目从固定
+commit 建立快照，dirty/untracked 状态显式固化，ignored 文件默认排除，敏感目录受硬性 deny，
+每个 run 生成 `workspace_manifest.json`。C02 正式 release gate 为 3/3 PASS，完整回归为 132/132
+PASS，证据见 `acceptance/stable-v2.0.1/`。
 
 M1 已实现基础闭环：
 
@@ -383,7 +388,7 @@ uv run pytest -q
 uv run minicc traces
 ```
 
-版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/`、`acceptance/stable-v1.2/`、`acceptance/stable-v1.3/` 和 `acceptance/stable-v2.0/`。V2.0 的 checkpoint/resume 场景、真实模型证据和 V1.3 回归说明见 `acceptance/stable-v2.0/README.md`。
+版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/`、`acceptance/stable-v1.2/`、`acceptance/stable-v1.3/`、`acceptance/stable-v2.0/` 和 `acceptance/stable-v2.0.1/`。V2.0 的 checkpoint/resume 场景与 V1.3 回归说明见 `acceptance/stable-v2.0/README.md`；V2.0.1 的 workspace manifest、diff 一致性和 C02 三连证据见 `acceptance/stable-v2.0.1/README.md`。
 
 ```bash
 uv run minicc eval eval_cases \

@@ -54,14 +54,14 @@ git switch -c stable-v1 8f19cd3
 
 - `archive/long-run-11-of-60` branch 和 `archive-long-run-11-of-60` tag 已存在，旧 5x12 cognition
   结果不再参与 Stable 主线开发或统计。
-- `stable-v1.0` 至 `stable-v2.0` tag 已存在；当前正式能力基线仍以 Stable V2.0 acceptance 为准。
+- `stable-v1.0` 至 `stable-v2.0.1` tag 已存在；当前正式能力基线为 Stable V2.0.1 acceptance。
 - 本地旧 SWE、5x12 run、旧式 memory、开发报告副本和未被正式验收引用的 run 已清理；Git 中的
   archive ref 与 `acceptance/` 正式证据未删除。
-- `.minicc/runs` 当前只保留 45 个正式 Stable eval run 和 1 个 V2.0 真实模型 checkpoint/resume run；
+- `.minicc/runs` 当前只保留 48 个正式 Stable eval run 和 1 个 V2.0 真实模型 checkpoint/resume run；
   版本索引已重建且 dangling pointer 为 0。
-- 当前代码回归为 `125 passed`。该数字只记录交接时快照，后续以各版本实际验收报告为准。
-- Stable V2.0 之后不得直接开始 V2.1；下一开发阶段固定为 V2.0.1，完成 workspace 证据一致性后
-  才能进入 V2.0.2，账本验收后才能开始 context compaction A/B。
+- 当前代码回归为 `132 passed`；V2.0.1 的 C02 release gate 为 3/3 PASS。
+- Stable V2.0.1 已完成 workspace 证据一致性；下一开发阶段固定为 V2.0.2，账本验收后才能开始
+  context compaction A/B。
 - C05-C08、SWE-bench v2、working memory、runtime tools 和 meta review 均不属于 V2.0.1/V2.0.2，
   不得借技术债治理之名提前混入。
 
@@ -237,6 +237,11 @@ git switch -c stable-v1 8f19cd3
   或 acceptance 文件。
 - `uv run pytest -q`、`git diff --check`、C02 连续 3 次和 V2.0 checkpoint 确定性回归全部通过。
 - 每个验收 run 都生成 workspace manifest、state、trace、metrics 和 diff，且路径之间可相互定位。
+
+验收归档（2026-07-20）：实现提交 `15713620f67c86dc31b73ac38d0ca969279552e8` 在 clean
+worktree、固定 Docker digest 和 `release_gate=True` 下完成 C02 三连，结果为 3/3 PASS；完整回归
+132/132 PASS，3 个版本索引条目均可定位且 dangling pointer 为 0。归档位于
+`acceptance/stable-v2.0.1/`，稳定标签为 `stable-v2.0.1`。
 
 失败回退：回到 `stable-v2.0`。不得用新增更多 ignore 名称掩盖 Git tracked 语义错误；不得在
 workspace 证据仍不一致时进入 V2.0.2 或 V2.1。通过后标记 `stable-v2.0.1`。
