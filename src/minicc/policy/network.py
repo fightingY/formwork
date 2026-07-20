@@ -41,19 +41,47 @@ class NetworkPolicy:
 
 
 def _looks_like_network_action(command: str) -> bool:
+    command_code = _strip_heredoc_bodies(command)
+    boundary = r"(?:^[ \t]*|[;&|][ \t]*)"
+    prefixes = r"(?:[A-Za-z_][A-Za-z0-9_]*=\S+[ \t]+)*(?:sudo[ \t]+)?"
     patterns = [
-        r"\bcurl\b",
-        r"\bwget\b",
-        r"\bgit\s+clone\b",
-        r"\bpip\s+install\b",
-        r"\bpython\s+-m\s+pip\s+install\b",
-        r"\buv\s+(sync|add|pip\s+install)\b",
-        r"\bnpm\s+(install|i)\b",
-        r"\bpnpm\s+(install|add)\b",
-        r"\byarn\s+(install|add)\b",
-        r"\bpoetry\s+add\b",
-        r"\bapt(-get)?\s+(update|install)\b",
-        r"\bapk\s+add\b",
+        r"curl\b",
+        r"wget\b",
+        r"git\s+clone\b",
+        r"pip\s+install\b",
+        r"python\s+-m\s+pip\s+install\b",
+        r"uv\s+(sync|add|pip\s+install)\b",
+        r"npm\s+(install|i)\b",
+        r"pnpm\s+(install|add)\b",
+        r"yarn\s+(install|add)\b",
+        r"poetry\s+add\b",
+        r"apt(-get)?\s+(update|install)\b",
+        r"apk\s+add\b",
     ]
-    lowered = command.lower()
-    return any(re.search(pattern, lowered) for pattern in patterns)
+    lowered = command_code.lower()
+    if any(re.search(boundary + prefixes + pattern, lowered, re.MULTILINE) for pattern in patterns):
+        return True
+
+    shell_wrapper = re.compile(
+        boundary + prefixes + r"(?:bash|sh|zsh)[ \t]+-c[ \t]+(['\"])(.*?)\1",
+        re.MULTILINE | re.DOTALL,
+    )
+    return any(_looks_like_network_action(match.group(2)) for match in shell_wrapper.finditer(command_code))
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """Keep shell syntax while excluding literal here-doc payloads from policy matching."""
+    lines = command.splitlines()
+    kept: list[str] = []
+    delimiter: str | None = None
+    declaration = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+    for line in lines:
+        if delimiter is not None:
+            if line.strip() == delimiter:
+                delimiter = None
+            continue
+        kept.append(line)
+        match = declaration.search(line)
+        if match:
+            delimiter = match.group(2)
+    return "\n".join(kept)

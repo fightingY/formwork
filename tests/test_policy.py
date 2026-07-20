@@ -100,6 +100,43 @@ def test_network_policy_can_deny_in_locked_mode_without_approval() -> None:
     assert decision.type == "deny"
 
 
+def test_network_policy_ignores_network_words_inside_file_content() -> None:
+    policy = NetworkPolicy(mode="locked", require_approval=False)
+    heredoc = """cat > ONBOARDING.md << 'EOF'
+## Risk
+The package currently has no `pip install` workflow.
+EOF"""
+
+    assert policy.evaluate(BashAction(command=heredoc), RunState.start("test")).type == "allow"
+    assert (
+        policy.evaluate(
+            BashAction(command="printf '%s\\n' 'No pip install workflow' > ONBOARDING.md"),
+            RunState.start("test"),
+        ).type
+        == "allow"
+    )
+
+
+def test_network_policy_still_denies_executed_package_install_commands() -> None:
+    policy = NetworkPolicy(mode="locked", require_approval=False)
+
+    assert policy.evaluate(BashAction(command="pip install pytest"), RunState.start("test")).type == "deny"
+    assert (
+        policy.evaluate(
+            BashAction(command="cd /workspace && python -m pip install pytest"),
+            RunState.start("test"),
+        ).type
+        == "deny"
+    )
+    assert (
+        policy.evaluate(
+            BashAction(command="bash -c 'pip install pytest'"),
+            RunState.start("test"),
+        ).type
+        == "deny"
+    )
+
+
 def test_approval_policy_can_be_disabled() -> None:
     decision = ApprovalPolicy(enabled=False).evaluate(BashAction(command="rm -r build"), RunState.start("test"))
 
