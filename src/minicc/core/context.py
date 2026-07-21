@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from minicc.core.protocol import action_to_json
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.memory.compaction import CompactionError, ContextCompactor
 from minicc.memory.feedback import FeedbackMemory
 from minicc.skills.registry import SkillRegistry
 from minicc.trace.recorder import TraceRecorder
@@ -48,6 +50,8 @@ class ContextConfig:
     artifact_preview_chars: int = 12_000
     summary_max_chars: int = 12_000
     field_preview_chars: int = 4_000
+    compaction_strategy: Literal["disabled", "deterministic", "semantic"] = "deterministic"
+    retention_markers: tuple[str, ...] = ()
 
 
 class ContextBuilder:
@@ -58,23 +62,31 @@ class ContextBuilder:
         skill_registry: SkillRegistry | None = None,
         feedback_memory: FeedbackMemory | None = None,
         trace: TraceRecorder | None = None,
+        semantic_compactor: ContextCompactor | None = None,
     ) -> None:
         self.config = config or ContextConfig()
+        if self.config.compaction_strategy not in {"disabled", "deterministic", "semantic"}:
+            raise ValueError("compaction_strategy must be disabled, deterministic, or semantic")
+        if self.config.compaction_strategy == "semantic" and semantic_compactor is None:
+            raise ValueError("semantic compaction requires a semantic_compactor")
         self.skill_registry = skill_registry
         self.feedback_memory = feedback_memory
         self.trace = trace
+        self.semantic_compactor = semantic_compactor
 
     def build_messages(
         self,
         state: RunState,
         trajectory: list[TrajectoryStep],
     ) -> list[dict[str, str]]:
+        state.metrics["context_compaction_strategy"] = self.config.compaction_strategy
         recent = self.recent_trajectory(trajectory)
         dynamic_context = self._dynamic_context(state, recent)
         messages = [
             {"role": "system", "content": STABLE_PREFIX},
             {"role": "user", "content": "\n\n".join(dynamic_context)},
         ]
+        self._record_prompt_metrics(state, messages)
         if self.trace is not None:
             self.trace.prompt_built(state, messages)
         return messages
@@ -87,6 +99,31 @@ class ContextBuilder:
         if not trajectory:
             return
 
+        state.metrics["context_compaction_strategy"] = self.config.compaction_strategy
+        if self.config.compaction_strategy == "disabled":
+            estimated_messages = self._build_messages_with_trajectory(state, trajectory)
+            if self._messages_len(estimated_messages) > self.config.max_prompt_chars:
+                state.metrics["context_budget_triggered"] = True
+                state.metrics["context_budget_overflows"] = (
+                    state.metrics.get("context_budget_overflows", 0) + 1
+                )
+                artifact_markers = [
+                    artifact_id
+                    for step in trajectory
+                    for artifact_id in step.observation.artifact_ids
+                ]
+                markers = tuple(dict.fromkeys([*self.config.retention_markers, *artifact_markers]))
+                state.metrics["context_retention_markers"] = list(markers)
+                full_context = self.format_trajectory(trajectory)
+                state.metrics["context_retention_expected"] = len(markers)
+                state.metrics["context_retention_retained"] = sum(
+                    marker in full_context for marker in markers
+                )
+                state.metrics["context_retention_rate"] = (
+                    state.metrics["context_retention_retained"] / len(markers) if markers else None
+                )
+            return
+
         compacted_steps = int(state.metrics.get("context_compacted_steps", 0))
         compactable_end = len(trajectory) - max(self.config.recent_turns, 0)
         if compactable_end <= compacted_steps:
@@ -96,28 +133,79 @@ class ContextBuilder:
         estimated_messages = self._build_messages_with_trajectory(state, uncompressed_trajectory)
         if self._messages_len(estimated_messages) <= self.config.max_prompt_chars:
             return
+        state.metrics["context_budget_triggered"] = True
 
         compactable = trajectory[compacted_steps:compactable_end]
         if not compactable:
-            self._record_compaction(state, "Current recent trajectory exceeds the context budget.")
+            state.metrics["context_budget_overflows"] = state.metrics.get("context_budget_overflows", 0) + 1
             return
 
-        compacted_summary = _format_compaction_summary(compactable, config=self.config)
-        if state.state_summary:
-            state.state_summary = _trim_text(
-                state.state_summary.rstrip() + "\n\n" + compacted_summary,
-                self.config.summary_max_chars,
+        trajectory_text = self.format_trajectory(compactable)
+        event_markers = tuple(
+            dict.fromkeys(
+                [
+                    *self.config.retention_markers,
+                    *(
+                        artifact_id
+                        for step in compactable
+                        for artifact_id in step.observation.artifact_ids
+                    ),
+                ]
+            )
+        )
+        known_markers = state.metrics.get("context_retention_markers", [])
+        if not isinstance(known_markers, list):
+            known_markers = []
+        state.metrics["context_retention_markers"] = list(dict.fromkeys([*known_markers, *event_markers]))
+        strategy = self.config.compaction_strategy
+        if strategy == "semantic":
+            compacted_summary = self._semantic_summary(
+                state,
+                trajectory_text,
+                len(compactable),
+                event_markers,
             )
         else:
-            state.state_summary = compacted_summary
+            deterministic = _format_compaction_summary(compactable, config=self.config)
+            compacted_summary = _append_summary(state.state_summary, deterministic)
+
+        source_text = _append_summary(state.state_summary, trajectory_text)
+        state.state_summary = _preserve_retention_markers(
+            compacted_summary,
+            source_text=source_text,
+            markers=tuple(state.metrics["context_retention_markers"]),
+            max_chars=self.config.summary_max_chars,
+        )
 
         state.metrics["context_compacted_steps"] = compactable_end
+        state.metrics["context_compaction_strategy"] = strategy
+        state.metrics["context_compaction_input_chars"] = (
+            state.metrics.get("context_compaction_input_chars", 0) + len(trajectory_text)
+        )
+        state.metrics["context_compaction_output_chars"] = (
+            state.metrics.get("context_compaction_output_chars", 0) + len(state.state_summary)
+        )
+        state.metrics["context_compaction_chars_saved"] = (
+            state.metrics.get("context_compaction_chars_saved", 0)
+            + max(len(trajectory_text) - len(state.state_summary), 0)
+        )
+        active_context = _append_summary(
+            state.state_summary,
+            self.format_trajectory(trajectory[compactable_end:]),
+        )
+        self._record_retention_metrics(state, active_context=active_context)
         self._record_compaction(
             state,
             f"Compacted {len(compactable)} older trajectory step(s) into state_summary.",
+            strategy=strategy,
+            source_steps=len(compactable),
+            input_chars=len(trajectory_text),
+            output_chars=len(state.state_summary),
         )
 
     def recent_trajectory(self, trajectory: list[TrajectoryStep]) -> list[TrajectoryStep]:
+        if self.config.compaction_strategy == "disabled":
+            return trajectory
         if self.config.recent_turns <= 0:
             return []
         return trajectory[-self.config.recent_turns :]
@@ -210,11 +298,75 @@ class ContextBuilder:
             lines.append("artifact_ids=" + ", ".join(observation.artifact_ids))
         return "\n".join(lines)
 
-    def _record_compaction(self, state: RunState, message: str) -> None:
+    def _semantic_summary(
+        self,
+        state: RunState,
+        trajectory_text: str,
+        source_steps: int,
+        retention_markers: tuple[str, ...],
+    ) -> str:
+        assert self.semantic_compactor is not None
+        try:
+            result = self.semantic_compactor.compact(
+                state,
+                trajectory_text=trajectory_text,
+                existing_summary=state.state_summary,
+                retention_markers=retention_markers,
+                source_steps=source_steps,
+            )
+        except CompactionError as exc:
+            state.metrics["semantic_compaction_failures"] = (
+                state.metrics.get("semantic_compaction_failures", 0) + 1
+            )
+            state.metrics["last_semantic_compaction_error"] = str(exc)
+            deterministic = _format_compaction_summary_from_text(
+                trajectory_text,
+                max_chars=self.config.summary_max_chars,
+            )
+            return _append_summary(state.state_summary, deterministic)
+        state.metrics["semantic_compaction_successes"] = (
+            state.metrics.get("semantic_compaction_successes", 0) + 1
+        )
+        return result.summary
+
+    def _record_compaction(
+        self,
+        state: RunState,
+        message: str,
+        *,
+        strategy: str,
+        source_steps: int,
+        input_chars: int,
+        output_chars: int,
+    ) -> None:
         state.metrics["context_compactions"] = state.metrics.get("context_compactions", 0) + 1
         state.metrics["last_context_compaction"] = message
         if self.trace is not None:
-            self.trace.context_compacted(state, message)
+            self.trace.context_compacted(
+                state,
+                message,
+                strategy=strategy,
+                source_steps=source_steps,
+                input_chars=input_chars,
+                output_chars=output_chars,
+            )
+
+    def _record_prompt_metrics(self, state: RunState, messages: list[dict[str, str]]) -> None:
+        prompt_chars = self._messages_len(messages)
+        samples = int(state.metrics.get("prompt_char_samples", 0)) + 1
+        total = int(state.metrics.get("prompt_chars_total", 0)) + prompt_chars
+        state.metrics["prompt_char_samples"] = samples
+        state.metrics["prompt_chars_total"] = total
+        state.metrics["prompt_chars_max"] = max(int(state.metrics.get("prompt_chars_max", 0)), prompt_chars)
+        state.metrics["prompt_chars_mean"] = total / samples
+
+    def _record_retention_metrics(self, state: RunState, *, active_context: str) -> None:
+        raw_markers = state.metrics.get("context_retention_markers", self.config.retention_markers)
+        markers = tuple(str(marker) for marker in raw_markers)
+        retained = sum(marker in active_context for marker in markers)
+        state.metrics["context_retention_expected"] = len(markers)
+        state.metrics["context_retention_retained"] = retained
+        state.metrics["context_retention_rate"] = retained / len(markers) if markers else None
 
     @staticmethod
     def _messages_len(messages: list[dict[str, str]]) -> int:
@@ -245,14 +397,49 @@ def _format_compaction_summary(steps: list[TrajectoryStep], *, config: ContextCo
     return _trim_text("\n".join(lines), config.summary_max_chars)
 
 
+def _format_compaction_summary_from_text(text: str, *, max_chars: int) -> str:
+    return _trim_text("Compacted trajectory summary:\n" + text, max_chars)
+
+
+def _append_summary(existing: str, addition: str) -> str:
+    if not existing.strip():
+        return addition.strip()
+    if not addition.strip():
+        return existing.strip()
+    return existing.rstrip() + "\n\n" + addition.strip()
+
+
+def _preserve_retention_markers(
+    summary: str,
+    *,
+    source_text: str,
+    markers: tuple[str, ...],
+    max_chars: int,
+) -> str:
+    supported = [marker for marker in markers if marker in source_text]
+    missing = [marker for marker in supported if marker not in summary]
+    footer = ""
+    if missing:
+        footer = "\n\nRetention markers:\n" + "\n".join(f"- {marker}" for marker in missing)
+    if not footer:
+        return _trim_text(summary, max_chars)
+    if 0 < max_chars < len(footer):
+        return _trim_text(summary, max_chars)
+    body_budget = max(max_chars - len(footer), 0)
+    return _trim_text(summary, body_budget).rstrip() + footer
+
+
 def _trim_text(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     marker = "\n...[truncated]...\n"
+    if max_chars <= len(marker):
+        return text[:max_chars]
     keep = max(max_chars - len(marker), 0)
     head = keep // 2
     tail = keep - head
-    return text[:head] + marker + text[-tail:]
+    tail_text = text[-tail:] if tail else ""
+    return text[:head] + marker + tail_text
 
 
 def _budget_guidance(state: RunState) -> str:

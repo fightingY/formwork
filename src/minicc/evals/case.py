@@ -19,6 +19,7 @@ class EvalCase:
     budget: dict[str, Any] = field(default_factory=dict)
     assertions: list[dict[str, Any]] = field(default_factory=list)
     writable_paths: tuple[str, ...] | None = None
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 def discover_cases(path: Path) -> list[EvalCase]:
@@ -54,6 +55,15 @@ def load_case(path: Path) -> EvalCase:
     if not isinstance(budget, dict):
         budget = {}
 
+    context = data.get("context", {})
+    if not isinstance(context, dict):
+        raise ValueError(f"context must be a mapping: {path}")
+    retention_markers = context.get("retention_markers", [])
+    if not isinstance(retention_markers, list) or not all(
+        isinstance(item, str) and item.strip() for item in retention_markers
+    ):
+        raise ValueError(f"context.retention_markers must be a list of non-empty strings: {path}")
+
     workspace = data.get("workspace", {})
     if not isinstance(workspace, dict):
         workspace = {}
@@ -76,6 +86,7 @@ def load_case(path: Path) -> EvalCase:
         budget=budget,
         assertions=[item for item in assertions if isinstance(item, dict)],
         writable_paths=writable_paths,
+        context={**context, "retention_markers": list(retention_markers)},
     )
 
 

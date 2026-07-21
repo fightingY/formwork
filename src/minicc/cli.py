@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -17,8 +18,14 @@ from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
 from minicc.evals.case import EvalCase
+from minicc.evals.compaction_ab import (
+    build_compaction_ab_report,
+    load_suite_report,
+    write_compaction_ab_report,
+)
 from minicc.evals.runner import run_eval_suite, write_eval_report, write_suite_report
 from minicc.memory.feedback import FeedbackMemory
+from minicc.memory.compaction import SemanticCompactor
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
 from minicc.sandbox.docker_runner import DockerCommandExecutor, DockerSandboxConfig, DockerSandboxRunner
@@ -134,7 +141,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Require a clean immutable Git commit, Docker execution, and repeat >= 3.",
     )
+    eval_parser.add_argument(
+        "--context-variant",
+        choices=("a0", "a1"),
+        default=None,
+        help="V2.1 experiment variant: a0=uncompressed baseline, a1=semantic compaction.",
+    )
     eval_parser.set_defaults(handler=eval_command)
+
+    compaction_parser = subparsers.add_parser(
+        "compaction-report",
+        help="Compare paired V2.1 A0/A1 suite reports.",
+    )
+    compaction_parser.add_argument(
+        "--a0",
+        action="append",
+        type=Path,
+        required=True,
+        help="A0 suite report.json; repeat once per independent round.",
+    )
+    compaction_parser.add_argument(
+        "--a1",
+        action="append",
+        type=Path,
+        required=True,
+        help="A1 suite report.json; repeat once per independent round.",
+    )
+    compaction_parser.add_argument("--output-dir", type=Path, required=True)
+    compaction_parser.set_defaults(handler=compaction_report_command)
 
     traces_parser = subparsers.add_parser("traces", help="List runs that have trace or metrics files.")
     traces_parser.set_defaults(handler=traces_command)
@@ -442,6 +476,14 @@ def _build_loop(
         if state is not None and state.run_dir is not None and state.workspace_host_path is not None
         else None
     )
+    semantic_compactor = None
+    if settings.context.compaction_strategy == "semantic":
+        semantic_compactor = SemanticCompactor(
+            provider,
+            trace=trace,
+            max_input_chars=settings.context.semantic_max_input_chars,
+            max_summary_chars=settings.context.summary_max_chars,
+        )
     return AgentLoop(
         provider,
         executor,
@@ -450,9 +492,14 @@ def _build_loop(
                 max_prompt_chars=settings.context.max_prompt_chars,
                 recent_turns=settings.context.recent_turns,
                 artifact_preview_chars=settings.context.artifact_preview_chars,
+                summary_max_chars=settings.context.summary_max_chars,
+                field_preview_chars=settings.context.field_preview_chars,
+                compaction_strategy=settings.context.compaction_strategy,
+                retention_markers=settings.context.retention_markers,
             ),
             skill_registry=SkillRegistry(skill_root),
             feedback_memory=FeedbackMemory(Path.cwd() / ".minicc" / "memory" / "feedback_rules.jsonl"),
+            semantic_compactor=semantic_compactor,
         ),
         policy_chain=build_policy_chain(settings),
         session=session,
@@ -494,6 +541,10 @@ def _load_waiting_state(
 
 def eval_command(args: argparse.Namespace) -> int:
     settings = load_settings()
+    context_variant = getattr(args, "context_variant", None)
+    if context_variant is not None:
+        strategy = "semantic" if context_variant == "a1" else "disabled"
+        settings = replace(settings, context=replace(settings.context, compaction_strategy=strategy))
     milestone = _effective_milestone(settings, args)
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     git_commit, worktree_dirty = _git_evidence(Path.cwd())
@@ -569,6 +620,10 @@ def eval_command(args: argparse.Namespace) -> int:
         "worktree_dirty": worktree_dirty,
         "release_gate": bool(args.release_gate),
         "milestone": milestone,
+        "context_variant": context_variant or "configured",
+        "compaction_strategy": settings.context.compaction_strategy,
+        "max_prompt_chars": settings.context.max_prompt_chars,
+        "recent_turns": settings.context.recent_turns,
     }
 
     result = run_eval_suite(
@@ -610,6 +665,26 @@ def eval_command(args: argparse.Namespace) -> int:
     return 0 if result.passed and ledger_complete else 1
 
 
+def compaction_report_command(args: argparse.Namespace) -> int:
+    if len(args.a0) != len(args.a1):
+        print("compaction-report requires the same number of --a0 and --a1 reports.", file=sys.stderr)
+        return 2
+    try:
+        pairs = [
+            (load_suite_report(a0_path), load_suite_report(a1_path))
+            for a0_path, a1_path in zip(args.a0, args.a1, strict=True)
+        ]
+        report = build_compaction_ab_report(pairs)
+        bundle = write_compaction_ab_report(report, args.output_dir)
+    except (OSError, ValueError) as exc:
+        print(f"Cannot build compaction report: {exc}", file=sys.stderr)
+        return 2
+    print(f"compaction_ab_status: {report['status']}")
+    print(f"json_report: {bundle.json_path}")
+    print(f"markdown_report: {bundle.markdown_path}")
+    return 0 if report["passed"] else 1
+
+
 def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
     budget = settings.budget
     if case.budget:
@@ -624,6 +699,17 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
             ),
         )
 
+    context = replace(
+        settings.context,
+        max_prompt_chars=_context_int(case, "max_prompt_chars", settings.context.max_prompt_chars),
+        recent_turns=_context_int(case, "recent_turns", settings.context.recent_turns),
+        summary_max_chars=_context_int(case, "summary_max_chars", settings.context.summary_max_chars),
+        retention_markers=(
+            tuple(str(item) for item in case.context.get("retention_markers", []))
+            or settings.context.retention_markers
+        ),
+    )
+
     case_policy = settings.policy
     if not case.capability.startswith("hitl"):
         case_policy = PolicySettings(
@@ -637,7 +723,7 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
             provider=settings.provider,
             sandbox=settings.sandbox,
             budget=budget,
-            context=settings.context,
+            context=context,
             policy=case_policy,
             project=settings.project,
             workspace=settings.workspace,
@@ -654,7 +740,7 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
         provider=settings.provider,
         sandbox=sandbox,
         budget=budget,
-        context=settings.context,
+        context=context,
         policy=case_policy,
         project=settings.project,
         workspace=settings.workspace,
@@ -663,6 +749,14 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
 
 def _case_int(case: EvalCase, name: str, default: int) -> int:
     value = case.budget.get(name)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _context_int(case: EvalCase, name: str, default: int) -> int:
+    value = case.context.get(name)
     try:
         return int(value)
     except (TypeError, ValueError):

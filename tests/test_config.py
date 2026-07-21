@@ -58,6 +58,11 @@ budget:
   max_action_timeout_sec: 9
 context:
   artifact_preview_chars: 42
+  summary_max_chars: 2048
+  field_preview_chars: 512
+  compaction_strategy: semantic
+  semantic_max_input_chars: 4096
+  retention_markers: [src/app.py, ROOT_CAUSE]
 provider:
   base_url: https://provider.test/v1
   model: test-model
@@ -94,6 +99,11 @@ workspace:
     assert settings.budget.max_turns == 3
     assert settings.budget.max_action_timeout_sec == 9
     assert settings.context.artifact_preview_chars == 42
+    assert settings.context.summary_max_chars == 2048
+    assert settings.context.field_preview_chars == 512
+    assert settings.context.compaction_strategy == "semantic"
+    assert settings.context.semantic_max_input_chars == 4096
+    assert settings.context.retention_markers == ("src/app.py", "ROOT_CAUSE")
     assert settings.policy.require_approval_for_network is False
     assert settings.project.milestone == "stable-v2.1"
     assert settings.workspace.ignored_allowlist == (

@@ -85,8 +85,60 @@ class TraceRecorder:
         for artifact_id in observation.artifact_ids:
             self.record("artifact_written", state, artifact_id=artifact_id)
 
-    def context_compacted(self, state: RunState, message: str) -> None:
-        self.record("context_compacted", state, message=message)
+    def context_compacted(
+        self,
+        state: RunState,
+        message: str,
+        *,
+        strategy: str = "deterministic",
+        source_steps: int = 0,
+        input_chars: int = 0,
+        output_chars: int = 0,
+    ) -> None:
+        self.record(
+            "context_compacted",
+            state,
+            message=message,
+            strategy=strategy,
+            source_steps=source_steps,
+            input_chars=input_chars,
+            output_chars=output_chars,
+        )
+
+    def semantic_compaction_started(
+        self,
+        state: RunState,
+        *,
+        source_steps: int,
+        input_chars: int,
+    ) -> None:
+        self.record(
+            "semantic_compaction_started",
+            state,
+            source_steps=source_steps,
+            input_chars=input_chars,
+        )
+
+    def semantic_compaction_finished(
+        self,
+        state: RunState,
+        *,
+        source_steps: int,
+        input_chars: int,
+        summary_chars: int,
+        usage: dict[str, Any],
+    ) -> None:
+        self.record(
+            "semantic_compaction_finished",
+            state,
+            source_steps=source_steps,
+            input_chars=input_chars,
+            summary_chars=summary_chars,
+            usage=usage,
+        )
+
+    def semantic_compaction_failed(self, state: RunState, *, error: str) -> None:
+        self.record("semantic_compaction_failed", state, error=error)
 
     def approval_requested(self, state: RunState, question: str) -> None:
         self.record("approval_requested", state, question=question)

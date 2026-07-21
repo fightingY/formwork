@@ -43,6 +43,11 @@ class ContextSettings:
     max_prompt_chars: int = 120_000
     recent_turns: int = 6
     artifact_preview_chars: int = 12_000
+    summary_max_chars: int = 12_000
+    field_preview_chars: int = 4_000
+    compaction_strategy: str = "deterministic"
+    semantic_max_input_chars: int = 60_000
+    retention_markers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -150,6 +155,15 @@ def load_settings() -> Settings:
             max_prompt_chars=_int_config(context_config, "max_prompt_chars", 120_000),
             recent_turns=_int_config(context_config, "recent_turns", 6),
             artifact_preview_chars=_int_config(context_config, "artifact_preview_chars", 12_000),
+            summary_max_chars=_int_config(context_config, "summary_max_chars", 12_000),
+            field_preview_chars=_int_config(context_config, "field_preview_chars", 4_000),
+            compaction_strategy=_compaction_strategy(context_config),
+            semantic_max_input_chars=_int_config(
+                context_config,
+                "semantic_max_input_chars",
+                60_000,
+            ),
+            retention_markers=_str_tuple_config(context_config, "retention_markers"),
         ),
         policy=PolicySettings(
             require_approval_for_network=_bool_config(
@@ -242,6 +256,13 @@ def _str_tuple_config(config: dict[str, Any], key: str) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return ()
     return tuple(str(item) for item in value if str(item).strip())
+
+
+def _compaction_strategy(config: dict[str, Any]) -> str:
+    value = str(config.get("compaction_strategy", "deterministic")).strip().lower()
+    if value not in {"disabled", "deterministic", "semantic"}:
+        raise ValueError("context.compaction_strategy must be disabled, deterministic, or semantic")
+    return value
 
 
 def _float_env_or_config(

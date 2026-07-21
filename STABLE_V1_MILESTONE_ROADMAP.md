@@ -61,7 +61,8 @@ git switch -c stable-v1 8f19cd3
   V2.0.2 发布门中间批次作为归因证据保留，不混入最终提交口径。
 - 当前代码回归为 `147 passed`；V2.0.2 最终提交的 C02 release gate 为 3/3 PASS，V1.3 五案例
   回归为 15/15 PASS，18/18 正式 run 证据完整且可计入指标。
-- Stable V2.0.2 已完成 run/suite/report 技术账本；下一开发阶段固定为 V2.1 context compaction A/B。
+- Stable V2.0.2 已完成 run/suite/report 技术账本；当前已进入 V2.1 context compaction A/B 开发，
+  稳定结论仍须以两轮独立正式实验为准。
 - C05-C08、SWE-bench v2、working memory、runtime tools 和 meta review 均不属于 V2.0.1/V2.0.2，
   不得借技术债治理之名提前混入。
 
@@ -338,6 +339,12 @@ NetworkPolicy here-doc 正文误报均已通过最小回归测试修复，失败
 进入条件：`stable-v2.0.2` 已验收，workspace 与 run/suite/report 证据链均可信。
 
 实验配置只保留 A0 无语义压缩、A1 语义压缩。先运行 1 个 case 各 3 次；稳定后扩展到至少 3 个 case。
+
+开发入口（2026-07-21）：代码版本已进入 `2.1.0.dev0`。A0 明确定义为超过同一 context budget 后仍
+保留完整 trajectory，A1 在相同阈值与 recent window 下执行结构化语义压缩；日常非实验运行继续
+默认使用 V2.0.2 的确定性摘要。`eval_cases/compaction_suite_v1` 提供 3 个专项 case，
+`minicc compaction-report` 强制要求两轮不同 suite id 才可能给出 PASS。此记录只表示开发入口就绪，
+不表示 `stable-v2.1` 已验收。
 
 实验开始前必须先校准缓存统计：run 级命中率按累计 hit/miss token 加权计算，供应商未返回缓存字段时
 显示 `unsupported`，不得与真实 `0%` 命中混为一谈。该阶段只修指标，不宣称缓存优化收益。

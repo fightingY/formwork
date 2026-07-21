@@ -1,5 +1,8 @@
 import json
 
+from minicc.core.provider import ModelResponse, ModelUsage
+from minicc.core.state import RunState
+from minicc.memory.compaction import SemanticCompactor
 from minicc.memory.feedback import FeedbackMemory
 
 
@@ -34,3 +37,29 @@ def test_feedback_memory_omits_unrelated_rules(tmp_path) -> None:
 
     assert memory.relevant_rules("Write docs") == []
     assert memory.context_text("Write docs") == ""
+
+
+def test_semantic_compactor_requests_structured_summary_and_tracks_separate_usage() -> None:
+    class Provider:
+        def complete(self, messages, *, options=None):
+            assert options.json_mode is True
+            assert "src/app.py" in messages[1]["content"]
+            return ModelResponse(
+                text='{"summary":"Root cause: src/app.py"}',
+                raw={},
+                usage=ModelUsage(prompt_tokens=80, completion_tokens=12),
+                latency_ms=7,
+            )
+
+    state = RunState.start("debug")
+    result = SemanticCompactor(Provider()).compact(
+        state,
+        trajectory_text="Read src/app.py and found the root cause.",
+        retention_markers=("src/app.py",),
+        source_steps=2,
+    )
+
+    assert result.summary == "Root cause: src/app.py"
+    assert state.metrics["semantic_compaction_requests"] == 1
+    assert state.metrics["semantic_compaction_prompt_tokens"] == 80
+    assert state.metrics["prompt_tokens"] == 0

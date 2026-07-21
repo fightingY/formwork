@@ -1,6 +1,7 @@
 from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.protocol import BashAction
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.memory.compaction import CompactionError, CompactionResult
 from minicc.memory.feedback import FeedbackMemory
 from minicc.skills.registry import SkillRegistry
 
@@ -53,6 +54,70 @@ def test_context_builder_compacts_old_trajectory_once() -> None:
 
     assert "State summary" in messages[1]["content"]
     assert "sed -n" in messages[1]["content"]
+
+
+def test_context_builder_uses_semantic_compactor_and_records_retention() -> None:
+    class FakeCompactor:
+        def compact(self, state, **kwargs):
+            assert kwargs["source_steps"] == 1
+            assert "src/app.py" in kwargs["trajectory_text"]
+            return CompactionResult(summary="Root cause in src/app.py", input_chars=100, output_chars=24)
+
+    builder = ContextBuilder(
+        ContextConfig(
+            max_prompt_chars=10,
+            recent_turns=1,
+            compaction_strategy="semantic",
+            retention_markers=("src/app.py", "art_0001"),
+        ),
+        semantic_compactor=FakeCompactor(),
+    )
+    state = RunState.start("Debug failure")
+    trajectory = [
+        _step("sed -n '1,120p' src/app.py", "root cause", artifact_ids=["art_0001"]),
+        _step("pytest -q", "passing"),
+    ]
+
+    builder.maybe_compact(state, trajectory)
+
+    assert state.metrics["semantic_compaction_successes"] == 1
+    assert state.metrics["semantic_compaction_failures"] == 0
+    assert state.metrics["context_retention_rate"] == 1.0
+    assert "src/app.py" in state.state_summary
+    assert "art_0001" in state.state_summary
+
+
+def test_context_builder_marks_semantic_failure_and_falls_back() -> None:
+    class FailingCompactor:
+        def compact(self, state, **kwargs):
+            raise CompactionError("invalid response")
+
+    builder = ContextBuilder(
+        ContextConfig(max_prompt_chars=10, recent_turns=1, compaction_strategy="semantic"),
+        semantic_compactor=FailingCompactor(),
+    )
+    state = RunState.start("Debug failure")
+
+    builder.maybe_compact(state, [_step("pytest -q", "failed"), _step("rg bug", "found")])
+
+    assert state.metrics["context_compactions"] == 1
+    assert state.metrics["semantic_compaction_successes"] == 0
+    assert state.metrics["semantic_compaction_failures"] == 1
+    assert "pytest -q" in state.state_summary
+
+
+def test_context_builder_records_prompt_length_distribution() -> None:
+    builder = ContextBuilder()
+    state = RunState.start("Inspect")
+
+    first = builder.build_messages(state, [])
+    second = builder.build_messages(state, [_step("pwd", "ok")])
+
+    lengths = [sum(len(message["content"]) for message in item) for item in (first, second)]
+    assert state.metrics["prompt_char_samples"] == 2
+    assert state.metrics["prompt_chars_total"] == sum(lengths)
+    assert state.metrics["prompt_chars_max"] == max(lengths)
+    assert state.metrics["prompt_chars_mean"] == sum(lengths) / 2
 
 
 def test_context_builder_injects_skill_catalog_and_feedback_memory(tmp_path) -> None:

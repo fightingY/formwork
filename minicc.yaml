@@ -2,7 +2,7 @@ provider:
   json_mode: true
 
 project:
-  milestone: v2.0.2
+  milestone: v2.1-development
 
 workspace:
   ignored_allowlist: []
@@ -25,6 +25,10 @@ context:
   max_prompt_chars: 120000
   recent_turns: 6
   artifact_preview_chars: 12000
+  summary_max_chars: 12000
+  field_preview_chars: 4000
+  compaction_strategy: deterministic
+  semantic_max_input_chars: 60000
 
 policy:
   require_approval_for_network: true

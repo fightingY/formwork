@@ -1,0 +1,31 @@
+name: V21_C03_add_cli_option
+capability: feature_work
+fixture: ../../capability_suite_v1/C03_add_cli_option/fixture
+prompt: >
+  给这个 CLI 的 greet 子命令增加 --json 参数，参数顺序需要支持 greet Alice --json。
+  启用时输出 JSON，默认行为保持不变。请补充或更新现有 unittest，禁止联网或安装依赖，
+  最后使用 `python -m unittest discover -s tests` 验证。
+sandbox_mode: locked
+workspace:
+  writable_paths: ["src/demo_cli.py", "tests/test_cli.py"]
+budget:
+  max_turns: 12
+  max_bash_actions: 30
+context:
+  max_prompt_chars: 1
+  recent_turns: 1
+  summary_max_chars: 3000
+  retention_markers: ["src/demo_cli.py", "tests/test_cli.py", "--json"]
+assertions:
+  - type: command
+    command: "python -m unittest discover -s tests"
+    expect_exit_code: 0
+  - type: command
+    command: "python -m src.demo_cli greet Alice --json | python -m json.tool"
+    expect_exit_code: 0
+  - type: file_contains
+    path: tests/test_cli.py
+    patterns: ["--json"]
+  - type: diff_allowlist
+    paths: ["src/", "tests/"]
+proves: "V2.1 在多文件功能任务中保留关键文件和 patch 状态。"

@@ -27,6 +27,9 @@ def test_load_and_discover_eval_cases(tmp_path) -> None:
 name: demo
 capability: repo_understanding
 prompt: Write docs.
+context:
+  max_prompt_chars: 1000
+  retention_markers: [README.md]
 assertions:
   - type: file_exists
     path: README.md
@@ -39,6 +42,7 @@ assertions:
     assert case.name == "demo"
     assert case.fixture_dir == fixture.resolve()
     assert case.writable_paths is None
+    assert case.context == {"max_prompt_chars": 1000, "retention_markers": ["README.md"]}
     assert discover_cases(tmp_path / "cases") == [case]
 
 
@@ -366,6 +370,11 @@ budget:
   max_turns: 3
   max_bash_actions: 4
   max_action_timeout_sec: 5
+context:
+  max_prompt_chars: 2000
+  recent_turns: 2
+  summary_max_chars: 500
+  retention_markers: [src/app.py]
 """,
         encoding="utf-8",
     )
@@ -382,6 +391,10 @@ budget:
     assert adjusted.budget.max_turns == 3
     assert adjusted.budget.max_bash_actions == 4
     assert adjusted.budget.max_action_timeout_sec == 5
+    assert adjusted.context.max_prompt_chars == 2000
+    assert adjusted.context.recent_turns == 2
+    assert adjusted.context.summary_max_chars == 500
+    assert adjusted.context.retention_markers == ("src/app.py",)
 
 
 def test_ordinary_eval_denies_network_instead_of_waiting_for_approval(tmp_path) -> None:

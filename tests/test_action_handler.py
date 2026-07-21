@@ -108,3 +108,18 @@ def test_action_handler_persists_ambiguous_execution_before_executor_failure(tmp
             "started_at": state.execution_journal[0]["started_at"],
         }
     ]
+
+
+def test_action_handler_counts_repeated_reads_and_searches() -> None:
+    state = RunState.start("inspect")
+    handler = ActionHandler(FakeExecutor())
+
+    handler.handle(BashAction(command="rg TODO src"), state)
+    handler.handle(BashAction(command="rg TODO src"), state)
+    handler.handle(BashAction(command="Get-Content src/app.py"), state)
+    handler.handle(BashAction(command="Get-Content src/app.py"), state)
+
+    assert state.metrics["search_actions"] == 2
+    assert state.metrics["repeated_searches"] == 1
+    assert state.metrics["file_read_actions"] == 2
+    assert state.metrics["repeated_file_reads"] == 1

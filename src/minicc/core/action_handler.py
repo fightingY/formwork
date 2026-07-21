@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -80,6 +81,7 @@ class ActionHandler:
         if decision.type == "rewrite" and decision.rewritten_action is not None:
             action_to_execute = decision.rewritten_action
 
+        _record_io_action(state, action_to_execute.command)
         if self.trace is not None:
             self.trace.sandbox_exec_started(state, action_to_execute.command)
         execution_id = begin_execution(state, action_to_execute, self.session)
@@ -98,3 +100,33 @@ def _policy_violation_observation(decision: PolicyDecision) -> Observation:
         kind="policy_violation",
         message=f"{decision.policy_name}: {decision.reason}",
     )
+
+
+def _record_io_action(state: RunState, command: str) -> None:
+    normalized = " ".join(command.strip().split())
+    lowered = normalized.lower()
+    if not normalized:
+        return
+
+    category: str | None = None
+    if re.search(r"(^|[;&|]\s*)(rg|grep|find|fd)(\.exe)?\b", lowered) or "select-string" in lowered:
+        category = "search"
+    elif re.search(r"(^|[;&|]\s*)(cat|head|tail|type|get-content)(\.exe)?\b", lowered):
+        category = "file_read"
+    elif re.search(r"(^|[;&|]\s*)sed\s+-n\b", lowered):
+        category = "file_read"
+    if category is None:
+        return
+
+    metric_name = "search_actions" if category == "search" else "file_read_actions"
+    repeated_name = "repeated_searches" if category == "search" else "repeated_file_reads"
+    signatures = state.metrics.setdefault("io_action_signatures", {})
+    if not isinstance(signatures, dict):
+        signatures = {}
+        state.metrics["io_action_signatures"] = signatures
+    key = f"{category}:{normalized}"
+    previous = int(signatures.get(key, 0))
+    signatures[key] = previous + 1
+    state.metrics[metric_name] = int(state.metrics.get(metric_name, 0)) + 1
+    if previous:
+        state.metrics[repeated_name] = int(state.metrics.get(repeated_name, 0)) + 1
