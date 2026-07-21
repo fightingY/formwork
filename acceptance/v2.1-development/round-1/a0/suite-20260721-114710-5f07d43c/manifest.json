@@ -1,0 +1,107 @@
+{
+  "schema_version": 2,
+  "entity_type": "suite",
+  "suite_id": "suite-20260721-114710-5f07d43c",
+  "milestone": "v2.1-development",
+  "stage": "formal_acceptance",
+  "created_at": "2026-07-21T03:47:10.434190+00:00",
+  "completed_at": "2026-07-21T03:49:12.226118+00:00",
+  "status": "completed",
+  "result": "PASS",
+  "task_success": true,
+  "agent_success": true,
+  "infrastructure_success": true,
+  "policy_outcome": "clear",
+  "configuration": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "deepseek-ai/DeepSeek-V4-Flash",
+    "temperature": 0.0,
+    "sandbox_mode": "locked",
+    "execute_local": false,
+    "json_mode": true,
+    "docker_image": "python@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0",
+    "git_commit": "b6502e8f51b45fb058e189977f5b6c8e1db6efa8",
+    "worktree_dirty": false,
+    "release_gate": true,
+    "milestone": "v2.1-development",
+    "context_variant": "a0",
+    "compaction_strategy": "disabled",
+    "max_prompt_chars": 120000,
+    "recent_turns": 6
+  },
+  "run_ids": [
+    "eval-V21_C02_fix_failing_test-r1-20260721-114710-f0a484ad",
+    "eval-V21_C02_fix_failing_test-r2-20260721-114752-bab74887",
+    "eval-V21_C02_fix_failing_test-r3-20260721-114815-288725f6"
+  ],
+  "runs": [
+    {
+      "run_id": "eval-V21_C02_fix_failing_test-r1-20260721-114710-f0a484ad",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r1-20260721-114710-f0a484ad",
+      "case_name": "V21_C02_fix_failing_test",
+      "attempt": 1,
+      "status": "completed",
+      "result": "PASS",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r1-20260721-114710-f0a484ad\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r1-20260721-114710-f0a484ad\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r1-20260721-114710-f0a484ad\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r1-20260721-114710-f0a484ad\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r1-20260721-114710-f0a484ad\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r1-20260721-114710-f0a484ad\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260721-114710-5f07d43c\\manifest.json"
+      }
+    },
+    {
+      "run_id": "eval-V21_C02_fix_failing_test-r2-20260721-114752-bab74887",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r2-20260721-114752-bab74887",
+      "case_name": "V21_C02_fix_failing_test",
+      "attempt": 2,
+      "status": "completed",
+      "result": "PASS",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r2-20260721-114752-bab74887\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r2-20260721-114752-bab74887\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r2-20260721-114752-bab74887\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r2-20260721-114752-bab74887\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r2-20260721-114752-bab74887\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r2-20260721-114752-bab74887\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260721-114710-5f07d43c\\manifest.json"
+      }
+    },
+    {
+      "run_id": "eval-V21_C02_fix_failing_test-r3-20260721-114815-288725f6",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r3-20260721-114815-288725f6",
+      "case_name": "V21_C02_fix_failing_test",
+      "attempt": 3,
+      "status": "completed",
+      "result": "PASS",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r3-20260721-114815-288725f6\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r3-20260721-114815-288725f6\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r3-20260721-114815-288725f6\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r3-20260721-114815-288725f6\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r3-20260721-114815-288725f6\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-V21_C02_fix_failing_test-r3-20260721-114815-288725f6\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260721-114710-5f07d43c\\manifest.json"
+      }
+    }
+  ],
+  "reports": {
+    "json": "report.json",
+    "markdown": "report.md",
+    "csv": "report.csv"
+  }
+}
