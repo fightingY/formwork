@@ -18,6 +18,8 @@ class ProviderSettings:
     include_usage: bool = True
     json_mode: bool = True
     timeout_sec: float = 120.0
+    max_completion_tokens: int = 2_048
+    max_retries: int = 2
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,7 @@ class ContextSettings:
     field_preview_chars: int = 4_000
     compaction_strategy: str = "deterministic"
     semantic_max_input_chars: int = 60_000
+    semantic_max_completion_tokens: int = 2_048
     retention_markers: tuple[str, ...] = ()
 
 
@@ -130,6 +133,12 @@ def load_settings() -> Settings:
                 "json_mode",
                 True,
             ),
+            max_completion_tokens=_int_config(
+                provider_config,
+                "max_completion_tokens",
+                2_048,
+            ),
+            max_retries=_int_config(provider_config, "max_retries", 2),
             timeout_sec=_float_env_or_config(
                 "MINICC_PROVIDER_TIMEOUT_SEC",
                 provider_config,
@@ -162,6 +171,11 @@ def load_settings() -> Settings:
                 context_config,
                 "semantic_max_input_chars",
                 60_000,
+            ),
+            semantic_max_completion_tokens=_int_config(
+                context_config,
+                "semantic_max_completion_tokens",
+                2_048,
             ),
             retention_markers=_str_tuple_config(context_config, "retention_markers"),
         ),

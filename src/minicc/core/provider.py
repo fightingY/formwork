@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
@@ -33,6 +34,7 @@ class CompletionOptions:
     stream: bool = False
     include_usage: bool = True
     json_mode: bool = True
+    max_tokens: int | None = None
 
 
 class ModelProvider(Protocol):
@@ -48,9 +50,16 @@ class ModelProvider(Protocol):
 class ProviderError(RuntimeError):
     """Expected failure while communicating with a model provider."""
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        timeout: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.timeout = timeout
 
 
 class OpenAICompatibleProvider:
@@ -63,11 +72,13 @@ class OpenAICompatibleProvider:
         api_key: str,
         model: str,
         timeout_sec: float = 120,
+        max_retries: int = 2,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.timeout_sec = timeout_sec
+        self.max_retries = max(0, max_retries)
 
     def complete(
         self,
@@ -82,6 +93,8 @@ class OpenAICompatibleProvider:
             "temperature": options.temperature,
             "stream": options.stream,
         }
+        if options.max_tokens is not None and options.max_tokens > 0:
+            payload["max_tokens"] = options.max_tokens
         if options.stream and options.include_usage:
             payload["stream_options"] = {"include_usage": True}
         if options.json_mode:
@@ -91,7 +104,7 @@ class OpenAICompatibleProvider:
 
         started = time.perf_counter()
         last_error: ProviderError | None = None
-        for attempt in range(3):
+        for attempt in range(self.max_retries + 1):
             try:
                 if options.stream:
                     raw, text, usage_raw = self._complete_stream(payload)
@@ -108,9 +121,9 @@ class OpenAICompatibleProvider:
                     # and schema validation without requiring configuration edits.
                     payload.pop("response_format", None)
                     continue
-                if attempt == 2:
+                if attempt >= self.max_retries:
                     raise
-                time.sleep(0.5)
+                time.sleep(min(8.0, 1.0 * (2**attempt)))
         else:
             raise last_error or ProviderError("Provider request failed")
 
@@ -129,8 +142,18 @@ class OpenAICompatibleProvider:
         }
 
     def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+        timed_out = False
+
+        def close_client() -> None:
+            nonlocal timed_out
+            timed_out = True
+            client.close()
+
+        watchdog = threading.Timer(self.timeout_sec, close_client)
+        watchdog.daemon = True
         try:
             with httpx.Client(timeout=self.timeout_sec) as client:
+                watchdog.start()
                 response = client.post(
                     f"{self.base_url}/chat/completions",
                     headers=self._headers(),
@@ -138,13 +161,25 @@ class OpenAICompatibleProvider:
                 )
                 response.raise_for_status()
                 data = response.json()
+                if timed_out:
+                    raise ProviderError(
+                        f"Provider request exceeded timeout of {self.timeout_sec:g}s",
+                        timeout=True,
+                    )
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
                 f"Provider HTTP request failed: {type(exc).__name__}",
                 status_code=exc.response.status_code,
             ) from exc
         except httpx.HTTPError as exc:
+            if timed_out:
+                raise ProviderError(
+                    f"Provider request exceeded timeout of {self.timeout_sec:g}s",
+                    timeout=True,
+                ) from exc
             raise ProviderError(f"Provider HTTP request failed: {type(exc).__name__}") from exc
+        finally:
+            watchdog.cancel()
         if not isinstance(data, dict):
             raise ProviderError("Provider response was not a JSON object.")
         return data
@@ -156,9 +191,19 @@ class OpenAICompatibleProvider:
         chunks: list[dict[str, Any]] = []
         content_parts: list[str] = []
         usage_raw: Mapping[str, Any] | None = None
+        timed_out = False
+
+        def close_client() -> None:
+            nonlocal timed_out
+            timed_out = True
+            client.close()
+
+        watchdog = threading.Timer(self.timeout_sec, close_client)
+        watchdog.daemon = True
 
         try:
             with httpx.Client(timeout=self.timeout_sec) as client:
+                watchdog.start()
                 with client.stream(
                     "POST",
                     f"{self.base_url}/chat/completions",
@@ -185,13 +230,25 @@ class OpenAICompatibleProvider:
                             piece = delta.get("content")
                             if piece:
                                 content_parts.append(str(piece))
+                if timed_out:
+                    raise ProviderError(
+                        f"Provider request exceeded timeout of {self.timeout_sec:g}s",
+                        timeout=True,
+                    )
         except httpx.HTTPStatusError as exc:
             raise ProviderError(
                 f"Provider HTTP request failed: {type(exc).__name__}",
                 status_code=exc.response.status_code,
             ) from exc
         except httpx.HTTPError as exc:
+            if timed_out:
+                raise ProviderError(
+                    f"Provider request exceeded timeout of {self.timeout_sec:g}s",
+                    timeout=True,
+                ) from exc
             raise ProviderError(f"Provider HTTP request failed: {type(exc).__name__}") from exc
+        finally:
+            watchdog.cancel()
 
         return {"chunks": chunks, "usage": usage_raw}, "".join(content_parts), usage_raw
 

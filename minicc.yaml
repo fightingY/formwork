@@ -1,5 +1,8 @@
 provider:
   json_mode: true
+  max_completion_tokens: 2048
+  timeout_sec: 300
+  max_retries: 2
 
 project:
   milestone: v2.1-development
@@ -29,6 +32,7 @@ context:
   field_preview_chars: 4000
   compaction_strategy: deterministic
   semantic_max_input_chars: 60000
+  semantic_max_completion_tokens: 2048
 
 policy:
   require_approval_for_network: true

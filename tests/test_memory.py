@@ -43,6 +43,7 @@ def test_semantic_compactor_requests_structured_summary_and_tracks_separate_usag
     class Provider:
         def complete(self, messages, *, options=None):
             assert options.json_mode is True
+            assert options.max_tokens == 2048
             assert "src/app.py" in messages[1]["content"]
             return ModelResponse(
                 text='{"summary":"Root cause: src/app.py"}',

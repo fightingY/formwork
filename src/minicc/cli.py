@@ -17,7 +17,7 @@ from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
-from minicc.evals.case import EvalCase
+from minicc.evals.case import EvalCase, discover_cases
 from minicc.evals.compaction_ab import (
     build_compaction_ab_report,
     load_suite_report,
@@ -455,6 +455,7 @@ def _build_provider_or_print_error(settings: Settings) -> OpenAICompatibleProvid
         api_key=settings.api_key or "",
         model=settings.model or "",
         timeout_sec=settings.provider.timeout_sec,
+        max_retries=settings.provider.max_retries,
     )
 
 
@@ -483,6 +484,7 @@ def _build_loop(
             trace=trace,
             max_input_chars=settings.context.semantic_max_input_chars,
             max_summary_chars=settings.context.summary_max_chars,
+            max_completion_tokens=settings.context.semantic_max_completion_tokens,
         )
     return AgentLoop(
         provider,
@@ -513,6 +515,7 @@ def _build_loop(
                 stream=settings.provider.stream if stream is None else stream,
                 include_usage=settings.provider.include_usage,
                 json_mode=settings.provider.json_mode,
+                max_tokens=settings.provider.max_completion_tokens,
             ),
             interrupt_after_steps=interrupt_after_steps,
         ),
@@ -608,6 +611,12 @@ def eval_command(args: argparse.Namespace) -> int:
             if runner is not None:
                 runner.cleanup(state.container_name)
 
+    selected_case_names = set(args.case_names or [])
+    case_contexts = {
+        case.name: dict(case.context)
+        for case in discover_cases(Path(args.path))
+        if not selected_case_names or case.name in selected_case_names
+    }
     configuration = {
         "base_url": settings.base_url or "",
         "model": settings.model or "",
@@ -615,6 +624,9 @@ def eval_command(args: argparse.Namespace) -> int:
         "sandbox_mode": settings.sandbox.mode,
         "execute_local": bool(args.execute_local),
         "json_mode": settings.provider.json_mode,
+        "max_completion_tokens": settings.provider.max_completion_tokens,
+        "provider_max_retries": settings.provider.max_retries,
+        "provider_timeout_sec": settings.provider.timeout_sec,
         "docker_image": settings.sandbox.image,
         "git_commit": git_commit,
         "worktree_dirty": worktree_dirty,
@@ -624,6 +636,8 @@ def eval_command(args: argparse.Namespace) -> int:
         "compaction_strategy": settings.context.compaction_strategy,
         "max_prompt_chars": settings.context.max_prompt_chars,
         "recent_turns": settings.context.recent_turns,
+        "semantic_max_completion_tokens": settings.context.semantic_max_completion_tokens,
+        "case_contexts": case_contexts,
     }
 
     result = run_eval_suite(

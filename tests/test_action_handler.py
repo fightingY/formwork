@@ -118,8 +118,11 @@ def test_action_handler_counts_repeated_reads_and_searches() -> None:
     handler.handle(BashAction(command="rg TODO src"), state)
     handler.handle(BashAction(command="Get-Content src/app.py"), state)
     handler.handle(BashAction(command="Get-Content src/app.py"), state)
+    blocked = handler.handle(BashAction(command="Get-Content src/app.py"), state)
 
     assert state.metrics["search_actions"] == 2
     assert state.metrics["repeated_searches"] == 1
-    assert state.metrics["file_read_actions"] == 2
-    assert state.metrics["repeated_file_reads"] == 1
+    assert state.metrics["file_read_actions"] == 3
+    assert state.metrics["repeated_file_reads"] == 2
+    assert blocked.steps[0].observation.kind == "policy_violation"
+    assert "repeated I/O guard" in blocked.steps[0].observation.message

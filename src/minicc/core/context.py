@@ -234,6 +234,14 @@ class ContextBuilder:
         budget_guidance = _budget_guidance(state)
         if budget_guidance:
             dynamic_context.append(budget_guidance)
+        repeated_reads = int(state.metrics.get("repeated_file_reads", 0) or 0)
+        repeated_searches = int(state.metrics.get("repeated_searches", 0) or 0)
+        if repeated_reads or repeated_searches:
+            dynamic_context.append(
+                "I/O repetition guard: the same file/search action has already been repeated "
+                f"({repeated_reads} file read(s), {repeated_searches} search(es)). "
+                "Do not repeat it again; make the smallest required patch or run the authoritative verification now."
+            )
         if state.constraints:
             dynamic_context.append("Constraints:\n" + "\n".join(f"- {item}" for item in state.constraints))
         if state.state_summary:
@@ -327,7 +335,11 @@ class ContextBuilder:
         state.metrics["semantic_compaction_successes"] = (
             state.metrics.get("semantic_compaction_successes", 0) + 1
         )
-        return result.summary
+        # The model summary is useful but must not be allowed to erase the
+        # authoritative fact that compaction happened while the run is still
+        # active.  Without this footer a terse summary can incorrectly report
+        # "no open work", causing the next turn to repeat inspection forever.
+        return _append_summary(result.summary, _continuity_footer(state))
 
     def _record_compaction(
         self,
@@ -427,6 +439,22 @@ def _preserve_retention_markers(
         return _trim_text(summary, max_chars)
     body_budget = max(max_chars - len(footer), 0)
     return _trim_text(summary, body_budget).rstrip() + footer
+
+
+def _continuity_footer(state: RunState) -> str:
+    """Keep unfinished-run semantics explicit across semantic compaction."""
+
+    lines = [
+        "Execution continuity (authoritative):",
+        f"- Goal: {state.goal}",
+        f"- Run status: {state.status}; the goal is not complete while this run is active.",
+        "- Continue from the last observation and take the next necessary action; do not treat a missing patch as completion.",
+    ]
+    if state.current_plan:
+        lines.append("- Current plan: " + " | ".join(str(item) for item in state.current_plan))
+    if state.open_questions:
+        lines.append("- Open questions: " + " | ".join(str(item) for item in state.open_questions))
+    return "\n".join(lines)
 
 
 def _trim_text(text: str, max_chars: int) -> str:

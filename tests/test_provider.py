@@ -1,3 +1,5 @@
+import pytest
+
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider, ProviderError, extract_chat_text, parse_model_usage
 
 
@@ -94,6 +96,74 @@ def test_provider_prefers_native_json_mode(monkeypatch) -> None:
     provider.complete([], options=CompletionOptions(json_mode=True))
 
     assert payloads[0]["response_format"] == {"type": "json_object"}
+
+
+def test_provider_applies_completion_token_limit(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+    )
+    payloads = []
+
+    def fake_post_json(payload):
+        payloads.append(payload)
+        return {"choices": [{"message": {"content": '{"summary":"short"}'}}]}
+
+    monkeypatch.setattr(provider, "_post_json", fake_post_json)
+
+    provider.complete([], options=CompletionOptions(max_tokens=2048))
+
+    assert payloads[0]["max_tokens"] == 2048
+
+
+def test_provider_retries_after_absolute_timeout(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+    )
+    calls = []
+
+    attempts = 0
+
+    def timed_out_twice(payload):
+        nonlocal attempts
+        calls.append(payload)
+        attempts += 1
+        if attempts < 3:
+            raise ProviderError("deadline", timeout=True)
+        return {"choices": [{"message": {"content": '{"type":"final","answer":"done"}'}}]}
+
+    monkeypatch.setattr(provider, "_post_json", timed_out_twice)
+    monkeypatch.setattr("minicc.core.provider.time.sleep", lambda seconds: None)
+
+    response = provider.complete([])
+
+    assert response.text == '{"type":"final","answer":"done"}'
+    assert len(calls) == 3
+
+
+def test_provider_honors_retry_limit(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+        max_retries=1,
+    )
+    calls = []
+
+    def timed_out(payload):
+        calls.append(payload)
+        raise ProviderError("deadline", timeout=True)
+
+    monkeypatch.setattr(provider, "_post_json", timed_out)
+    monkeypatch.setattr("minicc.core.provider.time.sleep", lambda seconds: None)
+
+    with pytest.raises(ProviderError, match="deadline"):
+        provider.complete([])
+
+    assert len(calls) == 2
 
 
 def test_provider_falls_back_when_native_json_mode_is_unsupported(monkeypatch) -> None:

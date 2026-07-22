@@ -62,11 +62,14 @@ context:
   field_preview_chars: 512
   compaction_strategy: semantic
   semantic_max_input_chars: 4096
+  semantic_max_completion_tokens: 1024
   retention_markers: [src/app.py, ROOT_CAUSE]
 provider:
   base_url: https://provider.test/v1
   model: test-model
   temperature: 0.7
+  max_completion_tokens: 1024
+  max_retries: 4
   stream: true
   include_usage: false
   json_mode: false
@@ -91,6 +94,8 @@ workspace:
     assert settings.provider.stream is True
     assert settings.provider.include_usage is False
     assert settings.provider.json_mode is False
+    assert settings.provider.max_completion_tokens == 1024
+    assert settings.provider.max_retries == 4
     assert settings.sandbox.image == "python:3.12-slim"
     assert settings.sandbox.cpus == "2"
     assert settings.sandbox.memory == "2g"
@@ -103,6 +108,7 @@ workspace:
     assert settings.context.field_preview_chars == 512
     assert settings.context.compaction_strategy == "semantic"
     assert settings.context.semantic_max_input_chars == 4096
+    assert settings.context.semantic_max_completion_tokens == 1024
     assert settings.context.retention_markers == ("src/app.py", "ROOT_CAUSE")
     assert settings.policy.require_approval_for_network is False
     assert settings.project.milestone == "stable-v2.1"

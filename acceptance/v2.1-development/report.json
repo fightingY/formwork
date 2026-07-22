@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "entity_type": "v2.1_development_archive",
+  "milestone": "v2.1",
+  "status": "INCONCLUSIVE",
+  "stable": false,
+  "git_commit": "consolidated-local-commit",
+  "worktree_dirty": false,
+  "evidence": {
+    "a0_round2": {
+      "suite_id": "suite-20260722-v21-round2-a0-final-e96655e",
+      "cases": ["V21_C02_fix_failing_test", "V21_C03_add_cli_option", "V21_C07_large_log_debugging"],
+      "repeats_per_case": 3,
+      "passed_runs": 9,
+      "total_runs": 9
+    },
+    "a1_round1": {
+      "suite_id": "suite-20260721-114932-d19d9a3c",
+      "cases": ["V21_C02_fix_failing_test"],
+      "repeats_per_case": 3,
+      "passed_runs": 3,
+      "total_runs": 3
+    }
+  },
+  "gate": {
+    "required_independent_rounds": 2,
+    "completed_qualifying_rounds": 1,
+    "required_cases": 3,
+    "a1_second_round_complete": false,
+    "stable_tag_created": false
+  },
+  "verification": {
+    "regression": "159 passed",
+    "provider_timeout_sec": 300,
+    "provider_max_retries": 2,
+    "semantic_compaction_continuity_guard": true
+  },
+  "retained_run_policy": "Only runs referenced by the retained suites are kept; failed and interrupted retries are excluded from acceptance."
+}

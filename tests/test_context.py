@@ -87,6 +87,24 @@ def test_context_builder_uses_semantic_compactor_and_records_retention() -> None
     assert "art_0001" in state.state_summary
 
 
+def test_semantic_summary_preserves_active_run_continuity() -> None:
+    class FakeCompactor:
+        def compact(self, state, **kwargs):
+            return CompactionResult(summary="No open work identified", input_chars=10, output_chars=22)
+
+    builder = ContextBuilder(
+        ContextConfig(max_prompt_chars=10, recent_turns=1, compaction_strategy="semantic"),
+        semantic_compactor=FakeCompactor(),
+    )
+    state = RunState.start("Implement the pending change")
+    builder.maybe_compact(state, [_step("cat src/app.py", "inspected"), _step("cat tests", "inspected")])
+
+    assert "Execution continuity (authoritative)" in state.state_summary
+    assert "Implement the pending change" in state.state_summary
+    assert "goal is not complete" in state.state_summary
+    assert "next necessary action" in state.state_summary
+
+
 def test_context_builder_marks_semantic_failure_and_falls_back() -> None:
     class FailingCompactor:
         def compact(self, state, **kwargs):
@@ -155,6 +173,18 @@ def test_context_builder_adds_budget_pressure_after_thresholds() -> None:
 
     assert "Converge now" in at_sixty
     assert "Stop exploring" in at_eighty
+
+
+def test_context_builder_adds_io_repetition_guard() -> None:
+    builder = ContextBuilder()
+    state = RunState.start("Finish the pending patch")
+    state.metrics["repeated_file_reads"] = 2
+    state.metrics["repeated_searches"] = 1
+
+    content = builder.build_messages(state, [])[1]["content"]
+
+    assert "I/O repetition guard" in content
+    assert "make the smallest required patch" in content
 
 
 def _step(command: str, message: str, artifact_ids: list[str] | None = None) -> TrajectoryStep:
