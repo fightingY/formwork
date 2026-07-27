@@ -18,12 +18,12 @@ miniCC 用极简 bash / ask / final action space 承载模型智能，用 harnes
 M1: uv 项目骨架、Provider Adapter、Action Protocol、Minimal Agent Loop
 M2: workspace copy、Docker sandbox、Observation contract、Artifact store
 M3: PolicyChain、Command/Network/Budget policy、ask/approval/resume
-M4: Prompt builder、prompt cache 友好布局、context budget、experimental compression
+M4: Prompt builder、prompt cache 友好布局、context budget、semantic compaction
 M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V2.0.2
+## 当前稳定版本：Stable V2.1
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -38,10 +38,10 @@ Stable V2.0.2 已把 run、suite、version index 和 report 拆成 schema v2 技
 五案例回归为 15/15 PASS，18 个正式 run 的证据与指标资格均为 18/18；完整归档见
 `acceptance/stable-v2.0.2/`。
 
-当前开发版本为 `2.1.0.dev0`，已进入 V2.1 context compaction A/B 阶段；Stable V2.0.2 仍是
-正式能力基线。V2.1 目前提供 A0 完整轨迹基线、A1 语义压缩、关键事实 retention oracle、
-prompt 长度分布、重复读取/搜索计数和独立复跑对比报告。在两轮正式 A/B 达标前，语义压缩仍是
-experimental，不作为稳定收益声明。
+当前发布版本为 `2.1.0`。Stable V2.1 已完成两轮独立 Context Compaction A/B：A0/A1 首轮均为
+3/3 PASS，第二轮均为 9/9 PASS；A1 的平均 prompt 长度相对 A0 分别下降 9.27% 和 46.60%，
+关键事实保留率均为 100%，重复 I/O 满足验收容差。完整归档见
+`acceptance/stable-v2.1/`。Skill/Feedback Memory 仍保持 experimental。
 
 M1 已实现基础闭环：
 
@@ -82,9 +82,9 @@ M4 已实现稳定的上下文构建基础链路：
 - 新增 `ContextBuilder`，统一承载 prompt assembly、context budget 和 compression 逻辑。
 - Prompt 按 Stable Prefix / Dynamic Context 分层组装，把 action 协议、policy 摘要和 observation contract 固定前置。
 - 实际项目统一使用 `ContextBuilder.build_messages()`，不再保留 `PromptBuilder` 兼容层。
-- V2.1 的 A0 保留完整 trajectory，A1 使用结构化语义摘要；日常运行仍默认使用 V2.0.2 的确定性摘要。
+- V2.1 的 A0 保留完整 trajectory，A1 使用结构化语义摘要；日常运行仍默认使用 deterministic strategy。
 - 语义压缩失败会显式记录并回退确定性摘要，但该 run 不具备 A1 验收资格。
-- Semantic compaction 仍为 experimental，需通过两轮独立 A/B 后才能作为稳定能力对外声明。
+- Semantic compaction 已通过 Stable V2.1 两轮独立 A/B；semantic strategy 仍需显式启用。
 
 M5 已实现稳定的 Trace / Metrics 基础链路：
 
@@ -140,7 +140,7 @@ http://127.0.0.1:8765
 
 ```yaml
 project:
-  milestone: v2.1-development
+  milestone: stable-v2.1
 ```
 
 ```text
@@ -156,16 +156,16 @@ project:
 
 ## V2.1 上下文压缩 A/B
 
-V2.1 专项 case 位于 `eval_cases/compaction_suite_v1`。先按路线图用一个 case 各运行三次：
+V2.1 专项 case 位于 `eval_cases/compaction_suite_v1`。正式流程先用一个 case 各运行三次：
 
 ```bash
 uv run minicc eval eval_cases/compaction_suite_v1 --case V21_C02_fix_failing_test --repeat 3 --context-variant a0
 uv run minicc eval eval_cases/compaction_suite_v1 --case V21_C02_fix_failing_test --repeat 3 --context-variant a1
 ```
 
-稳定后去掉 `--case` 扩展到三个 case，并独立复跑第二轮。用两轮 suite 的 `report.json` 生成
-最终判定；报告会同时检查任务通过率、真实触发、prompt mean/max/n、关键事实保留率、重复 I/O
-和 cache 统计支持状态：
+稳定后去掉 `--case` 扩展到三个 case，并独立复跑第二轮。两轮 suite 的 `report.json` 通过以下
+命令生成最终判定；报告同时检查任务通过率、真实触发、prompt mean/max/n、关键事实保留率、
+重复 I/O 和 cache 统计支持状态：
 
 ```bash
 uv run minicc compaction-report \
@@ -174,8 +174,9 @@ uv run minicc compaction-report \
   --output-dir acceptance/stable-v2.1/context-compaction-ab
 ```
 
-只有两轮都得到同方向结论时报告才会输出 `PASS`；单轮即使所有指标通过也只输出
-`INCONCLUSIVE`。供应商没有返回缓存字段时显示 `unsupported`，不会伪装成 `0%`。
+Stable V2.1 的最终报告为 `PASS`：两轮 prompt mean 分别下降 9.27% 和 46.60%，任务通过率与
+关键事实保留率均为 100%，重复 I/O 均满足门限。只有两轮得到同方向结论时报告才会输出
+`PASS`；供应商没有返回缓存字段时显示 `unsupported`，不会伪装成 `0%` 或缓存收益。
 
 ## 快速开始
 
@@ -442,7 +443,7 @@ uv run pytest -q
 uv run minicc traces
 ```
 
-版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/`、`acceptance/stable-v1.2/`、`acceptance/stable-v1.3/`、`acceptance/stable-v2.0/` 和 `acceptance/stable-v2.0.1/`。V2.0 的 checkpoint/resume 场景与 V1.3 回归说明见 `acceptance/stable-v2.0/README.md`；V2.0.1 的 workspace manifest、diff 一致性和 C02 三连证据见 `acceptance/stable-v2.0.1/README.md`。
+版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/`、`acceptance/stable-v1.2/`、`acceptance/stable-v1.3/`、`acceptance/stable-v2.0/`、`acceptance/stable-v2.0.1/`、`acceptance/stable-v2.0.2/` 和 `acceptance/stable-v2.1/`。V2.1 的两轮 Context Compaction A/B 结论与证据入口见 `acceptance/stable-v2.1/README.md`。
 
 ```bash
 uv run minicc eval eval_cases \

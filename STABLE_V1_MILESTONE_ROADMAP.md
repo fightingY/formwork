@@ -50,19 +50,19 @@ git switch -c stable-v1 8f19cd3
 提交: fix(eval): prevent approval in locked benchmark case
 ```
 
-### 2.4 当前稳定线交接状态（2026-07-20）
+### 2.4 当前稳定线交接状态（2026-07-27）
 
 - `archive/long-run-11-of-60` branch 和 `archive-long-run-11-of-60` tag 已存在，旧 5x12 cognition
   结果不再参与 Stable 主线开发或统计。
-- `stable-v1.0` 至 `stable-v2.0.2` tag 已存在；当前正式能力基线为 Stable V2.0.2 acceptance。
+- `stable-v1.0` 至 `stable-v2.1` tag 已存在；当前正式能力基线为 Stable V2.1 acceptance。
 - 本地旧 SWE、5x12 run、旧式 memory、开发报告副本和未被正式验收引用的 run 已清理；Git 中的
   archive ref 与 `acceptance/` 正式证据未删除。
-- `.minicc/runs` 当前保留 102 个 Stable eval run 和 1 个 V2.0 真实模型 checkpoint/resume run；
-  V2.0.2 发布门中间批次作为归因证据保留，不混入最终提交口径。
-- 当前代码回归为 `147 passed`；V2.0.2 最终提交的 C02 release gate 为 3/3 PASS，V1.3 五案例
-  回归为 15/15 PASS，18/18 正式 run 证据完整且可计入指标。
-- Stable V2.0.2 已完成 run/suite/report 技术账本；当前已进入 V2.1 context compaction A/B 开发，
-  稳定结论仍须以两轮独立正式实验为准。
+- `.minicc/runs` 与 `.minicc/suites` 保留正式验收引用的原始 run/suite；失败和中断尝试不复制进
+  acceptance 归档，也不混入最终通过口径。
+- 当前代码回归为 `160 passed`；V2.1 两轮 A/B 共 24/24 正式 run 通过，任务通过率和关键事实
+  保留率均为 100%。
+- Stable V2.1 已完成 context compaction 两轮独立 A/B；semantic compaction 升格为稳定能力，
+  Prompt Cache 优化与 Skill/Feedback Memory 仍保持 experimental。
 - C05-C08、SWE-bench v2、working memory、runtime tools 和 meta review 均不属于 V2.0.1/V2.0.2，
   不得借技术债治理之名提前混入。
 
@@ -358,6 +358,13 @@ NetworkPolicy here-doc 正文误报均已通过最小回归测试修复，失败
 - 重复文件读取和重复搜索不得显著高于 A0。
 - 连续两轮独立复跑得到同方向结论。
 
+验收归档（2026-07-27）：两轮独立 A/B 均为 PASS。第一轮在提交
+`b6502e8f51b45fb058e189977f5b6c8e1db6efa8` 上完成 C02 的 A0/A1 各 3 次；第二轮在最终验收实现提交
+`caebc1c3fe8b6af15c0d2ae5454ffb6a951caa98` 上完成 C02/C03/C07 的 A0/A1 各 9 次。两轮 A0/A1
+任务通过率均为 100%，A1 平均 prompt 长度分别下降 9.27% 和 46.60%，关键事实保留率均为 100%，
+重复 I/O 均满足容差门限；完整代码回归为 160/160 PASS。归档位于
+`acceptance/stable-v2.1/`，稳定标签为 `stable-v2.1`。
+
 失败回退：回到 `stable-v2.0`，压缩继续保留为 experimental，不进入简历主叙事。通过后标记 `stable-v2.1`。
 
 ### V2.1.1：Prompt Cache 命中优化 A/B
@@ -406,7 +413,7 @@ experimental，但不阻塞 V2.2。
 
 目标：形成可演示、可复跑、可用于简历陈述的发布版本。
 
-进入条件：V1.2、V2.0、V2.0.1、V2.0.2 已通过；V2.1、V2.2 可选择性通过，未通过的能力必须
+进入条件：V1.2、V2.0、V2.0.1、V2.0.2、V2.1 已通过；V2.2 可选择性通过，未通过的能力必须
 明确标为 experimental。
 
 验收标准：
@@ -419,7 +426,7 @@ experimental，但不阻塞 V2.2。
   run id、原始证据、当前状态和已知边界。
 - ETCLOVG 矩阵中的状态只允许使用 `stable`、`experimental`、`not implemented`；只有已经通过
   版本验收且能从 Viewer 或验收归档定位原始 run 的能力才允许标记为 `stable`。
-- V2.1/V2.2 未通过时不阻塞 V3.0，但 Context 层必须如实标记为 `experimental`，并保留对应的
+- V2.2 未通过时不阻塞 V3.0，但 Memory 层必须如实标记为 `experimental`，并保留对应的
   后续验收版本和复跑入口，不能用已有基础实现代替收益证据。
 - 新机器按照 runbook 可以完成安装、单 case 运行和报告查看。
 - Web Viewer 缺少可选 artifact 时不崩溃。
@@ -476,7 +483,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       +-> experimental/meta-review
 ```
 
-V2.1 和 V2.2 是增强线，不应阻塞 V3.0 的 Harness 发布。这样即使实验能力没有产生收益，稳定项目仍然可以完成并用于面试。V3.0 仍必须通过 ETCLOVG 能力证据矩阵完整披露七层状态；“不阻塞发布”只表示允许标记为 `experimental`，不表示可以省略或宣称已经稳定。
+V2.1 与 V2.2 是增强线，其中 V2.1 已完成验收；V2.2 不应阻塞 V3.0 的 Harness 发布。V3.0 仍必须通过 ETCLOVG 能力证据矩阵完整披露七层状态；“不阻塞发布”只表示允许标记为 `experimental`，不表示可以省略或宣称已经稳定。
 
 ## 7. 最终可声明的项目效果
 

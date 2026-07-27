@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "entity_type": "compaction_ab_report",
+  "milestone": "v2.1",
+  "status": "PASS",
+  "passed": true,
+  "required_rounds": 2,
+  "completed_rounds": 2,
+  "independent_suite_ids": true,
+  "same_direction": true,
+  "repeated_io_tolerance": 0.25,
+  "rounds": [
+    {
+      "round": 1,
+      "a0_suite_id": "suite-20260721-114710-5f07d43c",
+      "a1_suite_id": "suite-20260721-114932-d19d9a3c",
+      "comparability_errors": [],
+      "a0": {
+        "runs": 3,
+        "passed_runs": 3,
+        "pass_rate": 1.0,
+        "case_pass_rates": {
+          "V21_C02_fix_failing_test": 1.0
+        },
+        "all_runs_compacted": false,
+        "all_runs_triggered": true,
+        "prompt_chars_mean": 3317.8125,
+        "prompt_chars_max": 4547,
+        "prompt_char_samples": 16,
+        "retention_eligible": true,
+        "retention_rate": 1.0,
+        "repeated_file_reads": 0,
+        "repeated_searches": 0,
+        "semantic_compaction_prompt_tokens": 0,
+        "semantic_compaction_completion_tokens": 0,
+        "semantic_compaction_latency_ms": 0,
+        "repeated_io_mean": 0.0,
+        "cache": {
+          "status": "supported",
+          "supported_runs": 3,
+          "runs": 3,
+          "hit_tokens": 0,
+          "observed_prompt_tokens": 14509,
+          "weighted_hit_rate": 0.0
+        }
+      },
+      "a1": {
+        "runs": 3,
+        "passed_runs": 3,
+        "pass_rate": 1.0,
+        "case_pass_rates": {
+          "V21_C02_fix_failing_test": 1.0
+        },
+        "all_runs_compacted": true,
+        "all_runs_triggered": false,
+        "prompt_chars_mean": 3010.4,
+        "prompt_chars_max": 3907,
+        "prompt_char_samples": 20,
+        "retention_eligible": true,
+        "retention_rate": 1.0,
+        "repeated_file_reads": 1,
+        "repeated_searches": 0,
+        "semantic_compaction_prompt_tokens": 7289,
+        "semantic_compaction_completion_tokens": 14808,
+        "semantic_compaction_latency_ms": 318370,
+        "repeated_io_mean": 0.3333333333333333,
+        "cache": {
+          "status": "supported",
+          "supported_runs": 3,
+          "runs": 3,
+          "hit_tokens": 0,
+          "observed_prompt_tokens": 16282,
+          "weighted_hit_rate": 0.0
+        }
+      },
+      "prompt_reduction_rate": 0.09265517566167465,
+      "repeated_io_limit": 1.0,
+      "criteria": {
+        "comparable_configuration": true,
+        "a0_budget_triggered_in_every_run": true,
+        "a1_semantic_compaction_triggered_in_every_run": true,
+        "a1_pass_rate_not_lower": true,
+        "a1_case_pass_rates_not_lower": true,
+        "a1_prompt_mean_lower": true,
+        "critical_fact_retention_100_percent": true,
+        "repeated_io_not_significantly_higher": true
+      },
+      "passed": true
+    },
+    {
+      "round": 2,
+      "a0_suite_id": "suite-20260727-v21-round2-a0-release-caebc1c",
+      "a1_suite_id": "suite-20260727-v21-round2-a1-release-caebc1c",
+      "comparability_errors": [],
+      "a0": {
+        "runs": 9,
+        "passed_runs": 9,
+        "pass_rate": 1.0,
+        "case_pass_rates": {
+          "V21_C02_fix_failing_test": 1.0,
+          "V21_C03_add_cli_option": 1.0,
+          "V21_C07_large_log_debugging": 1.0
+        },
+        "all_runs_compacted": false,
+        "all_runs_triggered": true,
+        "prompt_chars_mean": 10599.898550724638,
+        "prompt_chars_max": 43105,
+        "prompt_char_samples": 69,
+        "retention_eligible": true,
+        "retention_rate": 1.0,
+        "repeated_file_reads": 1,
+        "repeated_searches": 0,
+        "semantic_compaction_prompt_tokens": 0,
+        "semantic_compaction_completion_tokens": 0,
+        "semantic_compaction_latency_ms": 0,
+        "repeated_io_mean": 0.1111111111111111,
+        "cache": {
+          "status": "supported",
+          "supported_runs": 9,
+          "runs": 9,
+          "hit_tokens": 1024,
+          "observed_prompt_tokens": 190701,
+          "weighted_hit_rate": 0.0053696624558864404
+        }
+      },
+      "a1": {
+        "runs": 9,
+        "passed_runs": 9,
+        "pass_rate": 1.0,
+        "case_pass_rates": {
+          "V21_C02_fix_failing_test": 1.0,
+          "V21_C03_add_cli_option": 1.0,
+          "V21_C07_large_log_debugging": 1.0
+        },
+        "all_runs_compacted": true,
+        "all_runs_triggered": false,
+        "prompt_chars_mean": 5660.6760563380285,
+        "prompt_chars_max": 29185,
+        "prompt_char_samples": 71,
+        "retention_eligible": true,
+        "retention_rate": 1.0,
+        "repeated_file_reads": 10,
+        "repeated_searches": 0,
+        "semantic_compaction_prompt_tokens": 49024,
+        "semantic_compaction_completion_tokens": 87742,
+        "semantic_compaction_latency_ms": 4313909,
+        "repeated_io_mean": 1.1111111111111112,
+        "cache": {
+          "status": "supported",
+          "supported_runs": 9,
+          "runs": 9,
+          "hit_tokens": 0,
+          "observed_prompt_tokens": 104620,
+          "weighted_hit_rate": 0.0
+        }
+      },
+      "prompt_reduction_rate": 0.465968845904563,
+      "repeated_io_limit": 1.1111111111111112,
+      "criteria": {
+        "comparable_configuration": true,
+        "a0_budget_triggered_in_every_run": true,
+        "a1_semantic_compaction_triggered_in_every_run": true,
+        "a1_pass_rate_not_lower": true,
+        "a1_case_pass_rates_not_lower": true,
+        "a1_prompt_mean_lower": true,
+        "critical_fact_retention_100_percent": true,
+        "repeated_io_not_significantly_higher": true
+      },
+      "passed": true
+    }
+  ]
+}
