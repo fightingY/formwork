@@ -54,15 +54,16 @@ git switch -c stable-v1 8f19cd3
 
 - `archive/long-run-11-of-60` branch 和 `archive-long-run-11-of-60` tag 已存在，旧 5x12 cognition
   结果不再参与 Stable 主线开发或统计。
-- `stable-v1.0` 至 `stable-v2.1` tag 已存在；当前正式能力基线为 Stable V2.1 acceptance。
+- `stable-v1.0` 至 `stable-v2.1.1` tag 已存在；当前正式能力基线为 Stable V2.1.1 acceptance。
 - 本地旧 SWE、5x12 run、旧式 memory、开发报告副本和未被正式验收引用的 run 已清理；Git 中的
   archive ref 与 `acceptance/` 正式证据未删除。
 - `.minicc/runs` 与 `.minicc/suites` 保留正式验收引用的原始 run/suite；失败和中断尝试不复制进
   acceptance 归档，也不混入最终通过口径。
-- 当前代码回归为 `160 passed`；V2.1 两轮 A/B 共 24/24 正式 run 通过，任务通过率和关键事实
-  保留率均为 100%。
-- Stable V2.1 已完成 context compaction 两轮独立 A/B；semantic compaction 升格为稳定能力，
-  Prompt Cache 优化与 Skill/Feedback Memory 仍保持 experimental。
+- 当前代码回归为 `209 passed`；V2.1.1 两轮 P0/P1 真实 C02 均为 3/3 PASS，正式 Provider
+  请求无重试。
+- Stable V2.1 已完成 context compaction 两轮独立 A/B；Stable V2.1.1 已完成 Prompt Cache
+  两轮独立 A/B，semantic compaction 与追加式稳定前缀布局均升格为稳定能力；Skill/Feedback
+  Memory 仍保持 experimental。
 - C05-C08、SWE-bench v2、working memory、runtime tools 和 meta review 均不属于 V2.0.1/V2.0.2，
   不得借技术债治理之名提前混入。
 
@@ -388,6 +389,13 @@ warm-up、后 3 次 steady-state），真实 case 的 P0/P1 均须 3/3 PASS。�
 Feedback Memory，避免仓库外状态成为混杂变量。正式报告拒绝 provider 实际重试、
 缺失缓存字段、prompt token 膨胀、重复 run/namespace、未校验 manifest/hash 或不完整证据，
 combined 指标仅展示，不作为可被 workload 权重影响的发布门禁。
+
+验收归档（2026-07-29）：最终实现提交
+`b258f98c6b1c7cc33c80f09052ce944de146776e` 上完成 `round-19`（P1→P0）与
+`round-20`（P0→P1）两轮独立正式 A/B。P0/P1 真实 C02 均为 3/3 PASS，所有正式请求均为
+单次 Provider attempt。P1 的真实命中率由 3.32%/3.40% 提高到 23.20%/24.45%，未缓存 token
+分别下降 31.75%/34.77%，总 prompt 分别下降 14.08%/16.60%。完整归档位于
+`acceptance/stable-v2.1.1/`，默认布局升格为 `append`，稳定标签为 `stable-v2.1.1`。
 
 验收标准：
 
