@@ -36,12 +36,19 @@ class TraceRecorder:
     def run_started(self, state: RunState) -> None:
         self.record("run_started", state, goal=state.goal)
 
-    def prompt_built(self, state: RunState, messages: list[dict[str, str]]) -> None:
+    def prompt_built(
+        self,
+        state: RunState,
+        messages: list[dict[str, str]],
+        *,
+        prefix_profile: dict[str, Any] | None = None,
+    ) -> None:
         self.record(
             "prompt_built",
             state,
             message_count=len(messages),
             prompt_chars=sum(len(message.get("content", "")) for message in messages),
+            prefix_profile=prefix_profile,
         )
 
     def model_response(
@@ -50,12 +57,15 @@ class TraceRecorder:
         text: str,
         latency_ms: int,
         usage: ModelUsage | None = None,
+        *,
+        attempt_count: int = 1,
     ) -> None:
         self.record(
             "model_response",
             state,
             response_preview=text[:1000],
             latency_ms=latency_ms,
+            attempt_count=max(int(attempt_count or 1), 1),
             usage=model_usage_to_dict(usage) if usage is not None else None,
         )
 

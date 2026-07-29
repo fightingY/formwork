@@ -51,6 +51,7 @@ class ContextSettings:
     semantic_max_input_chars: int = 60_000
     semantic_max_completion_tokens: int = 2_048
     retention_markers: tuple[str, ...] = ()
+    prompt_layout: str = "rebuild"
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,7 @@ def load_settings() -> Settings:
                 2_048,
             ),
             retention_markers=_str_tuple_config(context_config, "retention_markers"),
+            prompt_layout=_prompt_layout(context_config),
         ),
         policy=PolicySettings(
             require_approval_for_network=_bool_config(
@@ -276,6 +278,13 @@ def _compaction_strategy(config: dict[str, Any]) -> str:
     value = str(config.get("compaction_strategy", "deterministic")).strip().lower()
     if value not in {"disabled", "deterministic", "semantic"}:
         raise ValueError("context.compaction_strategy must be disabled, deterministic, or semantic")
+    return value
+
+
+def _prompt_layout(config: dict[str, Any]) -> str:
+    value = str(config.get("prompt_layout", "rebuild")).strip().lower()
+    if value not in {"rebuild", "append"}:
+        raise ValueError("context.prompt_layout must be rebuild or append")
     return value
 
 

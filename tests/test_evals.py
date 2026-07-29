@@ -202,6 +202,7 @@ def test_two_eval_suites_keep_distinct_manifests_reports_and_run_pointers(tmp_pa
     assert all(bundle.report_json_path.exists() for bundle in bundles)
     for result, bundle in zip(results, bundles, strict=True):
         manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
+        report = json.loads(bundle.report_json_path.read_text(encoding="utf-8"))
         run_result = json.loads(
             (tmp_path / ".minicc" / "runs" / result.cases[0].run_id / "eval_result.json").read_text(
                 encoding="utf-8"
@@ -209,6 +210,8 @@ def test_two_eval_suites_keep_distinct_manifests_reports_and_run_pointers(tmp_pa
         )
         assert manifest["suite_id"] == result.suite_id
         assert manifest["runs"][0]["run_id"] == result.cases[0].run_id
+        assert report["created_at"] == result.created_at
+        assert report["completed_at"] is None
         assert run_result["suite_id"] == result.suite_id
         assert run_result["evidence"]["suite_manifest"] == str(bundle.manifest_path.resolve())
         assert run_result["schema_version"] == 2

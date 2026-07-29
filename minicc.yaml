@@ -5,7 +5,7 @@ provider:
   max_retries: 2
 
 project:
-  milestone: stable-v2.1
+  milestone: v2.1.1-development
 
 workspace:
   ignored_allowlist: []
@@ -33,6 +33,7 @@ context:
   compaction_strategy: deterministic
   semantic_max_input_chars: 60000
   semantic_max_completion_tokens: 2048
+  prompt_layout: rebuild
 
 policy:
   require_approval_for_network: true

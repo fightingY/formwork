@@ -64,6 +64,7 @@ context:
   semantic_max_input_chars: 4096
   semantic_max_completion_tokens: 1024
   retention_markers: [src/app.py, ROOT_CAUSE]
+  prompt_layout: append
 provider:
   base_url: https://provider.test/v1
   model: test-model
@@ -110,6 +111,7 @@ workspace:
     assert settings.context.semantic_max_input_chars == 4096
     assert settings.context.semantic_max_completion_tokens == 1024
     assert settings.context.retention_markers == ("src/app.py", "ROOT_CAUSE")
+    assert settings.context.prompt_layout == "append"
     assert settings.policy.require_approval_for_network is False
     assert settings.project.milestone == "stable-v2.1"
     assert settings.workspace.ignored_allowlist == (
@@ -148,5 +150,20 @@ def test_load_yaml_config_rejects_non_mapping(tmp_path) -> None:
         load_yaml_config(config)
     except ValueError as exc:
         assert "YAML mapping" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError")
+
+
+def test_load_settings_rejects_unknown_prompt_layout(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "minicc.yaml").write_text(
+        "context:\n  prompt_layout: typo\n",
+        encoding="utf-8",
+    )
+
+    try:
+        load_settings()
+    except ValueError as exc:
+        assert "context.prompt_layout" in str(exc)
     else:
         raise AssertionError("Expected ValueError")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 from dataclasses import dataclass
@@ -81,10 +82,19 @@ def write_immutable_suite(
     temporary = suites_root / f".{suite_id}.tmp-{uuid4().hex[:8]}"
     temporary.mkdir(parents=True, exist_ok=False)
     try:
-        _write_json(temporary / "manifest.json", manifest)
-        _write_json(temporary / "report.json", report)
-        (temporary / "report.md").write_text(markdown, encoding="utf-8")
-        (temporary / "report.csv").write_text(csv_text, encoding="utf-8")
+        report_json_path = temporary / "report.json"
+        report_markdown_path = temporary / "report.md"
+        report_csv_path = temporary / "report.csv"
+        _write_json(report_json_path, report)
+        report_markdown_path.write_text(markdown, encoding="utf-8")
+        report_csv_path.write_text(csv_text, encoding="utf-8")
+        manifest_payload = dict(manifest)
+        manifest_payload["artifacts"] = {
+            "report_json": _artifact_entry(report_json_path),
+            "report_markdown": _artifact_entry(report_markdown_path),
+            "report_csv": _artifact_entry(report_csv_path),
+        }
+        _write_json(temporary / "manifest.json", manifest_payload)
         temporary.replace(suite_dir)
     except Exception:
         if temporary.exists():
@@ -100,22 +110,51 @@ def write_immutable_suite(
     )
 
 
+def _artifact_entry(path: Path) -> dict[str, Any]:
+    data = path.read_bytes()
+    return {
+        "path": path.name,
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def _indexed_artifact_entry(path: Path) -> dict[str, Any]:
+    data = path.read_bytes()
+    return {
+        "path": str(path.resolve()),
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
 def write_artifact_index(
     artifacts_root: Path,
     *,
     run_id: str,
     run_dir: Path,
     evidence: dict[str, str],
+    hash_artifacts: bool = False,
 ) -> Path:
     run_id = _safe_identifier(run_id, kind="run id")
     target = artifacts_root.resolve() / run_id / "manifest.json"
-    payload = {
+    normalized_evidence = {
+        name: str(Path(path).resolve())
+        for name, path in evidence.items()
+    }
+    payload: dict[str, Any] = {
         "schema_version": LEDGER_SCHEMA_VERSION,
         "entity_type": "artifact_index",
         "run_id": run_id,
         "run_dir": str(run_dir.resolve()),
-        "evidence": dict(evidence),
+        "evidence": normalized_evidence,
     }
+    if hash_artifacts:
+        payload["artifacts"] = {
+            name: _indexed_artifact_entry(Path(path))
+            for name, path in normalized_evidence.items()
+            if name != "suite_manifest" and Path(path).is_file()
+        }
     if target.exists():
         if _read_json(target) == payload:
             return target

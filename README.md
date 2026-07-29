@@ -23,7 +23,7 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V2.1
+## 当前稳定版本：Stable V2.1；开发版本：V2.1.1
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -42,6 +42,12 @@ Stable V2.0.2 已把 run、suite、version index 和 report 拆成 schema v2 技
 3/3 PASS，第二轮均为 9/9 PASS；A1 的平均 prompt 长度相对 A0 分别下降 9.27% 和 46.60%，
 关键事实保留率均为 100%，重复 I/O 满足验收容差。完整归档见
 `acceptance/stable-v2.1/`。Skill/Feedback Memory 仍保持 experimental。
+
+当前开发版本为 `2.1.1.dev0`。V2.1.1 只比较 P0 整体重建消息与 P1 追加式稳定前缀布局，
+不同时改变 compaction、模型或任务断言。Stable V2.1 正式请求的缓存实测基线为
+`1,024 / 326,112 = 0.314%`；字段均由 provider 正常上报，因此这是低命中而不是
+`unsupported`。只有固定序列和真实 case 连续两轮正式 A/B 均改善，才会发布
+`stable-v2.1.1`。
 
 M1 已实现基础闭环：
 
@@ -140,7 +146,7 @@ http://127.0.0.1:8765
 
 ```yaml
 project:
-  milestone: stable-v2.1
+  milestone: v2.1.1-development
 ```
 
 ```text
@@ -177,6 +183,35 @@ uv run minicc compaction-report \
 Stable V2.1 的最终报告为 `PASS`：两轮 prompt mean 分别下降 9.27% 和 46.60%，任务通过率与
 关键事实保留率均为 100%，重复 I/O 均满足门限。只有两轮得到同方向结论时报告才会输出
 `PASS`；供应商没有返回缓存字段时显示 `unsupported`，不会伪装成 `0%` 或缓存收益。
+
+## V2.1.1 Prompt Cache P0/P1
+
+P0 保留 Stable V2.1 的 `system + 整体重建 user` 布局。P1 把固定 run context 放在第二条
+消息，并将后续 action/observation 作为 assistant/user 消息追加；轨迹窗口移动或 compaction
+summary 改变时允许显式重置动态部分。trace 只保存稳定前缀的 SHA-256、字符数和估算 token，
+不保存 prompt 正文。
+
+每轮先运行同一组 5 请求固定序列，再在真实 C02 上各运行 3 次。固定序列锁定前 2 次为
+warm-up、后 3 次为 steady-state，并逐请求检查 P1 prompt token 不高于 P0。正式命令要求干净且
+固定的 Git 提交；Provider 调用仍沿用 `provider.timeout_sec` 和 `provider.max_retries`，但实际
+发生重试的请求会被标记并失去正式缓存结论资格，避免超时后的自预热被算成布局收益。
+真实 C02 的可变 Feedback Memory 在本实验中关闭，保证 P0/P1 只改变消息布局。
+
+```bash
+uv run minicc cache-probe --cache-variant p0 --cache-sequence-id round-1 --repeat 5 --execution-order p0-first --release-gate
+uv run minicc cache-probe --cache-variant p1 --cache-sequence-id round-1 --repeat 5 --execution-order p0-first --release-gate
+uv run minicc eval eval_cases/capability_suite_v1 --case C02_fix_failing_test --cache-variant p0 --cache-sequence-id round-1 --execution-order p0-first --repeat 3 --release-gate
+uv run minicc eval eval_cases/capability_suite_v1 --case C02_fix_failing_test --cache-variant p1 --cache-sequence-id round-1 --execution-order p0-first --repeat 3 --release-gate
+```
+
+第二轮使用 `round-2` 命名空间并倒置执行顺序为 P1 → P0，既避免复用上一轮的完整请求缓存，
+也避免固定的先后顺序成为混杂变量；P0/P1 在同一轮内仍使用完全相同的动态序列。两轮共八份不可变证据通过
+`minicc cache-report` 汇总。最终判定同时要求固定序列改善、真实 case 不退化、P1 任务通过率
+不低于 P0、P0/P1 真实 C02 均为 3/3 PASS、稳定前缀估算 token 不下降、缓存字段完整、未缓存
+token 实际下降，并明确区分 `unsupported`、真实 `zero_hit` 和 `nonzero_hit`。报告加载时会
+校验 probe/suite manifest、逐项请求 SHA-256、run artifact hash、实际布局/namespace、run ID
+唯一性和完整 run 证据；执行区间必须无重叠且固定探针先于真实 C02。最终 JSON/Markdown 会内嵌
+精简的逐请求和逐 run 指标；未通过的汇总不会写进最终归档目录。
 
 ## 快速开始
 

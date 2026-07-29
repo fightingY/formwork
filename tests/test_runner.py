@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
 from minicc.core.runner import ModelTurnConfig, ModelTurnRunner
 from minicc.core.state import RunState
+from minicc.trace.recorder import TraceRecorder
 
 
 @dataclass
@@ -34,6 +35,30 @@ def test_model_turn_runner_parses_action_and_records_usage() -> None:
     assert state.metrics["turns"] == 1
     assert state.metrics["prompt_tokens"] == 3
     assert state.metrics["completion_tokens"] == 2
+    assert state.metrics["provider_request_attempts"] == 1
+    assert state.metrics["provider_retried_requests"] == 0
+
+
+def test_model_turn_runner_records_retried_request_and_runtime_identity() -> None:
+    class RetriedProvider:
+        def complete(self, messages, *, options=None):
+            return ModelResponse(
+                text='{"type":"final","answer":"done"}',
+                raw={"model": "actual-model", "system_fingerprint": "backend-1"},
+                usage=ModelUsage(prompt_tokens=3),
+                latency_ms=5,
+                attempt_count=2,
+            )
+
+    state = RunState.start("finish")
+    trace = TraceRecorder()
+    ModelTurnRunner(RetriedProvider(), trace=trace).next_turn(state, [])
+
+    assert state.metrics["provider_request_attempts"] == 2
+    assert state.metrics["provider_retried_requests"] == 1
+    assert state.metrics["provider_response_models"] == ["actual-model"]
+    assert state.metrics["provider_system_fingerprints"] == ["backend-1"]
+    assert trace.events[0]["attempt_count"] == 2
 
 
 def test_model_turn_runner_stops_after_protocol_error_limit() -> None:

@@ -5,7 +5,7 @@ from typing import Protocol
 
 from minicc.core.action_handler import ActionHandler
 from minicc.core.checkpoint import CheckpointManager
-from minicc.core.context import ContextBuilder
+from minicc.core.context import ContextBuilder, state_snapshot_text
 from minicc.core.lifecycle import RunLifecycle
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
@@ -103,7 +103,13 @@ class AgentLoop:
                 self.session.fail(state, f"Run failed because the model provider failed: {exc}")
                 break
             if turn.observation is not None:
-                trajectory.append(TrajectoryStep(action=turn.action, observation=turn.observation))
+                trajectory.append(
+                    TrajectoryStep(
+                        action=turn.action,
+                        observation=turn.observation,
+                        state_snapshot=state_snapshot_text(state),
+                    )
+                )
                 self._checkpoint(state, trajectory, "model_observation_recorded")
 
             if not turn.should_continue or state.status != "running":

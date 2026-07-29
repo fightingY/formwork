@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import subprocess
 import sys
 from dataclasses import replace
@@ -10,7 +11,7 @@ from pathlib import Path
 from minicc import __version__
 from minicc.config import BudgetSettings, PolicySettings, SandboxSettings, Settings, load_settings
 from minicc.core.checkpoint import CheckpointError, CheckpointManager
-from minicc.core.context import ContextBuilder, ContextConfig
+from minicc.core.context import STABLE_PREFIX, ContextBuilder, ContextConfig
 from minicc.core.ledger import apply_cleanup_plan, build_cleanup_plan, write_artifact_index
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
@@ -20,8 +21,19 @@ from minicc.core.state import RunState, state_path_for_run
 from minicc.evals.case import EvalCase, discover_cases
 from minicc.evals.compaction_ab import (
     build_compaction_ab_report,
-    load_suite_report,
+    load_suite_report as load_compaction_suite_report,
     write_compaction_ab_report,
+)
+from minicc.evals.cache_ab import (
+    build_cache_ab_report,
+    load_suite_report as load_cache_suite_report,
+    write_cache_ab_report,
+)
+from minicc.evals.cache_probe import load_cache_probe_report
+from minicc.evals.cache_probe_runner import (
+    CacheProbeRunConfig,
+    cache_sequence_namespace,
+    run_fixed_cache_probe,
 )
 from minicc.evals.runner import run_eval_suite, write_eval_report, write_suite_report
 from minicc.memory.feedback import FeedbackMemory
@@ -147,6 +159,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="V2.1 experiment variant: a0=uncompressed baseline, a1=semantic compaction.",
     )
+    eval_parser.add_argument(
+        "--cache-variant",
+        choices=("p0", "p1"),
+        default=None,
+        help="V2.1.1 experiment variant: p0=rebuild layout, p1=append-only layout.",
+    )
+    eval_parser.add_argument(
+        "--cache-sequence-id",
+        default=None,
+        help="Within-round cache experiment namespace shared by P0/P1, for example round-1.",
+    )
+    eval_parser.add_argument(
+        "--execution-order",
+        choices=("p0-first", "p1-first"),
+        default=None,
+        help="Record the balanced P0/P1 order used for this cache experiment round.",
+    )
     eval_parser.set_defaults(handler=eval_command)
 
     compaction_parser = subparsers.add_parser(
@@ -169,6 +198,80 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compaction_parser.add_argument("--output-dir", type=Path, required=True)
     compaction_parser.set_defaults(handler=compaction_report_command)
+
+    cache_probe_parser = subparsers.add_parser(
+        "cache-probe",
+        help="Run an immutable V2.1.1 fixed-sequence Prompt Cache probe.",
+    )
+    cache_probe_parser.add_argument(
+        "--cache-variant",
+        choices=("p0", "p1"),
+        required=True,
+        help="p0=rebuild layout, p1=append-only layout.",
+    )
+    cache_probe_parser.add_argument(
+        "--repeat",
+        type=int,
+        default=5,
+        help="Number of growing fixed-sequence requests (formal minimum: 5).",
+    )
+    cache_probe_parser.add_argument(
+        "--milestone",
+        default=None,
+        help="Override project.milestone recorded in probe evidence.",
+    )
+    cache_probe_parser.add_argument(
+        "--execution-order",
+        choices=("p0-first", "p1-first"),
+        default=None,
+        help="Record the balanced variant order used for this independent round.",
+    )
+    cache_probe_parser.add_argument(
+        "--cache-sequence-id",
+        required=True,
+        help="Within-round namespace shared by P0/P1, for example round-1.",
+    )
+    cache_probe_parser.add_argument(
+        "--release-gate",
+        action="store_true",
+        help="Require a clean immutable Git commit and repeat >= 5.",
+    )
+    cache_probe_parser.set_defaults(handler=cache_probe_command)
+
+    cache_report_parser = subparsers.add_parser(
+        "cache-report",
+        help="Compare exactly two rounds of V2.1.1 fixed-probe and real-case evidence.",
+    )
+    cache_report_parser.add_argument(
+        "--p0-probe",
+        action="append",
+        type=Path,
+        required=True,
+        help="P0 fixed probe report.json; repeat once per round.",
+    )
+    cache_report_parser.add_argument(
+        "--p1-probe",
+        action="append",
+        type=Path,
+        required=True,
+        help="P1 fixed probe report.json; repeat once per round.",
+    )
+    cache_report_parser.add_argument(
+        "--p0-eval",
+        action="append",
+        type=Path,
+        required=True,
+        help="P0 real-case suite report.json; repeat once per round.",
+    )
+    cache_report_parser.add_argument(
+        "--p1-eval",
+        action="append",
+        type=Path,
+        required=True,
+        help="P1 real-case suite report.json; repeat once per round.",
+    )
+    cache_report_parser.add_argument("--output-dir", type=Path, required=True)
+    cache_report_parser.set_defaults(handler=cache_report_command)
 
     traces_parser = subparsers.add_parser("traces", help="List runs that have trace or metrics files.")
     traces_parser.set_defaults(handler=traces_command)
@@ -486,6 +589,16 @@ def _build_loop(
             max_summary_chars=settings.context.summary_max_chars,
             max_completion_tokens=settings.context.semantic_max_completion_tokens,
         )
+    prompt_layout = settings.context.prompt_layout
+    if state is not None and int(state.metrics.get("turns") or 0) > 0:
+        stored_layout = state.metrics.get("prompt_layout")
+        prompt_layout = stored_layout if stored_layout in {"rebuild", "append"} else "rebuild"
+    feedback_memory = (
+        None
+        if state is not None
+        and state.prompt_namespace.startswith("cache-experiment/")
+        else FeedbackMemory(Path.cwd() / ".minicc" / "memory" / "feedback_rules.jsonl")
+    )
     return AgentLoop(
         provider,
         executor,
@@ -498,9 +611,10 @@ def _build_loop(
                 field_preview_chars=settings.context.field_preview_chars,
                 compaction_strategy=settings.context.compaction_strategy,
                 retention_markers=settings.context.retention_markers,
+                prompt_layout=prompt_layout,
             ),
             skill_registry=SkillRegistry(skill_root),
-            feedback_memory=FeedbackMemory(Path.cwd() / ".minicc" / "memory" / "feedback_rules.jsonl"),
+            feedback_memory=feedback_memory,
             semantic_compactor=semantic_compactor,
         ),
         policy_chain=build_policy_chain(settings),
@@ -548,6 +662,31 @@ def eval_command(args: argparse.Namespace) -> int:
     if context_variant is not None:
         strategy = "semantic" if context_variant == "a1" else "disabled"
         settings = replace(settings, context=replace(settings.context, compaction_strategy=strategy))
+    cache_variant = getattr(args, "cache_variant", None)
+    cache_sequence_id = str(getattr(args, "cache_sequence_id", "") or "").strip()
+    execution_order = getattr(args, "execution_order", None)
+    if cache_variant is not None and not cache_sequence_id:
+        print("--cache-variant requires --cache-sequence-id.", file=sys.stderr)
+        return 2
+    if cache_variant is not None and not execution_order:
+        print("--cache-variant requires --execution-order.", file=sys.stderr)
+        return 2
+    if cache_sequence_id and cache_variant is None:
+        print("--cache-sequence-id requires --cache-variant.", file=sys.stderr)
+        return 2
+    if execution_order and cache_variant is None:
+        print("--execution-order requires --cache-variant.", file=sys.stderr)
+        return 2
+    cache_namespace = ""
+    if cache_sequence_id:
+        try:
+            cache_namespace = cache_sequence_namespace(cache_sequence_id)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    if cache_variant is not None:
+        prompt_layout = "append" if cache_variant == "p1" else "rebuild"
+        settings = replace(settings, context=replace(settings.context, prompt_layout=prompt_layout))
     milestone = _effective_milestone(settings, args)
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     git_commit, worktree_dirty = _git_evidence(Path.cwd())
@@ -566,6 +705,8 @@ def eval_command(args: argparse.Namespace) -> int:
 
     def agent_runner(case: EvalCase, state: RunState) -> RunState:
         state.constraints.extend(_case_constraints(case))
+        if cache_namespace:
+            state.prompt_namespace = cache_namespace
         artifacts = ArtifactStore(
             state.artifacts_dir or state.run_dir / "artifacts",
             display_path_prefix=".minicc_artifacts",
@@ -621,19 +762,28 @@ def eval_command(args: argparse.Namespace) -> int:
         "base_url": settings.base_url or "",
         "model": settings.model or "",
         "temperature": settings.temperature,
+        "stream": settings.provider.stream,
+        "include_usage": settings.provider.include_usage,
         "sandbox_mode": settings.sandbox.mode,
         "execute_local": bool(args.execute_local),
         "json_mode": settings.provider.json_mode,
         "max_completion_tokens": settings.provider.max_completion_tokens,
         "provider_max_retries": settings.provider.max_retries,
         "provider_timeout_sec": settings.provider.timeout_sec,
+        "cache_scope_sha256": _secret_fingerprint(settings.api_key),
         "docker_image": settings.sandbox.image,
         "git_commit": git_commit,
         "worktree_dirty": worktree_dirty,
         "release_gate": bool(args.release_gate),
         "milestone": milestone,
         "context_variant": context_variant or "configured",
+        "cache_variant": cache_variant or "configured",
+        "cache_sequence_id": cache_sequence_id or None,
+        "execution_order": execution_order,
+        "feedback_memory_mode": "disabled" if cache_variant else "configured",
+        "prompt_layout": settings.context.prompt_layout,
         "compaction_strategy": settings.context.compaction_strategy,
+        "system_prefix_sha256": hashlib.sha256(STABLE_PREFIX.encode("utf-8")).hexdigest(),
         "max_prompt_chars": settings.context.max_prompt_chars,
         "recent_turns": settings.context.recent_turns,
         "semantic_max_completion_tokens": settings.context.semantic_max_completion_tokens,
@@ -685,7 +835,10 @@ def compaction_report_command(args: argparse.Namespace) -> int:
         return 2
     try:
         pairs = [
-            (load_suite_report(a0_path), load_suite_report(a1_path))
+            (
+                load_compaction_suite_report(a0_path),
+                load_compaction_suite_report(a1_path),
+            )
             for a0_path, a1_path in zip(args.a0, args.a1, strict=True)
         ]
         report = build_compaction_ab_report(pairs)
@@ -694,6 +847,149 @@ def compaction_report_command(args: argparse.Namespace) -> int:
         print(f"Cannot build compaction report: {exc}", file=sys.stderr)
         return 2
     print(f"compaction_ab_status: {report['status']}")
+    print(f"json_report: {bundle.json_path}")
+    print(f"markdown_report: {bundle.markdown_path}")
+    return 0 if report["passed"] else 1
+
+
+def cache_probe_command(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    milestone = _effective_milestone(settings, args)
+    git_commit, worktree_dirty = _git_evidence(Path.cwd())
+    if args.release_gate:
+        gate_error = _cache_probe_release_gate_error(args, git_commit, worktree_dirty)
+        if gate_error:
+            print(f"Cache probe release gate rejected: {gate_error}", file=sys.stderr)
+            return 2
+    if args.repeat < 1:
+        print("--repeat must be at least 1.", file=sys.stderr)
+        return 2
+    if settings.context.compaction_strategy == "semantic":
+        print(
+            "cache-probe requires deterministic or disabled compaction configuration.",
+            file=sys.stderr,
+        )
+        return 2
+
+    provider = _build_provider_or_print_error(settings)
+    if provider is None:
+        return 2
+    prompt_layout = "append" if args.cache_variant == "p1" else "rebuild"
+    context = ContextConfig(
+        max_prompt_chars=settings.context.max_prompt_chars,
+        recent_turns=settings.context.recent_turns,
+        artifact_preview_chars=settings.context.artifact_preview_chars,
+        summary_max_chars=settings.context.summary_max_chars,
+        field_preview_chars=settings.context.field_preview_chars,
+        compaction_strategy=settings.context.compaction_strategy,
+        retention_markers=settings.context.retention_markers,
+        prompt_layout=prompt_layout,
+    )
+    configuration = {
+        "base_url": settings.base_url or "",
+        "model": settings.model or "",
+        "temperature": settings.temperature,
+        "stream": settings.provider.stream,
+        "include_usage": settings.provider.include_usage,
+        "json_mode": settings.provider.json_mode,
+        "max_completion_tokens": settings.provider.max_completion_tokens,
+        "provider_max_retries": settings.provider.max_retries,
+        "provider_timeout_sec": settings.provider.timeout_sec,
+        "cache_scope_sha256": _secret_fingerprint(settings.api_key),
+        "git_commit": git_commit,
+        "worktree_dirty": worktree_dirty,
+        "release_gate": bool(args.release_gate),
+        "milestone": milestone,
+        "compaction_strategy": settings.context.compaction_strategy,
+        "recent_turns": settings.context.recent_turns,
+        "max_prompt_chars": settings.context.max_prompt_chars,
+        "execution_order": args.execution_order,
+        "feedback_memory_mode": "disabled",
+    }
+    try:
+        bundle = run_fixed_cache_probe(
+            provider,
+            probes_root=Path.cwd() / ".minicc" / "cache-probes",
+            config=CacheProbeRunConfig(
+                variant=args.cache_variant,
+                repeat=args.repeat,
+                cache_sequence_id=args.cache_sequence_id,
+                context=context,
+                model_options=CompletionOptions(
+                    temperature=settings.temperature,
+                    stream=settings.provider.stream,
+                    include_usage=settings.provider.include_usage,
+                    json_mode=settings.provider.json_mode,
+                    max_tokens=settings.provider.max_completion_tokens,
+                ),
+                configuration=configuration,
+                milestone=milestone,
+                stage="formal_acceptance" if args.release_gate else "development_precheck",
+            ),
+        )
+        report = load_cache_probe_report(
+            bundle.report_json_path,
+            verify_manifest=True,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"Cannot run cache probe: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"cache_probe_status: {report['result']}")
+    print(f"cache_probe_id: {bundle.probe_id}")
+    print(f"cache_state: {report['cache']['cache_state']}")
+    print(f"weighted_hit_rate: {report['cache']['weighted_hit_rate']}")
+    print(f"json_report: {bundle.report_json_path}")
+    print(f"markdown_report: {bundle.report_markdown_path}")
+    return 0 if report["passed"] else 1
+
+
+def cache_report_command(args: argparse.Namespace) -> int:
+    lengths = {
+        len(args.p0_probe),
+        len(args.p1_probe),
+        len(args.p0_eval),
+        len(args.p1_eval),
+    }
+    if len(lengths) != 1:
+        print(
+            "cache-report requires equal numbers of --p0-probe, --p1-probe, "
+            "--p0-eval, and --p1-eval reports.",
+            file=sys.stderr,
+        )
+        return 2
+    if lengths != {2}:
+        print("cache-report requires exactly two independent rounds.", file=sys.stderr)
+        return 2
+    try:
+        rounds = [
+            (
+                load_cache_probe_report(p0_probe, verify_manifest=True),
+                load_cache_probe_report(p1_probe, verify_manifest=True),
+                load_cache_suite_report(p0_eval, verify_manifest=True),
+                load_cache_suite_report(p1_eval, verify_manifest=True),
+            )
+            for p0_probe, p1_probe, p0_eval, p1_eval in zip(
+                args.p0_probe,
+                args.p1_probe,
+                args.p0_eval,
+                args.p1_eval,
+                strict=True,
+            )
+        ]
+        report = build_cache_ab_report(rounds)
+        if not report["passed"]:
+            print(f"cache_ab_status: {report['status']}")
+            print(
+                "Prompt Cache A/B did not pass; no acceptance report was written.",
+                file=sys.stderr,
+            )
+            return 1
+        bundle = write_cache_ab_report(report, args.output_dir)
+    except (OSError, ValueError) as exc:
+        print(f"Cannot build Prompt Cache A/B report: {exc}", file=sys.stderr)
+        return 2
+    print(f"cache_ab_status: {report['status']}")
     print(f"json_report: {bundle.json_path}")
     print(f"markdown_report: {bundle.markdown_path}")
     return 0 if report["passed"] else 1
@@ -845,6 +1141,22 @@ def _release_gate_error(
     return ""
 
 
+def _cache_probe_release_gate_error(
+    args: argparse.Namespace,
+    git_commit: str,
+    worktree_dirty: bool,
+) -> str:
+    if not git_commit:
+        return "the workspace is not pinned to a Git commit"
+    if worktree_dirty:
+        return "the Git worktree has uncommitted changes"
+    if args.repeat != 5:
+        return "formal cache probes require exactly --repeat 5"
+    if not getattr(args, "execution_order", None):
+        return "formal cache probes require --execution-order"
+    return ""
+
+
 def traces_command(args: argparse.Namespace) -> int:
     runs_root = Path.cwd() / ".minicc" / "runs"
     if not runs_root.exists():
@@ -916,6 +1228,12 @@ def _effective_milestone(settings: Settings, args: argparse.Namespace) -> str:
     if output_dir is not None and str(Path(output_dir).name).startswith("stable-v"):
         return str(Path(output_dir).name)
     return settings.project.milestone
+
+
+def _secret_fingerprint(value: str | None) -> str:
+    if not value:
+        return ""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _write_run_artifact_index(state: RunState) -> Path | None:

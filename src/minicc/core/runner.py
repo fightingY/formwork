@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 from minicc.core.protocol import Action, ProtocolError, parse_action
 from minicc.core.provider import CompletionOptions, ModelProvider, ModelUsage
@@ -42,9 +43,21 @@ class ModelTurnRunner:
     ) -> ModelTurn:
         response = self.provider.complete(messages, options=self.config.model_options)
         state.metrics["turns"] += 1
-        _accumulate_usage(state, response.usage, response.latency_ms)
+        _accumulate_usage(
+            state,
+            response.usage,
+            response.latency_ms,
+            attempt_count=response.attempt_count,
+        )
+        _accumulate_response_identity(state, response.raw)
         if self.trace is not None:
-            self.trace.model_response(state, response.text, response.latency_ms, response.usage)
+            self.trace.model_response(
+                state,
+                response.text,
+                response.latency_ms,
+                response.usage,
+                attempt_count=response.attempt_count,
+            )
 
         try:
             action = parse_action(
@@ -77,7 +90,13 @@ class ModelTurnRunner:
             return ModelTurn(action=None, observation=observation)
 
 
-def _accumulate_usage(state: RunState, usage: ModelUsage, latency_ms: int) -> None:
+def _accumulate_usage(
+    state: RunState,
+    usage: ModelUsage,
+    latency_ms: int,
+    *,
+    attempt_count: int = 1,
+) -> None:
     metric_map = {
         "prompt_tokens": usage.prompt_tokens,
         "completion_tokens": usage.completion_tokens,
@@ -115,3 +134,39 @@ def _accumulate_usage(state: RunState, usage: ModelUsage, latency_ms: int) -> No
             state.metrics["cache_observed_hit_tokens"] / total_observed if total_observed else 0.0
         )
     state.metrics["latency_ms"] = state.metrics.get("latency_ms", 0) + latency_ms
+    normalized_attempts = max(int(attempt_count or 1), 1)
+    state.metrics["provider_request_attempts"] = (
+        int(state.metrics.get("provider_request_attempts", 0)) + normalized_attempts
+    )
+    if normalized_attempts > 1:
+        state.metrics["provider_retried_requests"] = (
+            int(state.metrics.get("provider_retried_requests", 0)) + 1
+        )
+
+
+def _accumulate_response_identity(state: RunState, raw: Mapping[str, Any]) -> None:
+    models: set[str] = set()
+    fingerprints: set[str] = set()
+    candidates: list[Mapping[str, Any]] = [raw]
+    chunks = raw.get("chunks")
+    if isinstance(chunks, list):
+        candidates.extend(item for item in chunks if isinstance(item, Mapping))
+    for candidate in candidates:
+        model = candidate.get("model")
+        fingerprint = candidate.get("system_fingerprint")
+        if model:
+            models.add(str(model))
+        if fingerprint:
+            fingerprints.add(str(fingerprint))
+    state.metrics["provider_response_models"] = sorted(
+        {
+            *state.metrics.get("provider_response_models", []),
+            *models,
+        }
+    )
+    state.metrics["provider_system_fingerprints"] = sorted(
+        {
+            *state.metrics.get("provider_system_fingerprints", []),
+            *fingerprints,
+        }
+    )

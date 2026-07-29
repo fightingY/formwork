@@ -50,12 +50,14 @@ class Observation:
 class TrajectoryStep:
     action: Action | None
     observation: Observation
+    state_snapshot: str = ""
 
 
 @dataclass
 class RunState:
     run_id: str
     goal: str
+    prompt_namespace: str = ""
     schema_version: int = LEDGER_SCHEMA_VERSION
     suite_id: str | None = None
     milestone: str = ""
@@ -92,10 +94,12 @@ class RunState:
         suite_id: str | None = None,
         milestone: str = "",
         stage: str = "daily_development",
+        prompt_namespace: str = "",
     ) -> "RunState":
         return cls(
             run_id=new_run_id(),
             goal=goal,
+            prompt_namespace=prompt_namespace,
             workspace_host_path=workspace_host_path,
             run_dir=run_dir,
             artifacts_dir=artifacts_dir,
@@ -128,6 +132,7 @@ class RunState:
         return cls(
             run_id=str(data["run_id"]),
             goal=str(data["goal"]),
+            prompt_namespace=str(data.get("prompt_namespace") or ""),
             schema_version=int(data.get("schema_version", 1)),
             suite_id=data.get("suite_id"),
             milestone=str(data.get("milestone") or ""),
@@ -164,6 +169,10 @@ def initial_metrics() -> dict[str, Any]:
         "bash_actions": 0,
         "protocol_errors": 0,
         "provider_errors": 0,
+        "provider_request_attempts": 0,
+        "provider_retried_requests": 0,
+        "provider_response_models": [],
+        "provider_system_fingerprints": [],
         "infrastructure_errors": 0,
         "command_failures": 0,
         "timeouts": 0,
@@ -207,6 +216,12 @@ def initial_metrics() -> dict[str, Any]:
         "prompt_chars_total": 0,
         "prompt_chars_max": 0,
         "prompt_chars_mean": 0.0,
+        "prompt_layout": "rebuild",
+        "stable_prefix_hash": "",
+        "stable_prefix_chars": 0,
+        "stable_prefix_estimated_tokens": 0,
+        "stable_prefix_message_count": 0,
+        "stable_prefix_profile": {},
         "file_read_actions": 0,
         "search_actions": 0,
         "repeated_file_reads": 0,
@@ -221,6 +236,7 @@ def trajectory_step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
     return {
         "action": action_to_dict(step.action) if step.action is not None else None,
         "observation": asdict(step.observation),
+        "state_snapshot": step.state_snapshot,
     }
 
 
@@ -230,7 +246,11 @@ def trajectory_step_from_dict(data: dict[str, Any]) -> TrajectoryStep:
     raw_observation = data.get("observation")
     if not isinstance(raw_observation, dict):
         raise ValueError("Checkpoint trajectory step is missing an observation.")
-    return TrajectoryStep(action=action, observation=Observation(**raw_observation))
+    return TrajectoryStep(
+        action=action,
+        observation=Observation(**raw_observation),
+        state_snapshot=str(data.get("state_snapshot") or ""),
+    )
 
 
 def save_run_state(state: RunState, path: Path | None = None) -> Path:

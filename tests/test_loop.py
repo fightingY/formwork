@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
+from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, ProviderError
@@ -74,6 +75,29 @@ def test_loop_turns_protocol_error_into_observation_then_recovers(tmp_path) -> N
     assert result.state.status == "completed"
     assert result.state.metrics["protocol_errors"] == 1
     assert result.trajectory[0].observation.kind == "protocol_error"
+
+
+def test_loop_freezes_dynamic_guidance_on_append_trajectory_steps(tmp_path) -> None:
+    provider = FakeProvider(
+        [
+            '{"type":"bash","command":"pwd"}',
+            '{"type":"bash","command":"pytest -q"}',
+            '{"type":"final","answer":"done"}',
+        ]
+    )
+    state = RunState.start("Inspect and verify")
+
+    result = AgentLoop(
+        provider,
+        FakeExecutor(),
+        context_builder=ContextBuilder(ContextConfig(prompt_layout="append")),
+        session=SessionManager(runs_root=tmp_path / "runs"),
+        config=LoopConfig(max_turns=3),
+    ).run(state)
+
+    assert result.state.status == "completed"
+    assert result.trajectory[0].state_snapshot == ""
+    assert "Converge now" in result.trajectory[1].state_snapshot
 
 
 def test_loop_waits_on_ask_action(tmp_path) -> None:

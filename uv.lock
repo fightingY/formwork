@@ -90,7 +90,7 @@ wheels = [
 
 [[package]]
 name = "mini-claude-code"
-version = "2.1.0"
+version = "2.1.1.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

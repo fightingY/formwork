@@ -12,7 +12,13 @@ from minicc.core.loop import AgentLoop, LoopConfig
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
 from minicc.core.session import SessionManager
-from minicc.core.state import Observation, RunState, TrajectoryStep, save_run_state
+from minicc.core.state import (
+    Observation,
+    RunState,
+    TrajectoryStep,
+    save_run_state,
+    trajectory_step_from_dict,
+)
 from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
 from minicc.trace.recorder import TraceRecorder
 
@@ -54,6 +60,7 @@ def test_checkpoint_round_trips_state_trajectory_and_workspace(tmp_path) -> None
         TrajectoryStep(
             action=BashAction(command="write-change"),
             observation=Observation(kind="command_result", exit_code=0, message="done"),
+            state_snapshot="Budget status: 2 model turn(s) remain.",
         )
     ]
 
@@ -64,6 +71,26 @@ def test_checkpoint_round_trips_state_trajectory_and_workspace(tmp_path) -> None
     assert restored.state.resume_count == 1
     assert restored.trajectory == trajectory
     assert restored.reason == "action_completed"
+
+
+def test_legacy_checkpoint_step_without_snapshot_remains_loadable() -> None:
+    step = trajectory_step_from_dict(
+        {
+            "action": {"type": "bash", "command": "pwd", "timeout_sec": 60, "purpose": ""},
+            "observation": {
+                "kind": "command_result",
+                "exit_code": 0,
+                "stdout_preview": "",
+                "stderr_preview": "",
+                "artifact_ids": [],
+                "message": "ok",
+                "duration_ms": 0,
+            },
+        }
+    )
+
+    assert step.action == BashAction(command="pwd")
+    assert step.state_snapshot == ""
 
 
 def test_checkpoint_create_and_restore_write_trace_events(tmp_path) -> None:

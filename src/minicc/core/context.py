@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
+from math import ceil
 from typing import Literal
 
 from minicc.core.protocol import action_to_json
@@ -25,6 +28,10 @@ Behavior rules:
 - Use ask only when the task is blocked by missing user input.
 - Use final only when the task is complete or cannot continue.
 - Treat observations as authoritative harness results.
+- For code-modification goals, use the fewest safe model turns. If inspected source or tests
+  already establish a straightforward root cause, skip redundant pre-change verification;
+  the next bash action should apply the smallest fix and, when policy permits, run the
+  authoritative verification.
 
 Sandbox and policy constraints:
 - Bash commands run inside the configured miniCC execution environment.
@@ -52,6 +59,7 @@ class ContextConfig:
     field_preview_chars: int = 4_000
     compaction_strategy: Literal["disabled", "deterministic", "semantic"] = "deterministic"
     retention_markers: tuple[str, ...] = ()
+    prompt_layout: Literal["rebuild", "append"] = "rebuild"
 
 
 class ContextBuilder:
@@ -67,6 +75,8 @@ class ContextBuilder:
         self.config = config or ContextConfig()
         if self.config.compaction_strategy not in {"disabled", "deterministic", "semantic"}:
             raise ValueError("compaction_strategy must be disabled, deterministic, or semantic")
+        if self.config.prompt_layout not in {"rebuild", "append"}:
+            raise ValueError("prompt_layout must be rebuild or append")
         if self.config.compaction_strategy == "semantic" and semantic_compactor is None:
             raise ValueError("semantic compaction requires a semantic_compactor")
         self.skill_registry = skill_registry
@@ -81,14 +91,18 @@ class ContextBuilder:
     ) -> list[dict[str, str]]:
         state.metrics["context_compaction_strategy"] = self.config.compaction_strategy
         recent = self.recent_trajectory(trajectory)
-        dynamic_context = self._dynamic_context(state, recent)
-        messages = [
-            {"role": "system", "content": STABLE_PREFIX},
-            {"role": "user", "content": "\n\n".join(dynamic_context)},
-        ]
-        self._record_prompt_metrics(state, messages)
+        if self.config.prompt_layout == "append":
+            messages, stable_prefix_messages = self._append_messages(state, recent)
+        else:
+            messages = self._rebuild_messages(state, recent)
+            stable_prefix_messages = 1
+        prefix_profile = self._record_prompt_metrics(
+            state,
+            messages,
+            stable_prefix_messages=stable_prefix_messages,
+        )
         if self.trace is not None:
-            self.trace.prompt_built(state, messages)
+            self.trace.prompt_built(state, messages, prefix_profile=prefix_profile)
         return messages
 
     def maybe_compact(
@@ -216,15 +230,9 @@ class ContextBuilder:
         trajectory: list[TrajectoryStep],
     ) -> list[str]:
         dynamic_context: list[str] = []
-        if self.skill_registry is not None:
-            skill_catalog = self.skill_registry.catalog_text()
-            if skill_catalog:
-                dynamic_context.append(skill_catalog)
-        if self.feedback_memory is not None:
-            memory_context = self.feedback_memory.context_text(state.goal)
-            if memory_context:
-                dynamic_context.append(memory_context)
-
+        if state.prompt_namespace:
+            dynamic_context.append(f"Prompt namespace: {state.prompt_namespace}")
+        dynamic_context.extend(self._instruction_context(state))
         dynamic_context.extend(
             [
                 f"Goal: {state.goal}",
@@ -234,14 +242,12 @@ class ContextBuilder:
         budget_guidance = _budget_guidance(state)
         if budget_guidance:
             dynamic_context.append(budget_guidance)
-        repeated_reads = int(state.metrics.get("repeated_file_reads", 0) or 0)
-        repeated_searches = int(state.metrics.get("repeated_searches", 0) or 0)
-        if repeated_reads or repeated_searches:
-            dynamic_context.append(
-                "I/O repetition guard: the same file/search action has already been repeated "
-                f"({repeated_reads} file read(s), {repeated_searches} search(es)). "
-                "Do not repeat it again; make the smallest required patch or run the authoritative verification now."
-            )
+        repetition_guidance = _io_repetition_guidance(state)
+        if repetition_guidance:
+            dynamic_context.append(repetition_guidance)
+        action_economy_guidance = _action_economy_guidance(state)
+        if action_economy_guidance:
+            dynamic_context.append(action_economy_guidance)
         if state.constraints:
             dynamic_context.append("Constraints:\n" + "\n".join(f"- {item}" for item in state.constraints))
         if state.state_summary:
@@ -256,7 +262,34 @@ class ContextBuilder:
             dynamic_context.append("Recent trajectory:\n" + self.format_trajectory(trajectory))
         return dynamic_context
 
-    def _build_messages_with_trajectory(
+    def _instruction_context(self, state: RunState) -> list[str]:
+        context: list[str] = []
+        if self.skill_registry is not None:
+            skill_catalog = self.skill_registry.catalog_text()
+            if skill_catalog:
+                context.append(skill_catalog)
+        if self.feedback_memory is not None:
+            memory_context = self.feedback_memory.context_text(state.goal)
+            if memory_context:
+                context.append(memory_context)
+        return context
+
+    def _stable_run_context(self, state: RunState) -> list[str]:
+        context: list[str] = []
+        if state.prompt_namespace:
+            context.append(f"Prompt namespace: {state.prompt_namespace}")
+        context.extend(self._instruction_context(state))
+        context.extend(
+            [
+                f"Goal: {state.goal}",
+                f"Run status: {state.status}",
+            ]
+        )
+        if state.constraints:
+            context.append("Constraints:\n" + "\n".join(f"- {item}" for item in state.constraints))
+        return context
+
+    def _rebuild_messages(
         self,
         state: RunState,
         trajectory: list[TrajectoryStep],
@@ -265,6 +298,41 @@ class ContextBuilder:
             {"role": "system", "content": STABLE_PREFIX},
             {"role": "user", "content": "\n\n".join(self._dynamic_context(state, trajectory))},
         ]
+
+    def _append_messages(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep],
+    ) -> tuple[list[dict[str, str]], int]:
+        messages = [
+            {"role": "system", "content": STABLE_PREFIX},
+            {"role": "user", "content": "\n\n".join(self._stable_run_context(state))},
+        ]
+        stable_prefix_messages = len(messages)
+        if state.state_summary:
+            messages.append({"role": "user", "content": f"State summary:\n{state.state_summary}"})
+        for step in trajectory:
+            action_text = "<protocol_error>" if step.action is None else action_to_json(step.action)
+            observation_text = "Observation:\n" + self.format_observation(step.observation)
+            if step.state_snapshot:
+                observation_text += "\n\n" + step.state_snapshot
+            messages.extend(
+                [
+                    {"role": "assistant", "content": action_text},
+                    {"role": "user", "content": observation_text},
+                ]
+            )
+        return messages, stable_prefix_messages
+
+    def _build_messages_with_trajectory(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep],
+    ) -> list[dict[str, str]]:
+        # Compaction thresholds remain defined against the Stable V2.1
+        # canonical rebuild layout.  The append layout changes only transport
+        # framing, not when or what the compactor summarizes.
+        return self._rebuild_messages(state, trajectory)
 
     def format_trajectory(self, steps: list[TrajectoryStep]) -> str:
         parts: list[str] = []
@@ -363,7 +431,13 @@ class ContextBuilder:
                 output_chars=output_chars,
             )
 
-    def _record_prompt_metrics(self, state: RunState, messages: list[dict[str, str]]) -> None:
+    def _record_prompt_metrics(
+        self,
+        state: RunState,
+        messages: list[dict[str, str]],
+        *,
+        stable_prefix_messages: int,
+    ) -> dict[str, object]:
         prompt_chars = self._messages_len(messages)
         samples = int(state.metrics.get("prompt_char_samples", 0)) + 1
         total = int(state.metrics.get("prompt_chars_total", 0)) + prompt_chars
@@ -371,6 +445,14 @@ class ContextBuilder:
         state.metrics["prompt_chars_total"] = total
         state.metrics["prompt_chars_max"] = max(int(state.metrics.get("prompt_chars_max", 0)), prompt_chars)
         state.metrics["prompt_chars_mean"] = total / samples
+        profile = _prefix_profile(messages[:stable_prefix_messages])
+        state.metrics["prompt_layout"] = self.config.prompt_layout
+        state.metrics["stable_prefix_hash"] = profile["sha256"]
+        state.metrics["stable_prefix_chars"] = profile["content_chars"]
+        state.metrics["stable_prefix_estimated_tokens"] = profile["estimated_tokens"]
+        state.metrics["stable_prefix_message_count"] = profile["message_count"]
+        state.metrics["stable_prefix_profile"] = profile
+        return profile
 
     def _record_retention_metrics(self, state: RunState, *, active_context: str) -> None:
         raw_markers = state.metrics.get("context_retention_markers", self.config.retention_markers)
@@ -488,3 +570,116 @@ def _budget_guidance(state: RunState) -> str:
             "finish the smallest correct change, verify once, and avoid repeated inspection."
         )
     return ""
+
+
+def _io_repetition_guidance(state: RunState) -> str:
+    repeated_reads = int(state.metrics.get("repeated_file_reads", 0) or 0)
+    repeated_searches = int(state.metrics.get("repeated_searches", 0) or 0)
+    if not repeated_reads and not repeated_searches:
+        return ""
+    return (
+        "I/O repetition guard: the same file/search action has already been repeated "
+        f"({repeated_reads} file read(s), {repeated_searches} search(es)). "
+        "Do not repeat it again; make the smallest required patch or run the authoritative verification now."
+    )
+
+
+def _action_economy_guidance(state: RunState) -> str:
+    file_reads = int(state.metrics.get("file_read_actions", 0) or 0)
+    if file_reads < 1:
+        return ""
+    if not any("authoritative offline verification commands" in item for item in state.constraints):
+        return ""
+    return (
+        "Action economy: if the root cause and smallest change are clear from the current "
+        "evidence, the next bash action should apply that change and run one authoritative "
+        "verification command in the same shell command when policy permits. Do not inspect a "
+        "test solely to reconfirm behavior already established unambiguously by the goal and "
+        "source; authoritative post-change verification is sufficient. Otherwise inspect only "
+        "the specific missing evidence."
+    )
+
+
+def state_snapshot_text(state: RunState) -> str:
+    """Freeze mutable guidance at an immutable trajectory boundary."""
+
+    parts: list[str] = []
+    budget_guidance = _budget_guidance(state)
+    if budget_guidance:
+        parts.append(budget_guidance)
+    repetition_guidance = _io_repetition_guidance(state)
+    if repetition_guidance:
+        parts.append(repetition_guidance)
+    action_economy_guidance = _action_economy_guidance(state)
+    if action_economy_guidance:
+        parts.append(action_economy_guidance)
+    if state.open_questions:
+        parts.append("Open questions:\n" + "\n".join(f"- {item}" for item in state.open_questions))
+    if state.approval_question:
+        parts.append(f"Pending approval question:\n{state.approval_question}")
+    if state.status != "running":
+        parts.append(f"Run status: {state.status}")
+    return "\n\n".join(parts)
+
+
+def _prefix_profile(messages: list[dict[str, str]]) -> dict[str, object]:
+    canonical = json.dumps(
+        messages,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "scope": "application_message_prefix",
+        "hash_algorithm": "sha256",
+        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        "message_count": len(messages),
+        "content_chars": sum(len(message.get("content", "")) for message in messages),
+        "estimated_tokens": _estimate_messages_tokens(messages),
+        "token_count_kind": "estimated",
+    }
+
+
+def _estimate_messages_tokens(messages: list[dict[str, str]]) -> int:
+    if not messages:
+        return 0
+    return sum(_estimate_tokens(message.get("content", "")) + 4 for message in messages) + 2
+
+
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    tokens = 0
+    run_length = 0
+    for char in text:
+        if char.isspace():
+            tokens += _ascii_run_tokens(run_length)
+            run_length = 0
+        elif _is_cjk(char):
+            tokens += _ascii_run_tokens(run_length) + 1
+            run_length = 0
+        elif char.isalnum() or char == "_":
+            run_length += 1
+        else:
+            tokens += _ascii_run_tokens(run_length) + 1
+            run_length = 0
+    return tokens + _ascii_run_tokens(run_length)
+
+
+def _ascii_run_tokens(length: int) -> int:
+    if length <= 0:
+        return 0
+    return max(1, ceil(length / 4))
+
+
+def _is_cjk(char: str) -> bool:
+    codepoint = ord(char)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+        or 0x20000 <= codepoint <= 0x2A6DF
+        or 0x2A700 <= codepoint <= 0x2B73F
+        or 0x2B740 <= codepoint <= 0x2B81F
+        or 0x2B820 <= codepoint <= 0x2CEAF
+    )

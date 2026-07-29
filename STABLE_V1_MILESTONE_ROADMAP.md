@@ -378,6 +378,17 @@ experimental，但不阻塞 V2.2。
 实验配置只保留 P0 当前消息布局、P1 缓存优化布局。先对一个固定 prompt 序列各运行至少 5 次，
 再在一个真实 case 上各运行 3 次；每轮固定 provider、model、temperature、system prefix 和动态输入顺序。
 
+开发入口（2026-07-27）：代码版本进入 `2.1.1.dev0`，默认保持 P0 `rebuild`，P1
+`append` 仅通过实验变体显式启用。Stable V2.1 的 176 个正式主请求均有缓存字段，其中
+hit/miss 为 `1,024 / 325,088`，加权命中率 `0.314%`；这是真实低命中基线，不是
+`unsupported`。V2.1.1 使用专用固定序列探针和真实 eval suite 分开保存证据，最终报告必须同时
+展示实际 token、请求级状态、延迟、任务结果及稳定前缀哈希，不用探针结果掩盖真实任务退化。
+两轮分别使用独立的 prompt namespace 并倒置 P0/P1 顺序；固定探针锁定为 5 次（前 2 次
+warm-up、后 3 次 steady-state），真实 case 的 P0/P1 均须 3/3 PASS。真实 case 关闭可变的
+Feedback Memory，避免仓库外状态成为混杂变量。正式报告拒绝 provider 实际重试、
+缺失缓存字段、prompt token 膨胀、重复 run/namespace、未校验 manifest/hash 或不完整证据，
+combined 指标仅展示，不作为可被 workload 权重影响的发布门禁。
+
 验收标准：
 
 - P0/P1 均报告请求数、hit tokens、miss tokens、加权命中率、prompt tokens、延迟和任务结果。

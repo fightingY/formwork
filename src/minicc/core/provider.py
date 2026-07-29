@@ -26,6 +26,7 @@ class ModelResponse:
     raw: dict[str, Any]
     usage: ModelUsage
     latency_ms: int
+    attempt_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,7 @@ class OpenAICompatibleProvider:
             raw=raw,
             usage=parse_model_usage(usage_raw),
             latency_ms=latency_ms,
+            attempt_count=attempt + 1,
         )
 
     def _headers(self) -> dict[str, str]:

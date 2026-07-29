@@ -10,6 +10,7 @@ from minicc.core.ledger import (
     build_cleanup_plan,
     inspect_run,
     new_suite_id,
+    write_artifact_index,
     write_immutable_suite,
 )
 
@@ -29,7 +30,10 @@ def test_immutable_suite_bundle_refuses_report_overwrite(tmp_path) -> None:
         csv_text="run_id,result\n",
     )
 
-    assert json.loads(bundle.manifest_path.read_text(encoding="utf-8"))["suite_id"] == suite_id
+    written_manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
+    assert written_manifest["suite_id"] == suite_id
+    assert written_manifest["artifacts"]["report_json"]["path"] == "report.json"
+    assert len(written_manifest["artifacts"]["report_json"]["sha256"]) == 64
     assert bundle.report_json_path.name == "report.json"
     assert bundle.report_markdown_path.name == "report.md"
     assert bundle.report_csv_path.name == "report.csv"
@@ -42,6 +46,31 @@ def test_immutable_suite_bundle_refuses_report_overwrite(tmp_path) -> None:
             markdown="# overwritten\n",
             csv_text="run_id,result\n",
         )
+
+
+def test_resumable_artifact_index_stays_idempotent_when_evidence_changes(tmp_path) -> None:
+    run_dir = tmp_path / ".minicc" / "runs" / "run-resumable"
+    run_dir.mkdir(parents=True)
+    state_path = run_dir / "state.json"
+    state_path.write_text('{"status":"waiting_approval"}', encoding="utf-8")
+    evidence = {"state": str(state_path)}
+
+    first = write_artifact_index(
+        tmp_path / ".minicc" / "artifacts",
+        run_id="run-resumable",
+        run_dir=run_dir,
+        evidence=evidence,
+    )
+    state_path.write_text('{"status":"completed"}', encoding="utf-8")
+    second = write_artifact_index(
+        tmp_path / ".minicc" / "artifacts",
+        run_id="run-resumable",
+        run_dir=run_dir,
+        evidence=evidence,
+    )
+
+    assert second == first
+    assert "artifacts" not in json.loads(first.read_text(encoding="utf-8"))
 
 
 def test_inspect_run_marks_stale_running_as_orphaned_without_failing_task(tmp_path) -> None:

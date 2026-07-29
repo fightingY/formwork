@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from minicc.core.context import state_snapshot_text
 from minicc.core.protocol import Action, AskAction, BashAction, FinalAction
 from minicc.core.session import (
     SessionManager,
@@ -70,7 +71,15 @@ class ActionHandler:
             state.last_observation = observation
             if self.trace is not None:
                 self.trace.observation_created(state, observation)
-            return ActionOutcome(steps=[TrajectoryStep(action=action, observation=observation)])
+            return ActionOutcome(
+                steps=[
+                    TrajectoryStep(
+                        action=action,
+                        observation=observation,
+                        state_snapshot=state_snapshot_text(state),
+                    )
+                ]
+            )
 
         if decision.type == "require_approval":
             self.session.request_approval(state, action, decision)
@@ -93,7 +102,15 @@ class ActionHandler:
             state.last_observation = observation
             if self.trace is not None:
                 self.trace.observation_created(state, observation)
-            return ActionOutcome(steps=[TrajectoryStep(action=action_to_execute, observation=observation)])
+            return ActionOutcome(
+                steps=[
+                    TrajectoryStep(
+                        action=action_to_execute,
+                        observation=observation,
+                        state_snapshot=state_snapshot_text(state),
+                    )
+                ]
+            )
         if self.trace is not None:
             self.trace.sandbox_exec_started(state, action_to_execute.command)
         execution_id = begin_execution(state, action_to_execute, self.session)
@@ -104,7 +121,15 @@ class ActionHandler:
         if self.trace is not None:
             self.trace.sandbox_exec_finished(state, observation)
             self.trace.observation_created(state, observation)
-        return ActionOutcome(steps=[TrajectoryStep(action=action_to_execute, observation=observation)])
+        return ActionOutcome(
+            steps=[
+                TrajectoryStep(
+                    action=action_to_execute,
+                    observation=observation,
+                    state_snapshot=state_snapshot_text(state),
+                )
+            ]
+        )
 
 
 def _policy_violation_observation(decision: PolicyDecision) -> Observation:

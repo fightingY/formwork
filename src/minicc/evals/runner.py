@@ -200,6 +200,7 @@ def run_eval_case(
         run_id=result.run_id,
         run_dir=workspace.run_dir,
         evidence=_run_evidence_paths(result),
+        hash_artifacts=True,
     )
     return result
 
@@ -240,6 +241,8 @@ def suite_to_dict(result: EvalSuiteResult) -> dict:
         "suite_id": result.suite_id,
         "milestone": result.milestone,
         "stage": result.stage,
+        "created_at": result.created_at,
+        "completed_at": _suite_completed_at(result),
         "status": "completed",
         "result": "PASS" if result.passed else "FAIL",
         "passed": result.passed,

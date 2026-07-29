@@ -1,7 +1,10 @@
 import argparse
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
+
+import pytest
 
 from minicc import cli
 from minicc.config import BudgetSettings, ContextSettings, PolicySettings, ProviderSettings, SandboxSettings, Settings
@@ -127,6 +130,9 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
             output_dir=None,
             case_names=["demo"],
             release_gate=False,
+            cache_variant="p1",
+            cache_sequence_id="round-test",
+            execution_order="p0-first",
         )
     )
 
@@ -150,6 +156,180 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
     assert version["entry_count"] == 1
     assert version["entries"][0]["suite_id"] == suites[0].name
     assert version["entries"][0]["evidence_valid"] is True
+    suite_report = json.loads((suites[0] / "report.json").read_text(encoding="utf-8"))
+    assert cli.load_cache_suite_report(
+        suites[0] / "report.json",
+        verify_manifest=True,
+    )["suite_id"] == suites[0].name
+    assert suite_report["configuration"]["cache_variant"] == "p1"
+    assert suite_report["configuration"]["cache_sequence_id"] == "round-test"
+    assert suite_report["configuration"]["execution_order"] == "p0-first"
+    assert suite_report["configuration"]["prompt_layout"] == "append"
+    assert suite_report["created_at"]
+    artifact_index_path = (
+        tmp_path / ".minicc" / "artifacts" / runs[0].name / "manifest.json"
+    )
+    artifact_index = json.loads(artifact_index_path.read_text(encoding="utf-8"))
+    assert {
+        "state",
+        "trace",
+        "metrics",
+        "workspace_manifest",
+        "diff",
+        "run_report",
+    }.issubset(artifact_index["artifacts"])
+    assert len(artifact_index["artifacts"]["metrics"]["sha256"]) == 64
+
+    report_path = suites[0] / "report.json"
+    manifest_path = suites[0] / "manifest.json"
+    original_report = report_path.read_bytes()
+    original_manifest = manifest_path.read_bytes()
+    forged_report = json.loads(original_report)
+    forged_report["cases"][0]["metrics"]["prompt_tokens"] += 1
+    report_path.write_text(
+        json.dumps(forged_report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    forged_manifest = json.loads(original_manifest)
+    forged_report_bytes = report_path.read_bytes()
+    forged_manifest["artifacts"]["report_json"].update(
+        {
+            "bytes": len(forged_report_bytes),
+            "sha256": hashlib.sha256(forged_report_bytes).hexdigest(),
+        }
+    )
+    manifest_path.write_text(
+        json.dumps(forged_manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="run report does not match"):
+        cli.load_cache_suite_report(report_path, verify_manifest=True)
+    report_path.write_bytes(original_report)
+    manifest_path.write_bytes(original_manifest)
+
+    (runs[0] / "metrics.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="artifact hash mismatch"):
+        cli.load_cache_suite_report(
+            suites[0] / "report.json",
+            verify_manifest=True,
+        )
+
+
+def test_eval_parser_accepts_cache_variant() -> None:
+    args = cli.build_parser().parse_args(["eval", "--cache-variant", "p1"])
+
+    assert args.cache_variant == "p1"
+
+
+def test_cache_experiment_loop_disables_mutable_feedback_memory(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    settings = Settings(
+        provider=ProviderSettings(
+            base_url="https://example.test/v1",
+            api_key="key",
+            model="model",
+        ),
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(),
+        context=ContextSettings(prompt_layout="append"),
+        policy=PolicySettings(),
+    )
+    state = RunState.start(
+        "cache experiment",
+        prompt_namespace="cache-experiment/round-1",
+    )
+
+    loop = cli._build_loop(
+        FakeProvider(['{"type":"final","answer":"done"}']),
+        FakeExecutor(),
+        settings=settings,
+        state=state,
+    )
+
+    assert loop.context_builder.feedback_memory is None
+
+
+def test_cache_probe_command_writes_canonical_probe_bundle(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    settings = Settings(
+        provider=ProviderSettings(
+            base_url="https://example.test/v1",
+            api_key="key",
+            model="model",
+            max_completion_tokens=128,
+        ),
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(),
+        context=ContextSettings(),
+        policy=PolicySettings(),
+    )
+    provider = FakeProvider(['{"type":"bash","command":"true"}'] * 5)
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "_build_provider_or_print_error", lambda loaded: provider)
+    monkeypatch.setattr(cli, "_git_evidence", lambda cwd: ("abc123", False))
+
+    exit_code = cli.cache_probe_command(
+        argparse.Namespace(
+            cache_variant="p1",
+            repeat=5,
+            milestone="v2.1.1-test",
+            execution_order="p0-first",
+            cache_sequence_id="round-1",
+            release_gate=True,
+        )
+    )
+
+    probe_dirs = list((tmp_path / ".minicc" / "cache-probes").iterdir())
+    assert exit_code == 0
+    assert len(probe_dirs) == 1
+    report = json.loads((probe_dirs[0] / "report.json").read_text(encoding="utf-8"))
+    assert report["stage"] == "formal_acceptance"
+    assert report["configuration"]["cache_variant"] == "p1"
+    assert report["configuration"]["cache_sequence_id"] == "round-1"
+    assert report["configuration"]["prompt_layout"] == "append"
+    assert report["configuration"]["dynamic_sequence_sha256"]
+    assert report["stable_prefix"]["estimated_tokens_min"] > 0
+
+
+def test_cache_probe_release_gate_requires_clean_commit_and_five_requests() -> None:
+    args = argparse.Namespace(repeat=5, execution_order="p0-first")
+
+    assert cli._cache_probe_release_gate_error(args, "abc123", False) == ""
+    assert "uncommitted" in cli._cache_probe_release_gate_error(args, "abc123", True)
+    assert "--repeat 5" in cli._cache_probe_release_gate_error(
+        argparse.Namespace(repeat=4),
+        "abc123",
+        False,
+    )
+    assert "--execution-order" in cli._cache_probe_release_gate_error(
+        argparse.Namespace(repeat=5, execution_order=None),
+        "abc123",
+        False,
+    )
+
+
+def test_cache_report_does_not_write_failed_acceptance(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_cache_probe_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(cli, "load_cache_suite_report", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        cli,
+        "build_cache_ab_report",
+        lambda rounds: {"status": "FAIL", "passed": False},
+    )
+    output_dir = tmp_path / "acceptance" / "stable-v2.1.1"
+
+    exit_code = cli.cache_report_command(
+        argparse.Namespace(
+            p0_probe=[tmp_path / "p0-r1.json", tmp_path / "p0-r2.json"],
+            p1_probe=[tmp_path / "p1-r1.json", tmp_path / "p1-r2.json"],
+            p0_eval=[tmp_path / "p0-e1.json", tmp_path / "p0-e2.json"],
+            p1_eval=[tmp_path / "p1-e1.json", tmp_path / "p1-e2.json"],
+            output_dir=output_dir,
+        )
+    )
+
+    assert exit_code == 1
+    assert not output_dir.exists()
 
 
 def test_resume_command_uses_normal_settings_after_approval(tmp_path, monkeypatch) -> None:

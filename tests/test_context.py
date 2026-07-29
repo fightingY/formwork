@@ -1,9 +1,12 @@
-from minicc.core.context import ContextBuilder, ContextConfig
+import pytest
+
+from minicc.core.context import STABLE_PREFIX, ContextBuilder, ContextConfig, state_snapshot_text
 from minicc.core.protocol import BashAction
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.memory.compaction import CompactionError, CompactionResult
 from minicc.memory.feedback import FeedbackMemory
 from minicc.skills.registry import SkillRegistry
+from minicc.trace.recorder import TraceRecorder
 
 
 def test_context_builder_uses_cache_friendly_stable_prefix() -> None:
@@ -16,6 +19,187 @@ def test_context_builder_uses_cache_friendly_stable_prefix() -> None:
     assert "Run tests" in first[1]["content"]
     assert "Write docs" in second[1]["content"]
     assert "Run tests" not in first[0]["content"]
+
+
+def test_stable_prefix_requires_safe_action_economy_and_final_verification() -> None:
+    assert "For code-modification goals, use the fewest safe model turns" in STABLE_PREFIX
+    assert "skip redundant pre-change verification" in STABLE_PREFIX
+    assert "authoritative verification" in STABLE_PREFIX
+
+
+def test_rebuild_layout_keeps_v21_message_text_and_order() -> None:
+    state = RunState.start("Finish patch")
+    state.metrics["max_turns"] = 10
+    state.metrics["turns"] = 6
+    state.metrics["repeated_file_reads"] = 1
+    state.constraints = ["Only edit src/app.py"]
+    state.state_summary = "Root cause found"
+    state.open_questions = ["Confirm behavior"]
+    state.approval_question = "Approve command?"
+    state.last_observation = Observation(kind="command_result", exit_code=0, message="inspected")
+    trajectory = [_step("pwd", "first")]
+
+    messages = ContextBuilder().build_messages(state, trajectory)
+
+    expected_context = [
+        "Goal: Finish patch",
+        "Run status: running",
+        "Budget status: 4 model turn(s) remain. Converge now: "
+        "finish the smallest correct change, verify once, and avoid repeated inspection.",
+        "I/O repetition guard: the same file/search action has already been repeated "
+        "(1 file read(s), 0 search(es)). "
+        "Do not repeat it again; make the smallest required patch or run the authoritative verification now.",
+        "Constraints:\n- Only edit src/app.py",
+        "State summary:\nRoot cause found",
+        "Open questions:\n- Confirm behavior",
+        "Pending approval question:\nApprove command?",
+        "Last observation:\nkind=command_result\nexit_code=0\nmessage=inspected\n"
+        "stdout_preview=\nstderr_preview=",
+        "Recent trajectory:\nStep 1\n"
+        'Action: {"type": "bash", "command": "pwd", "timeout_sec": 60, "purpose": "first"}\n'
+        "Observation: kind=command_result\nexit_code=0\nmessage=first\n"
+        "stdout_preview=first\nstderr_preview=",
+    ]
+    assert messages == [
+        {"role": "system", "content": STABLE_PREFIX},
+        {"role": "user", "content": "\n\n".join(expected_context)},
+    ]
+
+
+def test_context_builder_rejects_unknown_prompt_layout() -> None:
+    with pytest.raises(ValueError, match="prompt_layout"):
+        ContextBuilder(ContextConfig(prompt_layout="unknown"))  # type: ignore[arg-type]
+
+
+def test_append_layout_preserves_complete_message_prefix_until_window_moves() -> None:
+    trace = TraceRecorder()
+    builder = ContextBuilder(ContextConfig(prompt_layout="append"), trace=trace)
+    state = RunState.start("Inspect repository")
+    first_step = _step("pwd", "first")
+    second_step = _step("ls", "second")
+
+    initial = builder.build_messages(state, [])
+    initial_hash = state.metrics["stable_prefix_hash"]
+    after_first = builder.build_messages(state, [first_step])
+    after_first_hash = state.metrics["stable_prefix_hash"]
+    after_second = builder.build_messages(state, [first_step, second_step])
+
+    assert after_first[: len(initial)] == initial
+    assert after_second[: len(after_first)] == after_first
+    assert [message["role"] for message in after_second] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert state.metrics["prompt_layout"] == "append"
+    assert initial_hash == after_first_hash == state.metrics["stable_prefix_hash"]
+    assert state.metrics["stable_prefix_message_count"] == 2
+    assert state.metrics["stable_prefix_estimated_tokens"] > 0
+    profile = trace.events[-1]["prefix_profile"]
+    assert profile["token_count_kind"] == "estimated"
+    assert profile["sha256"] == state.metrics["stable_prefix_hash"]
+    assert "content" not in profile
+
+
+def test_append_layout_resets_only_after_stable_prefix_when_recent_window_moves() -> None:
+    builder = ContextBuilder(ContextConfig(prompt_layout="append", recent_turns=1))
+    state = RunState.start("Inspect repository")
+    first_step = _step("pwd", "first")
+    second_step = _step("ls", "second")
+
+    after_first = builder.build_messages(state, [first_step])
+    after_second = builder.build_messages(state, [first_step, second_step])
+
+    assert after_second[:2] == after_first[:2]
+    assert after_second[: len(after_first)] != after_first
+
+
+def test_append_layout_profiles_more_reusable_prefix_than_rebuild() -> None:
+    rebuild_state = RunState.start("Inspect repository")
+    append_state = RunState.start("Inspect repository")
+
+    ContextBuilder().build_messages(rebuild_state, [])
+    ContextBuilder(ContextConfig(prompt_layout="append")).build_messages(append_state, [])
+
+    assert rebuild_state.metrics["stable_prefix_message_count"] == 1
+    assert append_state.metrics["stable_prefix_message_count"] == 2
+    assert (
+        append_state.metrics["stable_prefix_estimated_tokens"]
+        >= rebuild_state.metrics["stable_prefix_estimated_tokens"]
+    )
+
+
+def test_cache_namespace_is_first_dynamic_content_in_both_layouts() -> None:
+    rebuild_state = RunState.start("Inspect", prompt_namespace="cache-experiment/round-1")
+    append_state = RunState.start("Inspect", prompt_namespace="cache-experiment/round-1")
+
+    rebuild = ContextBuilder(ContextConfig(prompt_layout="rebuild")).build_messages(
+        rebuild_state,
+        [],
+    )
+    append = ContextBuilder(ContextConfig(prompt_layout="append")).build_messages(
+        append_state,
+        [],
+    )
+
+    expected = "Prompt namespace: cache-experiment/round-1"
+    assert rebuild[1]["content"].startswith(expected)
+    assert append[1]["content"].startswith(expected)
+
+
+def test_append_snapshot_freezes_budget_and_repetition_guidance() -> None:
+    state = RunState.start("Finish the pending patch")
+    state.metrics["max_turns"] = 10
+    state.metrics["turns"] = 6
+    state.metrics["repeated_file_reads"] = 2
+    state.metrics["repeated_searches"] = 1
+    snapshot = state_snapshot_text(state)
+    trajectory = [_step("pytest -q", "verified", state_snapshot=snapshot)]
+
+    messages = ContextBuilder(ContextConfig(prompt_layout="append")).build_messages(state, trajectory)
+
+    assert "Converge now" in snapshot
+    assert "I/O repetition guard" in snapshot
+    assert "2 file read(s), 1 search(es)" in snapshot
+    assert snapshot in messages[-1]["content"]
+
+
+def test_action_economy_guidance_is_shared_by_rebuild_and_append_snapshots() -> None:
+    state = RunState.start("Fix the failing implementation")
+    state.constraints = [
+        "Use these authoritative offline verification commands; do not install a different "
+        "test runner: pytest -q"
+    ]
+    state.metrics["file_read_actions"] = 1
+
+    rebuild_content = ContextBuilder().build_messages(state, [])[1]["content"]
+    snapshot = state_snapshot_text(state)
+
+    assert "Action economy:" in rebuild_content
+    assert "the next bash action should apply that change" in rebuild_content
+    assert "Do not inspect a test solely to reconfirm behavior" in rebuild_content
+    assert "one authoritative verification command" in snapshot
+
+
+def test_append_layout_formats_protocol_error_as_chat_turn() -> None:
+    step = TrajectoryStep(
+        action=None,
+        observation=Observation(kind="protocol_error", message="invalid JSON"),
+        state_snapshot="Budget status: retry safely.",
+    )
+
+    messages = ContextBuilder(ContextConfig(prompt_layout="append")).build_messages(
+        RunState.start("Recover"),
+        [step],
+    )
+
+    assert messages[-2] == {"role": "assistant", "content": "<protocol_error>"}
+    assert messages[-1]["role"] == "user"
+    assert "kind=protocol_error" in messages[-1]["content"]
+    assert "Budget status: retry safely." in messages[-1]["content"]
 
 
 def test_context_builder_limits_recent_trajectory() -> None:
@@ -54,6 +238,49 @@ def test_context_builder_compacts_old_trajectory_once() -> None:
 
     assert "State summary" in messages[1]["content"]
     assert "sed -n" in messages[1]["content"]
+
+
+def test_prompt_layout_does_not_change_compaction_state_or_retention() -> None:
+    trajectory = [
+        _step("pytest -q", "first failure", artifact_ids=["art_0001"]),
+        _step("sed -n '1,120p' src/app.py", "inspected file"),
+    ]
+    rebuild_state = RunState.start("Debug failure")
+    append_state = RunState.start("Debug failure")
+    rebuild = ContextBuilder(
+        ContextConfig(
+            max_prompt_chars=10,
+            recent_turns=1,
+            summary_max_chars=2_000,
+            retention_markers=("art_0001",),
+            prompt_layout="rebuild",
+        )
+    )
+    append = ContextBuilder(
+        ContextConfig(
+            max_prompt_chars=10,
+            recent_turns=1,
+            summary_max_chars=2_000,
+            retention_markers=("art_0001",),
+            prompt_layout="append",
+        )
+    )
+
+    rebuild.maybe_compact(rebuild_state, trajectory)
+    append.maybe_compact(append_state, trajectory)
+
+    assert append_state.state_summary == rebuild_state.state_summary
+    for name in (
+        "context_compactions",
+        "context_compacted_steps",
+        "context_compaction_input_chars",
+        "context_compaction_output_chars",
+        "context_compaction_chars_saved",
+        "context_retention_expected",
+        "context_retention_retained",
+        "context_retention_rate",
+    ):
+        assert append_state.metrics[name] == rebuild_state.metrics[name]
 
 
 def test_context_builder_uses_semantic_compactor_and_records_retention() -> None:
@@ -187,7 +414,13 @@ def test_context_builder_adds_io_repetition_guard() -> None:
     assert "make the smallest required patch" in content
 
 
-def _step(command: str, message: str, artifact_ids: list[str] | None = None) -> TrajectoryStep:
+def _step(
+    command: str,
+    message: str,
+    artifact_ids: list[str] | None = None,
+    *,
+    state_snapshot: str = "",
+) -> TrajectoryStep:
     return TrajectoryStep(
         action=BashAction(command=command, purpose=message),
         observation=Observation(
@@ -197,4 +430,5 @@ def _step(command: str, message: str, artifact_ids: list[str] | None = None) -> 
             artifact_ids=artifact_ids or [],
             message=message,
         ),
+        state_snapshot=state_snapshot,
     )
