@@ -49,6 +49,7 @@ class RunWorkspace:
     workspace_dir: Path
     artifacts_dir: Path
     manifest_path: Path
+    content_digest_sha256: str
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,44 @@ class _GitSourceSnapshot:
     dirty_tracked_paths: tuple[str, ...]
     untracked_paths: tuple[str, ...]
     source_dirty: bool
+
+
+def workspace_content_digest(source_dir: Path) -> str:
+    return content_digest_from_records(workspace_content_records(source_dir))
+
+
+def workspace_content_records(
+    source_dir: Path,
+) -> list[tuple[str, str, bytes]]:
+    source_dir = source_dir.resolve()
+    if not source_dir.is_dir():
+        raise FileNotFoundError(f"Workspace source directory does not exist: {source_dir}")
+    policy = WorkspacePathPolicy()
+    return _content_records(
+        source_dir,
+        _auditable_files(source_dir, policy),
+    )
+
+
+def content_digest_from_records(
+    records: Iterable[tuple[str, str, bytes]],
+) -> str:
+    entries = [
+        {
+            "path": relative,
+            "kind": kind,
+            "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
+        for relative, kind, content in sorted(records, key=lambda item: item[0])
+    ]
+    payload = json.dumps(
+        entries,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def prepare_run_workspace(
@@ -140,6 +179,7 @@ def prepare_run_workspace(
 
     baseline_commit = _git_text(workspace_dir, "rev-parse", BASELINE_REF)
     included_files = _auditable_files(workspace_dir, policy)
+    content_digest_sha256 = _content_digest(workspace_dir, included_files)
     manifest = {
         "schema_version": 1,
         "run_id": run_id,
@@ -154,6 +194,7 @@ def prepare_run_workspace(
             **snapshot_details["included"],
             "file_count": len(included_files),
             "path_digest_sha256": _path_digest(included_files),
+            "content_digest_sha256": content_digest_sha256,
         },
         "excluded": snapshot_details["excluded"],
         "ignore_rules": {
@@ -185,6 +226,7 @@ def prepare_run_workspace(
         workspace_dir=workspace_dir,
         artifacts_dir=artifacts_dir,
         manifest_path=manifest_path,
+        content_digest_sha256=content_digest_sha256,
     )
 
 
@@ -575,6 +617,27 @@ def _relative_posix(path: str | Path) -> str:
 def _path_digest(paths: Sequence[str]) -> str:
     payload = "\0".join(paths).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _content_digest(root: Path, paths: Sequence[str]) -> str:
+    return content_digest_from_records(_content_records(root, paths))
+
+
+def _content_records(
+    root: Path,
+    paths: Sequence[str],
+) -> list[tuple[str, str, bytes]]:
+    records: list[tuple[str, str, bytes]] = []
+    for relative in paths:
+        path = root / relative
+        if path.is_symlink():
+            content = os.readlink(path).encode("utf-8", errors="surrogateescape")
+            kind = "symlink"
+        else:
+            content = path.read_bytes()
+            kind = "file"
+        records.append((relative, kind, content))
+    return records
 
 
 def _git_zlist(directory: Path, *args: str) -> list[str]:

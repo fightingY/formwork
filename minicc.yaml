@@ -5,7 +5,7 @@ provider:
   max_retries: 2
 
 project:
-  milestone: stable-v2.1.1
+  milestone: v2.1.2-development
 
 workspace:
   ignored_allowlist: []

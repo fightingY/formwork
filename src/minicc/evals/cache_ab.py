@@ -4,12 +4,17 @@ import hashlib
 import json
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
+from minicc.evals.assertions import (
+    assert_trace_action_shape_events,
+    trace_action_shape_evidence_events,
+)
+from minicc.evals.case import case_authority_bundle_sha256
 from minicc.evals.cache_probe import load_cache_probe_report
 from minicc.evals.cache_probe_runner import (
     fixed_probe_request_sha256s,
@@ -197,7 +202,8 @@ def load_suite_report(
     *,
     verify_manifest: bool = False,
 ) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    report_bytes = path.read_bytes()
+    payload = json.loads(report_bytes.decode("utf-8"))
     if (
         not isinstance(payload, dict)
         or payload.get("entity_type") != "suite_report"
@@ -205,16 +211,31 @@ def load_suite_report(
     ):
         raise ValueError(f"not an eval suite report: {path}")
     if verify_manifest:
-        _verify_suite_manifest(path, payload)
+        manifest_bytes = _verify_suite_manifest(
+            path,
+            payload,
+            report_bytes=report_bytes,
+        )
         payload["_evidence_integrity_verified"] = True
+        payload["_evidence_source_path"] = str(path.resolve())
+        payload["_evidence_report_sha256"] = hashlib.sha256(report_bytes).hexdigest()
+        payload["_evidence_manifest_sha256"] = hashlib.sha256(
+            manifest_bytes
+        ).hexdigest()
     return payload
 
 
-def _verify_suite_manifest(path: Path, report: Mapping[str, Any]) -> None:
+def _verify_suite_manifest(
+    path: Path,
+    report: Mapping[str, Any],
+    *,
+    report_bytes: bytes,
+) -> bytes:
     manifest_path = path.parent / "manifest.json"
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid suite manifest: {manifest_path}") from exc
     cases = report.get("cases", [])
     if not all(isinstance(case, Mapping) for case in cases):
@@ -271,6 +292,7 @@ def _verify_suite_manifest(path: Path, report: Mapping[str, Any]) -> None:
             path.parent / relative,
             expected_path=relative,
             label=f"suite {name}",
+            artifact_bytes=report_bytes if name == "report_json" else None,
         )
     required_evidence = {
         "state",
@@ -301,11 +323,21 @@ def _verify_suite_manifest(path: Path, report: Mapping[str, Any]) -> None:
             raise ValueError(
                 f"suite run points to a different manifest: {suite_manifest_path}"
             )
-        _verify_run_artifact_index(
+        verified_rows = _verify_run_artifact_index(
             case,
             evidence,
             configuration=report.get("configuration") or {},
         )
+        if not isinstance(case, dict):
+            raise ValueError(f"suite case record is not mutable: {case.get('run_id')}")
+        if "request_rows" not in case:
+            case["request_rows"] = verified_rows
+    _verify_case_authority_bundle(
+        cases,
+        configuration=report.get("configuration") or {},
+        milestone=str(report.get("milestone") or ""),
+    )
+    return manifest_bytes
 
 
 def _verify_run_artifact_index(
@@ -313,40 +345,19 @@ def _verify_run_artifact_index(
     evidence: Mapping[str, Any],
     *,
     configuration: Mapping[str, Any],
-) -> None:
+) -> list[dict[str, Any]]:
     run_id = str(case.get("run_id") or "")
     run_report_path = Path(str(evidence["run_report"])).resolve()
     run_dir = run_report_path.parent
     index_path = run_dir.parent.parent / "artifacts" / run_id / "manifest.json"
     try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-        run_report = json.loads(run_report_path.read_text(encoding="utf-8"))
-        metrics = json.loads(
-            Path(str(evidence["metrics"])).read_text(encoding="utf-8")
-        )
-        state = json.loads(
-            Path(str(evidence["state"])).read_text(encoding="utf-8")
-        )
-    except (OSError, json.JSONDecodeError) as exc:
+        index = json.loads(index_path.read_bytes().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid run artifact index or report: {run_id}") from exc
     normalized_evidence = {
         name: str(Path(str(value)).resolve())
         for name, value in evidence.items()
     }
-    metrics_metadata_keys = {
-        "schema_version",
-        "run_id",
-        "suite_id",
-        "milestone",
-        "stage",
-        "status",
-        "final_answer_present",
-    }
-    state_metrics = {
-        key: value
-        for key, value in metrics.items()
-        if key not in metrics_metadata_keys
-    } if isinstance(metrics, Mapping) else {}
     if (
         not isinstance(index, Mapping)
         or index.get("entity_type") != "artifact_index"
@@ -369,14 +380,188 @@ def _verify_run_artifact_index(
         or not required_hashes.issubset(indexed_artifacts)
     ):
         raise ValueError(f"run artifact index has incomplete hashes: {index_path}")
-    for name in required_hashes:
-        artifact_path = Path(normalized_evidence[name])
-        _verify_artifact_hash(
-            indexed_artifacts[name],
-            artifact_path,
-            expected_path=str(artifact_path),
-            label=f"run {run_id} {name}",
+    artifact_snapshots: dict[str, bytes] = {}
+    try:
+        for name in required_hashes:
+            artifact_path = Path(normalized_evidence[name])
+            data = artifact_path.read_bytes()
+            _verify_artifact_hash(
+                indexed_artifacts[name],
+                artifact_path,
+                expected_path=str(artifact_path),
+                label=f"run {run_id} {name}",
+                artifact_bytes=data,
+            )
+            artifact_snapshots[name] = data
+        run_report = json.loads(artifact_snapshots["run_report"].decode("utf-8"))
+        metrics = json.loads(artifact_snapshots["metrics"].decode("utf-8"))
+        state = json.loads(artifact_snapshots["state"].decode("utf-8"))
+        workspace_manifest = json.loads(
+            artifact_snapshots["workspace_manifest"].decode("utf-8")
         )
+        trace_events = _trace_events_from_bytes(artifact_snapshots["trace"])
+        trace_request_rows = [
+            event
+            for event in trace_events
+            if event.get("event") == "model_response"
+        ]
+        trace_assertion_events = trace_action_shape_evidence_events(
+            trace_events
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid hashed run artifact: {run_id}") from exc
+    metrics_metadata_keys = {
+        "schema_version",
+        "run_id",
+        "suite_id",
+        "milestone",
+        "stage",
+        "status",
+        "final_answer_present",
+    }
+    state_metrics = {
+        key: value
+        for key, value in metrics.items()
+        if key not in metrics_metadata_keys
+    } if isinstance(metrics, Mapping) else {}
+    workspace_included = (
+        workspace_manifest.get("included")
+        if isinstance(workspace_manifest, Mapping)
+        else {}
+    )
+    if not isinstance(workspace_included, Mapping):
+        workspace_included = {}
+    case_definition_sha256 = str(case.get("case_definition_sha256") or "")
+    fixture_content_sha256 = str(case.get("fixture_content_sha256") or "")
+    case_source_path = str(case.get("case_source_path") or "")
+    fixture_source_path = str(case.get("fixture_source_path") or "")
+    authority_required = (
+        "2.1.2" in str(case.get("milestone") or "")
+        or "case_authority_profiles" in configuration
+        or "case_authority_bundle_sha256" in configuration
+    )
+    case_request_rows = case.get("request_rows")
+    if (
+        authority_required
+        and not isinstance(case_request_rows, list)
+    ) or (
+        isinstance(case_request_rows, list)
+        and (
+            case_request_rows != trace_request_rows
+            or not isinstance(run_report, Mapping)
+            or run_report.get("request_rows") != case_request_rows
+        )
+    ):
+        raise ValueError(
+            f"run request rows do not match hashed trace: {run_report_path}"
+        )
+    case_trace_assertion_events = case.get("trace_assertion_events")
+    portable_action_evidence_required = (
+        "2.1.2" in str(case.get("milestone") or "")
+        and configuration.get("release_gate") is True
+    )
+    if (
+        portable_action_evidence_required
+        and not isinstance(case_trace_assertion_events, list)
+    ) or (
+        isinstance(case_trace_assertion_events, list)
+        and (
+            case_trace_assertion_events != trace_assertion_events
+            or not isinstance(run_report, Mapping)
+            or run_report.get("trace_assertion_events")
+            != case_trace_assertion_events
+        )
+    ):
+        raise ValueError(
+            "run trace assertion evidence does not match hashed trace: "
+            f"{run_report_path}"
+        )
+    assertion_specs = case.get("assertion_specs")
+    assertion_results = case.get("assertions")
+    if (
+        authority_required
+        and (
+            not isinstance(assertion_specs, list)
+            or not isinstance(assertion_results, list)
+        )
+    ):
+        raise ValueError(
+            f"run assertion specs are missing: {run_report_path}"
+        )
+    if isinstance(assertion_specs, list) and isinstance(assertion_results, list):
+        if (
+            not isinstance(run_report, Mapping)
+            or run_report.get("assertion_specs") != assertion_specs
+            or len(assertion_specs) != len(assertion_results)
+        ):
+            raise ValueError(
+                f"run assertion specs do not match suite report: {run_report_path}"
+            )
+        for spec, stored_result in zip(
+            assertion_specs,
+            assertion_results,
+            strict=True,
+        ):
+            if (
+                not isinstance(spec, dict)
+                or spec.get("type") != "trace_action_shape"
+            ):
+                continue
+            replayed = asdict(
+                assert_trace_action_shape_events(
+                    spec,
+                    trace_assertion_events,
+                )
+            )
+            if replayed != stored_result:
+                raise ValueError(
+                    "run action shape does not match hashed trace: "
+                    f"{run_report_path}"
+                )
+    if authority_required:
+        expected_profiles = configuration.get("case_authority_profiles")
+        expected_profile = (
+            expected_profiles.get(str(case.get("name") or ""))
+            if isinstance(expected_profiles, Mapping)
+            else None
+        )
+        actual_profile = {
+            "source_path": case_source_path,
+            "fixture_source_path": fixture_source_path,
+            "case_definition_sha256": case_definition_sha256,
+            "fixture_content_sha256": fixture_content_sha256,
+        }
+        project_root = run_dir.parents[2]
+        expected_fixture_root = (
+            Path(fixture_source_path.removeprefix("external:")).resolve()
+            if fixture_source_path.startswith("external:")
+            else (project_root / fixture_source_path).resolve()
+        )
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", case_definition_sha256) is None
+            or re.fullmatch(r"[0-9a-f]{64}", fixture_content_sha256) is None
+            or not case_source_path
+            or not fixture_source_path
+            or not isinstance(run_report, Mapping)
+            or not isinstance(workspace_manifest, Mapping)
+            or workspace_manifest.get("run_id") != run_id
+            or Path(str(workspace_manifest.get("source_root") or "")).resolve()
+            != expected_fixture_root
+            or workspace_included.get("content_digest_sha256")
+            != fixture_content_sha256
+            or expected_profile != actual_profile
+            or run_report.get("case_source_path") != case_source_path
+            or run_report.get("fixture_source_path") != fixture_source_path
+            or run_report.get("case_definition_sha256")
+            != case_definition_sha256
+            or run_report.get("fixture_content_sha256")
+            != fixture_content_sha256
+            or Path(str(run_report.get("workspace_manifest") or "")).resolve()
+            != Path(str(evidence["workspace_manifest"])).resolve()
+        ):
+            raise ValueError(
+                f"run authority profile does not match suite report: {run_report_path}"
+            )
     if (
         not isinstance(run_report, Mapping)
         or not isinstance(metrics, Mapping)
@@ -394,6 +579,7 @@ def _verify_run_artifact_index(
         or run_report.get("infrastructure_success") is not case.get("infrastructure_success")
         or run_report.get("policy_outcome") != case.get("policy_outcome")
         or run_report.get("evidence") != evidence
+        or run_report.get("assertions") != case.get("assertions")
         or run_report.get("metrics") != case.get("metrics")
         or metrics != case.get("metrics")
         or run_report.get("source_commit") != configuration.get("git_commit")
@@ -429,6 +615,93 @@ def _verify_run_artifact_index(
     )
     if case.get("formal_metric_eligible") is not expected_formal_eligibility:
         raise ValueError(f"run formal metric eligibility is inconsistent: {run_id}")
+    return trace_request_rows
+
+
+def _verify_case_authority_bundle(
+    cases: Sequence[Mapping[str, Any]],
+    *,
+    configuration: Mapping[str, Any],
+    milestone: str,
+) -> None:
+    required = (
+        "2.1.2" in milestone
+        or "case_authority_profiles" in configuration
+        or "case_authority_bundle_sha256" in configuration
+    )
+    if not required:
+        return
+    profiles: dict[str, dict[str, str]] = {}
+    for case in cases:
+        name = str(case.get("name") or "")
+        profile = {
+            "source_path": str(case.get("case_source_path") or ""),
+            "fixture_source_path": str(
+                case.get("fixture_source_path") or ""
+            ),
+            "case_definition_sha256": str(
+                case.get("case_definition_sha256") or ""
+            ),
+            "fixture_content_sha256": str(
+                case.get("fixture_content_sha256") or ""
+            ),
+        }
+        existing = profiles.setdefault(name, profile)
+        if existing != profile:
+            raise ValueError(f"suite case authority profile drifted: {name}")
+    expected_profiles = configuration.get("case_authority_profiles")
+    if not isinstance(expected_profiles, Mapping) or expected_profiles != profiles:
+        raise ValueError("suite case authority profiles do not match configuration")
+    expected_paths = {
+        "C02_fix_failing_test": {
+            "source_path": (
+                "eval_cases/capability_suite_v1/"
+                "C02_fix_failing_test/case.yaml"
+            ),
+            "fixture_source_path": (
+                "eval_cases/capability_suite_v1/"
+                "C02_fix_failing_test/fixture"
+            ),
+        },
+        "C07_large_log_debugging": {
+            "source_path": (
+                "eval_cases/capability_suite_v1/"
+                "C07_large_log_debugging/case.yaml"
+            ),
+            "fixture_source_path": (
+                "eval_cases/capability_suite_v1/"
+                "C07_large_log_debugging/fixture"
+            ),
+        },
+    }
+    formal_v212 = "2.1.2" in milestone and configuration.get("release_gate") is True
+    if formal_v212 and (
+        set(profiles) != set(expected_paths)
+        or any(
+            profiles[name][field] != value
+            for name, paths in expected_paths.items()
+            for field, value in paths.items()
+        )
+    ):
+        raise ValueError("V2.1.2 suite case authority paths are not canonical")
+    bundle_sha256 = str(configuration.get("case_authority_bundle_sha256") or "")
+    if (
+        re.fullmatch(r"[0-9a-f]{64}", bundle_sha256) is None
+        or bundle_sha256 != case_authority_bundle_sha256(profiles)
+    ):
+        raise ValueError("suite case authority bundle does not match run evidence")
+
+
+def _trace_events_from_bytes(data: bytes) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for line in data.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError("trace event must be a JSON object")
+        events.append(event)
+    return events
 
 
 def _verify_artifact_hash(
@@ -437,12 +710,13 @@ def _verify_artifact_hash(
     *,
     expected_path: str,
     label: str,
+    artifact_bytes: bytes | None = None,
 ) -> None:
     if not isinstance(entry, Mapping):
         raise ValueError(f"{label} has no artifact hash")
     if str(entry.get("path") or "") != expected_path or not artifact_path.is_file():
         raise ValueError(f"{label} artifact path mismatch: {artifact_path}")
-    data = artifact_path.read_bytes()
+    data = artifact_path.read_bytes() if artifact_bytes is None else artifact_bytes
     if (
         _integer(entry.get("bytes")) != len(data)
         or str(entry.get("sha256") or "") != hashlib.sha256(data).hexdigest()

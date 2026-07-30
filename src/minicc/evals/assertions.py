@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,7 @@ class AssertionResult:
     type: str
     passed: bool
     message: str
+    spec_sha256: str | None = None
 
 
 def run_assertions(
@@ -49,10 +51,16 @@ def run_assertion(
         return _assert_file_contains(assertion, workspace_dir, should_contain=False)
     if assertion_type == "metric_at_least":
         return _assert_metric_at_least(assertion, metrics)
+    if assertion_type == "metric_equals":
+        return _assert_metric_equals(assertion, metrics)
     if assertion_type == "run_status":
         return _assert_run_status(assertion, metrics)
     if assertion_type == "trace_contains_event":
         return _assert_trace_contains_event(assertion, run_dir)
+    if assertion_type == "trace_action_sequence":
+        return _assert_trace_action_sequence(assertion, run_dir)
+    if assertion_type == "trace_action_shape":
+        return _assert_trace_action_shape(assertion, run_dir)
     if assertion_type == "no_policy_violation":
         return _assert_no_trace_event(run_dir, "policy_decision", decision_type="deny")
     if assertion_type == "diff_allowlist":
@@ -135,6 +143,21 @@ def _assert_metric_at_least(assertion: dict[str, Any], metrics: dict[str, Any]) 
     )
 
 
+def _assert_metric_equals(assertion: dict[str, Any], metrics: dict[str, Any]) -> AssertionResult:
+    name = str(assertion.get("name") or "")
+    expected = float(assertion.get("value", 0))
+    actual = float(metrics.get(name, 0) or 0)
+    present = name in metrics
+    return AssertionResult(
+        "metric_equals",
+        present and actual == expected,
+        (
+            f"metric {name}={actual}, expected exactly {expected}; "
+            f"field_present={present}"
+        ),
+    )
+
+
 def _assert_run_status(assertion: dict[str, Any], metrics: dict[str, Any]) -> AssertionResult:
     expected = str(assertion.get("value") or "")
     actual = str(metrics.get("status") or "")
@@ -157,6 +180,277 @@ def _assert_trace_contains_event(assertion: dict[str, Any], run_dir: Path) -> As
     )
     fields_message = f" with fields {expected_fields}" if expected_fields else ""
     return AssertionResult("trace_contains_event", passed, f"trace contains event: {event_type}{fields_message}")
+
+
+def _assert_trace_action_sequence(
+    assertion: dict[str, Any],
+    run_dir: Path,
+) -> AssertionResult:
+    raw_commands = assertion.get("commands")
+    if (
+        not isinstance(raw_commands, list)
+        or not raw_commands
+        or not all(isinstance(command, str) and command.strip() for command in raw_commands)
+    ):
+        return AssertionResult(
+            "trace_action_sequence",
+            False,
+            "trace action sequence requires a non-empty list of exact commands",
+        )
+
+    expected = [_normalize_trace_command(command) for command in raw_commands]
+    actual = [
+        _normalize_trace_command(str(action.get("command") or ""))
+        for event in _read_trace(run_dir)
+        if event.get("event") == "action_parsed"
+        and isinstance((action := event.get("action")), dict)
+        and action.get("type") == "bash"
+    ]
+    sequence_length = len(expected)
+    raw_start_index = assertion.get("start_index")
+    if raw_start_index is None:
+        passed = any(
+            actual[index : index + sequence_length] == expected
+            for index in range(len(actual) - sequence_length + 1)
+        )
+        position_message = "at any position"
+    else:
+        try:
+            start_index = int(raw_start_index)
+        except (TypeError, ValueError):
+            start_index = 0
+        passed = (
+            start_index >= 1
+            and actual[start_index - 1 : start_index - 1 + sequence_length]
+            == expected
+        )
+        position_message = f"at 1-based bash index {raw_start_index}"
+    return AssertionResult(
+        "trace_action_sequence",
+        passed,
+        (
+            "trace contains contiguous exact bash command sequence "
+            f"{position_message}: {expected}; "
+            f"observed bash commands: {actual}"
+        ),
+    )
+
+
+def _assert_trace_action_shape(
+    assertion: dict[str, Any],
+    run_dir: Path,
+) -> AssertionResult:
+    return assert_trace_action_shape_events(
+        assertion,
+        _read_trace(run_dir),
+    )
+
+
+def assert_trace_action_shape_events(
+    assertion: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> AssertionResult:
+    raw_actions = assertion.get("actions")
+    if (
+        not isinstance(raw_actions, list)
+        or not raw_actions
+        or not all(isinstance(action, dict) for action in raw_actions)
+    ):
+        return AssertionResult(
+            "trace_action_shape",
+            False,
+            "trace action shape requires a non-empty list of action specs",
+        )
+
+    specs = [dict(action) for action in raw_actions]
+    valid_specs = all(_valid_action_shape_spec(spec) for spec in specs)
+    bash_events = [
+        (index, str(action.get("command") or "").strip())
+        for index, event in enumerate(events)
+        if event.get("event") == "action_parsed"
+        and isinstance((action := event.get("action")), dict)
+        and action.get("type") == "bash"
+    ]
+    actual = [command for _, command in bash_events]
+    matched = valid_specs and len(actual) == len(specs)
+    if matched:
+        for action_index, ((event_index, command), spec) in enumerate(
+            zip(bash_events, specs, strict=True)
+        ):
+            exact = spec.get("command")
+            pattern = spec.get("command_regex")
+            heredoc_write = spec.get("heredoc_write")
+            if isinstance(exact, str):
+                if command != exact.strip():
+                    matched = False
+                    break
+            elif isinstance(pattern, str):
+                if re.fullmatch(pattern, command) is None:
+                    matched = False
+                    break
+            elif not isinstance(heredoc_write, dict) or not _matches_heredoc_write(
+                command,
+                path=str(heredoc_write["path"]),
+                delimiter=str(heredoc_write["delimiter"]),
+            ):
+                matched = False
+                break
+            next_event_index = (
+                bash_events[action_index + 1][0]
+                if action_index + 1 < len(bash_events)
+                else len(events)
+            )
+            finished = [
+                event
+                for event in events[event_index + 1 : next_event_index]
+                if event.get("event") == "sandbox_exec_finished"
+            ]
+            if len(finished) != 1:
+                matched = False
+                break
+            observation = finished[0].get("observation")
+            if not isinstance(observation, dict):
+                matched = False
+                break
+            expected_exit_code = spec.get("expect_exit_code")
+            if (
+                expected_exit_code is not None
+                and observation.get("exit_code") != expected_exit_code
+            ):
+                matched = False
+                break
+            if "artifact_ids" in spec:
+                expected_artifacts = spec["artifact_ids"]
+                actual_artifacts = observation.get("artifact_ids")
+                if actual_artifacts != expected_artifacts:
+                    matched = False
+                    break
+                written_artifacts = [
+                    event.get("artifact_id")
+                    for event in events[event_index + 1 : next_event_index]
+                    if event.get("event") == "artifact_written"
+                ]
+                if any(
+                    artifact_id not in written_artifacts
+                    for artifact_id in expected_artifacts
+                ):
+                    matched = False
+                    break
+
+    spec = {"type": "trace_action_shape", "actions": specs}
+    spec_sha256 = assertion_spec_sha256(spec)
+    return AssertionResult(
+        "trace_action_shape",
+        matched,
+        (
+            f"trace bash action shape matches locked spec {spec_sha256}; "
+            f"observed bash commands: {actual}"
+        ),
+        spec_sha256,
+    )
+
+
+def trace_action_shape_evidence_events(
+    events: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep only the ordered trace fields consumed by action-shape assertions."""
+    normalized: list[dict[str, Any]] = []
+    for event in events:
+        event_type = event.get("event")
+        if event_type == "action_parsed":
+            action = event.get("action")
+            if not isinstance(action, Mapping) or action.get("type") != "bash":
+                continue
+            normalized.append(
+                {
+                    "event": "action_parsed",
+                    "action": {
+                        "type": "bash",
+                        "command": action.get("command"),
+                    },
+                }
+            )
+        elif event_type == "sandbox_exec_finished":
+            observation = event.get("observation")
+            normalized.append(
+                {
+                    "event": "sandbox_exec_finished",
+                    "observation": (
+                        {
+                            "exit_code": observation.get("exit_code"),
+                            "artifact_ids": observation.get("artifact_ids"),
+                        }
+                        if isinstance(observation, Mapping)
+                        else None
+                    ),
+                }
+            )
+        elif event_type == "artifact_written":
+            normalized.append(
+                {
+                    "event": "artifact_written",
+                    "artifact_id": event.get("artifact_id"),
+                }
+            )
+    return normalized
+
+
+def _valid_action_shape_spec(spec: dict[str, Any]) -> bool:
+    matcher_keys = {
+        key
+        for key in ("command", "command_regex", "heredoc_write")
+        if key in spec
+    }
+    if len(matcher_keys) != 1:
+        return False
+    if set(spec) - matcher_keys - {"expect_exit_code", "artifact_ids"}:
+        return False
+    if "command" in spec and not isinstance(spec["command"], str):
+        return False
+    if "command_regex" in spec and not isinstance(spec["command_regex"], str):
+        return False
+    if "heredoc_write" in spec:
+        heredoc = spec["heredoc_write"]
+        if (
+            not isinstance(heredoc, dict)
+            or set(heredoc) != {"path", "delimiter"}
+            or not all(
+                isinstance(value, str) and bool(value)
+                for value in heredoc.values()
+            )
+        ):
+            return False
+    if "expect_exit_code" in spec and not isinstance(
+        spec["expect_exit_code"],
+        int,
+    ):
+        return False
+    if "artifact_ids" in spec and (
+        not isinstance(spec["artifact_ids"], list)
+        or not all(
+            isinstance(artifact_id, str) and bool(artifact_id)
+            for artifact_id in spec["artifact_ids"]
+        )
+    ):
+        return False
+    return True
+
+
+def _matches_heredoc_write(
+    command: str,
+    *,
+    path: str,
+    delimiter: str,
+) -> bool:
+    lines = command.splitlines()
+    if len(lines) < 3:
+        return False
+    if lines[0] != f"cat > {path} << '{delimiter}'":
+        return False
+    if lines[-1] != delimiter:
+        return False
+    body = lines[1:-1]
+    return bool(body) and delimiter not in body
 
 
 def _assert_no_trace_event(run_dir: Path, event_type: str, **fields: str) -> AssertionResult:
@@ -240,6 +534,20 @@ def _read_trace(run_dir: Path) -> list[dict[str, Any]]:
         if isinstance(event, dict):
             events.append(event)
     return events
+
+
+def _normalize_trace_command(command: str) -> str:
+    return command.strip()
+
+
+def assertion_spec_sha256(assertion: dict[str, Any]) -> str:
+    payload = json.dumps(
+        assertion,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _shell_args(command: str) -> list[str]:

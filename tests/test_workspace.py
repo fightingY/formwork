@@ -188,6 +188,33 @@ def test_nested_eval_fixture_does_not_snapshot_parent_git_repository(tmp_path) -
     manifest = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
     assert manifest["snapshot_mode"] == "copy"
     assert manifest["source_root"] == str(fixture.resolve())
+    assert len(manifest["included"]["content_digest_sha256"]) == 64
+
+
+def test_workspace_content_digest_is_stable_and_changes_with_file_bytes(tmp_path) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "same-name.txt").write_text("first\n", encoding="utf-8")
+
+    first = prepare_run_workspace(
+        fixture,
+        run_id="content-first",
+        runs_root=tmp_path / "runs",
+    )
+    second = prepare_run_workspace(
+        fixture,
+        run_id="content-second",
+        runs_root=tmp_path / "runs",
+    )
+    assert first.content_digest_sha256 == second.content_digest_sha256
+
+    (fixture / "same-name.txt").write_text("second\n", encoding="utf-8")
+    changed = prepare_run_workspace(
+        fixture,
+        run_id="content-changed",
+        runs_root=tmp_path / "runs",
+    )
+    assert changed.content_digest_sha256 != first.content_digest_sha256
 
 
 def test_diff_is_anchored_when_agent_commits_changes(tmp_path) -> None:

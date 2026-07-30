@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import gcd
 from typing import Any, Mapping
 
 from minicc.core.protocol import Action, ProtocolError, parse_action
@@ -57,6 +58,7 @@ class ModelTurnRunner:
                 response.latency_ms,
                 response.usage,
                 attempt_count=response.attempt_count,
+                retry_reasons=response.retry_reasons,
             )
 
         try:
@@ -133,6 +135,12 @@ def _accumulate_usage(
         state.metrics["cache_hit_rate"] = (
             state.metrics["cache_observed_hit_tokens"] / total_observed if total_observed else 0.0
         )
+        _accumulate_cacheability(
+            state,
+            usage,
+            observed_hit_tokens=observed_hit_tokens,
+            observed_prompt_tokens=observed_prompt_tokens,
+        )
     state.metrics["latency_ms"] = state.metrics.get("latency_ms", 0) + latency_ms
     normalized_attempts = max(int(attempt_count or 1), 1)
     state.metrics["provider_request_attempts"] = (
@@ -142,6 +150,125 @@ def _accumulate_usage(
         state.metrics["provider_retried_requests"] = (
             int(state.metrics.get("provider_retried_requests", 0)) + 1
         )
+
+
+def _accumulate_cacheability(
+    state: RunState,
+    usage: ModelUsage,
+    *,
+    observed_hit_tokens: int,
+    observed_prompt_tokens: int,
+) -> None:
+    cold_start = bool(state.metrics.get("cache_prefix_local_cold_start"))
+    previous_is_exact = bool(state.metrics.get("cache_prefix_previous_is_exact"))
+    previous_prompt = _optional_int(state.metrics.get("cache_previous_provider_prompt_tokens"))
+    previous_completion = _optional_int(state.metrics.get("cache_previous_provider_completion_tokens"))
+    theoretical_kind = "unavailable"
+    theoretical_input = 0
+    theoretical_output = 0
+
+    if previous_is_exact and previous_prompt is not None:
+        theoretical_input = min(observed_prompt_tokens, previous_prompt)
+        theoretical_output = min(
+            observed_prompt_tokens,
+            previous_prompt + max(previous_completion or 0, 0),
+        )
+        theoretical_kind = "provider_input_boundary"
+    elif not cold_start:
+        estimated_prompt = max(
+            int(state.metrics.get("cache_prefix_current_estimated_tokens", 0) or 0),
+            0,
+        )
+        estimated_lcp = max(
+            int(state.metrics.get("cache_prefix_lcp_estimated_tokens", 0) or 0),
+            0,
+        )
+        if estimated_prompt > 0 and estimated_lcp > 0:
+            theoretical_input = min(
+                observed_prompt_tokens,
+                round(observed_prompt_tokens * estimated_lcp / estimated_prompt),
+            )
+            theoretical_output = theoretical_input
+            theoretical_kind = "estimated_message_lcp"
+
+    eligible_hit = (
+        min(observed_hit_tokens, theoretical_input)
+        if theoretical_input > 0
+        else 0
+    )
+    state.metrics["cache_theoretical_input_tokens"] = (
+        int(state.metrics.get("cache_theoretical_input_tokens", 0)) + theoretical_input
+    )
+    state.metrics["cache_theoretical_output_tokens"] = (
+        int(state.metrics.get("cache_theoretical_output_tokens", 0)) + theoretical_output
+    )
+    state.metrics["cache_capture_observed_hit_tokens"] = (
+        int(state.metrics.get("cache_capture_observed_hit_tokens", 0)) + eligible_hit
+    )
+    input_total = int(state.metrics["cache_theoretical_input_tokens"])
+    output_total = int(state.metrics["cache_theoretical_output_tokens"])
+    capture_hit_total = int(state.metrics["cache_capture_observed_hit_tokens"])
+    state.metrics["cache_capture_efficiency_input"] = (
+        capture_hit_total / input_total if input_total else None
+    )
+    state.metrics["cache_capture_efficiency_output"] = (
+        capture_hit_total / output_total if output_total else None
+    )
+    steady_state_observed = bool(
+        state.metrics.get("cache_steady_state_observed")
+    )
+    if observed_hit_tokens > 0 and not steady_state_observed:
+        steady_state_observed = True
+        state.metrics["cache_steady_state_observed"] = True
+        state.metrics["cache_steady_state_start_request_index"] = int(
+            state.metrics.get("cache_prefix_request_index", 0) or 0
+        )
+    if steady_state_observed:
+        state.metrics["cache_steady_state_hit_tokens"] = (
+            int(state.metrics.get("cache_steady_state_hit_tokens", 0)) + observed_hit_tokens
+        )
+        state.metrics["cache_steady_state_prompt_tokens"] = (
+            int(state.metrics.get("cache_steady_state_prompt_tokens", 0)) + observed_prompt_tokens
+        )
+        state.metrics["cache_steady_state_request_count"] = (
+            int(state.metrics.get("cache_steady_state_request_count", 0)) + 1
+        )
+        steady_prompt = int(state.metrics["cache_steady_state_prompt_tokens"])
+        state.metrics["cache_steady_state_hit_rate"] = (
+            int(state.metrics["cache_steady_state_hit_tokens"]) / steady_prompt
+            if steady_prompt
+            else None
+        )
+    if observed_hit_tokens > 0:
+        previous_block = max(
+            int(state.metrics.get("cache_empirical_hit_block_tokens", 0) or 0),
+            0,
+        )
+        state.metrics["cache_empirical_hit_block_tokens"] = (
+            observed_hit_tokens if previous_block == 0 else gcd(previous_block, observed_hit_tokens)
+        )
+
+    state.metrics["cache_theoretical_input_tokens_current"] = theoretical_input
+    state.metrics["cache_theoretical_output_tokens_current"] = theoretical_output
+    state.metrics["cache_theoretical_token_kind_current"] = theoretical_kind
+    state.metrics["cache_capture_efficiency_input_current"] = (
+        min(observed_hit_tokens, theoretical_input) / theoretical_input
+        if theoretical_input
+        else None
+    )
+    state.metrics["cache_previous_provider_prompt_tokens"] = (
+        usage.prompt_tokens if usage.prompt_tokens is not None else observed_prompt_tokens
+    )
+    state.metrics["cache_previous_provider_completion_tokens"] = usage.completion_tokens or 0
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _accumulate_response_identity(state: RunState, raw: Mapping[str, Any]) -> None:

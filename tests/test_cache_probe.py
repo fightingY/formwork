@@ -32,6 +32,9 @@ def test_cache_probe_reports_actual_request_and_steady_state_metrics() -> None:
     assert report["cache"]["miss_tokens"] == 350
     assert report["cache"]["weighted_hit_rate"] == 0.3
     assert report["cache"]["latency_ms_mean"] == 30
+    assert report["cache"]["steady_state_start_request_index"] == 3
+    assert report["cache"]["steady_state_request_count"] == 3
+    assert report["cache"]["steady_state_weighted_hit_rate"] == 0.5
     assert report["steady_state_request_count"] == 3
     assert report["steady_state_cache"]["hit_tokens"] == 150
     assert report["steady_state_cache"]["miss_tokens"] == 150
@@ -166,6 +169,66 @@ def test_cache_probe_strict_loader_rejects_forged_derived_result(tmp_path) -> No
 
     with pytest.raises(ValueError, match="derived fields"):
         load_cache_probe_report(bundle.report_json_path, verify_manifest=True)
+
+
+def test_cache_probe_strict_loader_keeps_schema_v1_evidence_readable(tmp_path) -> None:
+    report = build_cache_probe_report(
+        [_request(1, hit=10, miss=90, latency=10)],
+        configuration={"prompt_cache_variant": "p1"},
+        probe_id="cache-probe-legacy-v1",
+        warmup_requests=0,
+    )
+    report["schema_version"] = 1
+    legacy_keys = {
+        "request_count",
+        "successful_requests",
+        "request_success_rate",
+        "metric_requests",
+        "unreported_requests",
+        "coverage_status",
+        "cache_state",
+        "hit_tokens",
+        "miss_tokens",
+        "observed_prompt_tokens",
+        "weighted_hit_rate",
+        "prompt_tokens",
+        "latency_samples",
+        "latency_ms_total",
+        "latency_ms_mean",
+        "latency_ms_min",
+        "latency_ms_max",
+        "task_results_reported",
+        "task_successes",
+        "task_success_rate",
+        "miss_tokens_derived",
+    }
+    report["cache"] = {
+        key: value for key, value in report["cache"].items() if key in legacy_keys
+    }
+    report["steady_state_cache"] = {
+        key: value
+        for key, value in report["steady_state_cache"].items()
+        if key in legacy_keys
+    }
+    for request in report["requests"]:
+        for key in (
+            "completion_tokens",
+            "prefix_epoch",
+            "local_cold_start",
+            "previous_request_is_exact_prefix",
+            "prefix_reset_reason",
+            "lcp_estimated_tokens",
+            "theoretical_input_tokens",
+            "theoretical_output_tokens",
+            "theoretical_token_kind",
+            "capture_efficiency_input",
+        ):
+            request.pop(key, None)
+
+    bundle = write_immutable_cache_probe(tmp_path / "cache-probes", report)
+
+    loaded = load_cache_probe_report(bundle.report_json_path, verify_manifest=True)
+    assert loaded["schema_version"] == 1
 
 
 def _request(index: int, *, hit: int, miss: int, latency: int) -> dict:

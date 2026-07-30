@@ -140,17 +140,20 @@ def _policy_violation_observation(decision: PolicyDecision) -> Observation:
 
 
 def _record_io_action(state: RunState, command: str) -> bool:
-    normalized = " ".join(command.strip().split())
+    normalized = re.sub(r"[ \t\f\v]+", " ", command.strip())
     lowered = normalized.lower()
     if not normalized:
         return False
 
     category: str | None = None
-    if re.search(r"(^|[;&|]\s*)(rg|grep|find|fd)(\.exe)?\b", lowered) or "select-string" in lowered:
+    if re.search(r"(^|[;&|\r\n]\s*)(rg|grep|find|fd)(\.exe)?\b", lowered) or "select-string" in lowered:
         category = "search"
-    elif re.search(r"(^|[;&|]\s*)(cat|head|tail|type|get-content)(\.exe)?\b", lowered):
+    elif (
+        _contains_file_read_command(lowered)
+        or re.search(r"(^|[;&|\r\n]\s*)(head|tail|type|get-content)(\.exe)?\b", lowered)
+    ):
         category = "file_read"
-    elif re.search(r"(^|[;&|]\s*)sed\s+-n\b", lowered):
+    elif re.search(r"(^|[;&|\r\n]\s*)sed\s+-n\b", lowered):
         category = "file_read"
     if category is None:
         return False
@@ -168,3 +171,34 @@ def _record_io_action(state: RunState, command: str) -> bool:
     if previous:
         state.metrics[repeated_name] = int(state.metrics.get(repeated_name, 0)) + 1
     return previous >= 2
+
+
+def _contains_file_read_command(command: str) -> bool:
+    cat_matches = re.finditer(
+        r"(^|[;&|\r\n]\s*)(?:(?:/usr/bin/|/bin/)|command\s+)?cat(\.exe)?\b",
+        command,
+    )
+    return any(not _is_write_only_cat(command, match.end()) for match in cat_matches)
+
+
+def _is_write_only_cat(command: str, command_end: int) -> bool:
+    remainder = command[command_end:].lstrip()
+    if not remainder or remainder[0] in ";&|\r\n":
+        return True
+    if not (remainder.startswith(">") or remainder.startswith("<<")):
+        return False
+    command_line = remainder.splitlines()[0]
+    redirect_target = r"(?:'[^']*'|\"[^\"]*\"|[^\s;&|]+)"
+    without_heredoc = re.sub(
+        rf"<<-?\s*{redirect_target}",
+        "",
+        command_line,
+    )
+    if re.search(r"(?<!<)<(?!<)", without_heredoc) is not None:
+        return False
+    without_output_redirect = re.sub(
+        rf"(?:\d*)>>?\s*{redirect_target}",
+        "",
+        without_heredoc,
+    )
+    return not without_output_redirect.strip()

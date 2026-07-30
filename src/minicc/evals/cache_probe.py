@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from math import gcd
 import re
 import shutil
 from dataclasses import dataclass
@@ -11,7 +12,30 @@ from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 
-CACHE_PROBE_SCHEMA_VERSION = 1
+CACHE_PROBE_SCHEMA_VERSION = 2
+LEGACY_CACHE_SUMMARY_KEYS = (
+    "request_count",
+    "successful_requests",
+    "request_success_rate",
+    "metric_requests",
+    "unreported_requests",
+    "coverage_status",
+    "cache_state",
+    "hit_tokens",
+    "miss_tokens",
+    "observed_prompt_tokens",
+    "weighted_hit_rate",
+    "prompt_tokens",
+    "latency_samples",
+    "latency_ms_total",
+    "latency_ms_mean",
+    "latency_ms_min",
+    "latency_ms_max",
+    "task_results_reported",
+    "task_successes",
+    "task_success_rate",
+    "miss_tokens_derived",
+)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -82,6 +106,7 @@ def build_cache_probe_report(
         "request_count": len(normalized),
         "warmup_requests": min(warmup_requests, len(normalized)),
         "steady_state_request_count": len(steady_state_requests),
+        "steady_state_basis": "configured_warmup_requests",
         "cache": cache,
         "steady_state_cache": steady_state_cache,
         "stable_prefix": stable_prefix,
@@ -98,6 +123,8 @@ def normalize_cache_request(
     usage = usage_value if isinstance(usage_value, Mapping) else record
     profile_value = record.get("prefix_profile", record.get("stable_prefix_profile"))
     profile = profile_value if isinstance(profile_value, Mapping) else {}
+    cacheability_value = record.get("cacheability")
+    cacheability = cacheability_value if isinstance(cacheability_value, Mapping) else {}
     prompt_tokens = _optional_int(usage.get("prompt_tokens"))
     hit_tokens = _first_int(
         usage,
@@ -139,6 +166,7 @@ def normalize_cache_request(
         "request_success": True if request_success is None else request_success,
         "task_success": task_success,
         "prompt_tokens": prompt_tokens,
+        "completion_tokens": _optional_int(usage.get("completion_tokens")),
         "cache_hit_tokens": hit_tokens,
         "cache_miss_tokens": miss_tokens,
         "miss_tokens_derived": miss_tokens_derived,
@@ -146,6 +174,13 @@ def normalize_cache_request(
         "cache_state": cache_state,
         "latency_ms": _optional_int(record.get("latency_ms")),
         "attempt_count": _optional_int(record.get("attempt_count")),
+        "retry_reasons": [
+            str(reason)
+            for reason in record.get("retry_reasons", [])
+            if str(reason)
+        ]
+        if isinstance(record.get("retry_reasons"), list)
+        else [],
         "request_sha256": _optional_text(
             record.get("request_sha256", record.get("messages_sha256"))
         ),
@@ -167,6 +202,45 @@ def normalize_cache_request(
                 "stable_prefix_estimated_tokens",
                 profile.get("estimated_tokens"),
             )
+        ),
+        "prefix_epoch": _optional_int(
+            cacheability.get("prefix_epoch", profile.get("prefix_epoch"))
+        ),
+        "local_cold_start": _optional_bool(
+            cacheability.get("local_cold_start", profile.get("local_cold_start"))
+        ),
+        "previous_request_is_exact_prefix": _optional_bool(
+            cacheability.get(
+                "previous_request_is_exact_prefix",
+                profile.get("previous_request_is_exact_prefix"),
+            )
+        ),
+        "prefix_reset_reason": _optional_text(
+            cacheability.get("prefix_reset_reason", profile.get("prefix_reset_reason"))
+        ),
+        "lcp_estimated_tokens": _optional_int(
+            cacheability.get("lcp_estimated_tokens", profile.get("lcp_estimated_tokens"))
+        ),
+        "theoretical_input_tokens": _optional_int(
+            cacheability.get("theoretical_input_tokens")
+        ),
+        "theoretical_output_tokens": _optional_int(
+            cacheability.get("theoretical_output_tokens")
+        ),
+        "theoretical_token_kind": _optional_text(
+            cacheability.get("theoretical_token_kind")
+        ),
+        "capture_efficiency_input": _optional_float(
+            cacheability.get("capture_efficiency_input")
+        ),
+        "steady_state_request": _optional_bool(
+            cacheability.get("steady_state_request")
+        ),
+        "steady_state_start_request_index": _optional_int(
+            cacheability.get("steady_state_start_request_index")
+        ),
+        "steady_state_basis": _optional_text(
+            cacheability.get("steady_state_basis")
         ),
         "response_model": _optional_text(record.get("response_model", record.get("model"))),
         "system_fingerprint": _optional_text(record.get("system_fingerprint")),
@@ -206,6 +280,44 @@ def summarize_cache_requests(requests: Sequence[Mapping[str, Any]]) -> dict[str,
     successful_requests = sum(
         _optional_bool(record.get("request_success")) is not False for record in records
     )
+    theoretical_input_tokens = sum(
+        _integer(record.get("theoretical_input_tokens")) for record in records
+    )
+    theoretical_output_tokens = sum(
+        _integer(record.get("theoretical_output_tokens")) for record in records
+    )
+    capture_hit_tokens = sum(
+        min(
+            _integer(record.get("cache_hit_tokens")),
+            _integer(record.get("theoretical_input_tokens")),
+        )
+        for record in reported
+        if _integer(record.get("theoretical_input_tokens")) > 0
+    )
+    first_hit_offset = next(
+        (
+            index
+            for index, record in enumerate(reported)
+            if _integer(record.get("cache_hit_tokens")) > 0
+        ),
+        None,
+    )
+    steady_records = (
+        reported[first_hit_offset:] if first_hit_offset is not None else []
+    )
+    steady_hit_tokens = sum(_integer(record.get("cache_hit_tokens")) for record in steady_records)
+    steady_prompt_tokens = sum(
+        _integer(record.get("cache_hit_tokens")) + _integer(record.get("cache_miss_tokens"))
+        for record in steady_records
+    )
+    positive_hits = [
+        _integer(record.get("cache_hit_tokens"))
+        for record in reported
+        if _integer(record.get("cache_hit_tokens")) > 0
+    ]
+    empirical_block = 0
+    for value in positive_hits:
+        empirical_block = value if empirical_block == 0 else gcd(empirical_block, value)
     return {
         "request_count": request_count,
         "successful_requests": successful_requests,
@@ -228,6 +340,46 @@ def summarize_cache_requests(requests: Sequence[Mapping[str, Any]]) -> dict[str,
         "task_successes": sum(task_values),
         "task_success_rate": sum(task_values) / len(task_values) if task_values else None,
         "miss_tokens_derived": any(bool(record.get("miss_tokens_derived")) for record in reported),
+        "theoretical_input_tokens": theoretical_input_tokens,
+        "theoretical_output_tokens": theoretical_output_tokens,
+        "capture_hit_tokens": capture_hit_tokens,
+        "capture_efficiency_input": (
+            capture_hit_tokens / theoretical_input_tokens
+            if theoretical_input_tokens
+            else None
+        ),
+        "capture_efficiency_output": (
+            capture_hit_tokens / theoretical_output_tokens
+            if theoretical_output_tokens
+            else None
+        ),
+        "local_cold_start_requests": sum(
+            _optional_bool(record.get("local_cold_start")) is True for record in records
+        ),
+        "exact_append_requests": sum(
+            _optional_bool(record.get("previous_request_is_exact_prefix")) is True
+            for record in records
+        ),
+        "prefix_reset_requests": sum(
+            (
+                _optional_bool(record.get("local_cold_start")) is False
+                and _optional_bool(record.get("previous_request_is_exact_prefix")) is not True
+            )
+            for record in records
+        ),
+        "steady_state_hit_tokens": steady_hit_tokens,
+        "steady_state_prompt_tokens": steady_prompt_tokens,
+        "steady_state_request_count": len(steady_records),
+        "steady_state_start_request_index": (
+            _integer(steady_records[0].get("request_index"))
+            if steady_records
+            else None
+        ),
+        "steady_state_basis": "first_observed_cache_hit",
+        "steady_state_weighted_hit_rate": (
+            steady_hit_tokens / steady_prompt_tokens if steady_prompt_tokens else None
+        ),
+        "empirical_hit_block_tokens": empirical_block or None,
     }
 
 
@@ -263,7 +415,9 @@ def write_immutable_cache_probe(
         markdown_path = temporary / "report.md"
         markdown_path.write_text(format_cache_probe_markdown(report), encoding="utf-8")
         manifest = {
-            "schema_version": CACHE_PROBE_SCHEMA_VERSION,
+            "schema_version": _integer(
+                report.get("schema_version", CACHE_PROBE_SCHEMA_VERSION)
+            ),
             "entity_type": "prompt_cache_probe",
             "probe_id": probe_id,
             "milestone": report.get("milestone", ""),
@@ -331,14 +485,24 @@ def load_cache_probe_report(
     *,
     verify_manifest: bool = False,
 ) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    report_bytes = path.read_bytes()
+    payload = json.loads(report_bytes.decode("utf-8"))
     if not isinstance(payload, dict) or payload.get("entity_type") != "prompt_cache_probe_report":
         raise ValueError(f"not a prompt cache probe report: {path}")
     if not isinstance(payload.get("requests"), list):
         raise ValueError(f"cache probe report has no requests: {path}")
     if verify_manifest:
-        _verify_cache_probe_manifest(path, payload)
+        manifest_bytes = _verify_cache_probe_manifest(
+            path,
+            payload,
+            report_bytes=report_bytes,
+        )
         payload["_evidence_integrity_verified"] = True
+        payload["_evidence_source_path"] = str(path.resolve())
+        payload["_evidence_report_sha256"] = hashlib.sha256(report_bytes).hexdigest()
+        payload["_evidence_manifest_sha256"] = hashlib.sha256(
+            manifest_bytes
+        ).hexdigest()
     return payload
 
 
@@ -347,7 +511,7 @@ def format_cache_probe_markdown(report: Mapping[str, Any]) -> str:
     steady = report["steady_state_cache"]
     stable = report["stable_prefix"]
     lines = [
-        "# miniCC V2.1.1 Prompt Cache Fixed-Sequence Probe",
+        "# miniCC Prompt Cache Fixed-Sequence Probe",
         "",
         f"Result: **{report['result']}**",
         f"Probe: `{report['probe_id']}`",
@@ -458,14 +622,22 @@ def _artifact_entry(path: Path) -> dict[str, Any]:
     }
 
 
-def _verify_cache_probe_manifest(path: Path, report: Mapping[str, Any]) -> None:
+def _verify_cache_probe_manifest(
+    path: Path,
+    report: Mapping[str, Any],
+    *,
+    report_bytes: bytes,
+) -> bytes:
     manifest_path = path.parent / "manifest.json"
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid cache probe manifest: {manifest_path}") from exc
     if (
         not isinstance(manifest, dict)
+        or _integer(manifest.get("schema_version"))
+        != _integer(report.get("schema_version"))
         or manifest.get("entity_type") != "prompt_cache_probe"
         or manifest.get("probe_id") != report.get("probe_id")
         or path.parent.name != report.get("probe_id")
@@ -489,6 +661,7 @@ def _verify_cache_probe_manifest(path: Path, report: Mapping[str, Any]) -> None:
     }
     if set(artifacts) != set(expected_artifacts):
         raise ValueError(f"cache probe manifest has incomplete artifact hashes: {manifest_path}")
+    request_bytes = b""
     for name, expected_relative in expected_artifacts.items():
         entry = artifacts[name]
         if not isinstance(entry, Mapping):
@@ -499,26 +672,32 @@ def _verify_cache_probe_manifest(path: Path, report: Mapping[str, Any]) -> None:
         artifact_path = path.parent / relative
         if not artifact_path.is_file():
             raise ValueError(f"cache probe artifact is missing: {artifact_path}")
-        data = artifact_path.read_bytes()
+        data = report_bytes if name == "report_json" else artifact_path.read_bytes()
         if (
             _integer(entry.get("bytes")) != len(data)
             or str(entry.get("sha256") or "") != hashlib.sha256(data).hexdigest()
         ):
             raise ValueError(f"cache probe artifact hash mismatch: {artifact_path}")
+        if name == "requests":
+            request_bytes = data
     try:
         request_records = [
             json.loads(line)
-            for line in (path.parent / "requests.jsonl").read_text(encoding="utf-8").splitlines()
+            for line in request_bytes.decode("utf-8").splitlines()
             if line.strip()
         ]
-    except (OSError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid cache probe request evidence: {path.parent / 'requests.jsonl'}") from exc
     if request_records != report.get("requests"):
         raise ValueError(f"cache probe requests do not match report: {path}")
     _verify_cache_probe_semantics(report)
+    return manifest_bytes
 
 
 def _verify_cache_probe_semantics(report: Mapping[str, Any]) -> None:
+    schema_version = _integer(report.get("schema_version"))
+    if schema_version not in {1, CACHE_PROBE_SCHEMA_VERSION}:
+        raise ValueError(f"unsupported cache probe schema version: {schema_version}")
     requests = report.get("requests", [])
     warmup = _integer(report.get("warmup_requests"))
     if (
@@ -567,13 +746,20 @@ def _verify_cache_probe_semantics(report: Mapping[str, Any]) -> None:
         or configuration.get("variant")
         or ""
     )
+    cache = summarize_cache_requests(requests)
+    steady_state_cache = summarize_cache_requests(requests[warmup:])
+    if schema_version == 1:
+        cache = {key: cache[key] for key in LEGACY_CACHE_SUMMARY_KEYS}
+        steady_state_cache = {
+            key: steady_state_cache[key] for key in LEGACY_CACHE_SUMMARY_KEYS
+        }
     expected = {
         "status": "completed",
         "result": "PASS" if expected_passed else "FAIL",
         "passed": expected_passed,
         "variant": expected_variant,
-        "cache": summarize_cache_requests(requests),
-        "steady_state_cache": summarize_cache_requests(requests[warmup:]),
+        "cache": cache,
+        "steady_state_cache": steady_state_cache,
         "stable_prefix": _stable_prefix_summary(requests, configuration),
     }
     if any(report.get(key) != value for key, value in expected.items()):
@@ -599,6 +785,15 @@ def _optional_int(value: Any) -> int | None:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 

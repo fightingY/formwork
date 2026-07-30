@@ -59,6 +59,7 @@ class TraceRecorder:
         usage: ModelUsage | None = None,
         *,
         attempt_count: int = 1,
+        retry_reasons: tuple[str, ...] = (),
     ) -> None:
         self.record(
             "model_response",
@@ -66,7 +67,44 @@ class TraceRecorder:
             response_preview=text[:1000],
             latency_ms=latency_ms,
             attempt_count=max(int(attempt_count or 1), 1),
+            retry_reasons=list(retry_reasons),
             usage=model_usage_to_dict(usage) if usage is not None else None,
+            cacheability={
+                "request_index": state.metrics.get("cache_prefix_request_index"),
+                "prefix_epoch": state.metrics.get("cache_prefix_epoch"),
+                "local_cold_start": state.metrics.get("cache_prefix_local_cold_start"),
+                "previous_request_is_exact_prefix": state.metrics.get(
+                    "cache_prefix_previous_is_exact"
+                ),
+                "prefix_reset_reason": state.metrics.get("cache_prefix_reset_reason"),
+                "lcp_estimated_tokens": state.metrics.get(
+                    "cache_prefix_lcp_estimated_tokens"
+                ),
+                "theoretical_input_tokens": state.metrics.get(
+                    "cache_theoretical_input_tokens_current"
+                ),
+                "theoretical_output_tokens": state.metrics.get(
+                    "cache_theoretical_output_tokens_current"
+                ),
+                "theoretical_token_kind": state.metrics.get(
+                    "cache_theoretical_token_kind_current"
+                ),
+                "capture_efficiency_input": state.metrics.get(
+                    "cache_capture_efficiency_input_current"
+                ),
+                "steady_state_request": bool(
+                    state.metrics.get("cache_steady_state_observed")
+                ),
+                "steady_state_start_request_index": state.metrics.get(
+                    "cache_steady_state_start_request_index"
+                ),
+                "steady_state_basis": state.metrics.get(
+                    "cache_steady_state_basis"
+                ),
+                "empirical_hit_block_tokens": state.metrics.get(
+                    "cache_empirical_hit_block_tokens"
+                ),
+            },
         )
 
     def action_parsed(self, state: RunState, action: Action | None) -> None:

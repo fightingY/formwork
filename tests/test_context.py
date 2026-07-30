@@ -117,6 +117,79 @@ def test_append_layout_resets_only_after_stable_prefix_when_recent_window_moves(
     assert after_second[: len(after_first)] != after_first
 
 
+def test_epoch_layout_preserves_complete_prefix_after_recent_window_would_move() -> None:
+    trace = TraceRecorder()
+    builder = ContextBuilder(
+        ContextConfig(prompt_layout="epoch", recent_turns=1),
+        trace=trace,
+    )
+    state = RunState.start("Inspect repository")
+    first_step = _step("pwd", "first")
+    second_step = _step("ls", "second")
+
+    after_first = builder.build_messages(state, [first_step])
+    after_second = builder.build_messages(state, [first_step, second_step])
+
+    assert after_second[: len(after_first)] == after_first
+    assert state.metrics["cache_prefix_epoch"] == 1
+    assert state.metrics["cache_prefix_exact_append_requests"] == 1
+    assert trace.events[-1]["prefix_profile"]["previous_request_is_exact_prefix"] is True
+    assert trace.events[-1]["prefix_profile"]["prefix_reset_reason"] == "exact_append"
+
+
+def test_epoch_layout_starts_new_prefix_epoch_after_compaction() -> None:
+    trace = TraceRecorder()
+    builder = ContextBuilder(
+        ContextConfig(
+            prompt_layout="epoch",
+            recent_turns=1,
+            max_prompt_chars=10,
+            summary_max_chars=2_000,
+        ),
+        trace=trace,
+    )
+    state = RunState.start("Inspect repository")
+    trajectory = [_step("pwd", "first"), _step("ls", "second")]
+
+    builder.build_messages(state, trajectory)
+    builder.maybe_compact(state, trajectory)
+    builder.build_messages(state, trajectory)
+
+    assert state.metrics["context_compactions"] == 1
+    assert state.metrics["cache_prefix_epoch"] == 2
+    assert state.metrics["cache_prefix_reset_requests"] == 1
+    assert state.metrics["cache_prefix_reset_reason"] == "compaction_epoch_rollover"
+
+
+def test_epoch_compaction_uses_hysteresis_and_does_not_reset_again_next_turn() -> None:
+    builder = ContextBuilder(
+        ContextConfig(
+            prompt_layout="epoch",
+            recent_turns=6,
+            max_prompt_chars=3_000,
+            summary_max_chars=500,
+        )
+    )
+    state = RunState.start("Inspect repository")
+    trajectory = [
+        _step(f"command-{index}", "x" * 600)
+        for index in range(8)
+    ]
+
+    builder.build_messages(state, trajectory)
+    builder.maybe_compact(state, trajectory)
+    after_rollover = builder.build_messages(state, trajectory)
+    trajectory.append(_step("one-more-command", "y" * 100))
+    builder.maybe_compact(state, trajectory)
+    next_prompt = builder.build_messages(state, trajectory)
+
+    assert state.metrics["context_compactions"] == 1
+    assert state.metrics["context_compaction_target_ratio"] == 0.65
+    assert state.metrics["context_compacted_steps"] > 2
+    assert next_prompt[: len(after_rollover)] == after_rollover
+    assert state.metrics["cache_prefix_epoch"] == 2
+
+
 def test_append_layout_profiles_more_reusable_prefix_than_rebuild() -> None:
     rebuild_state = RunState.start("Inspect repository")
     append_state = RunState.start("Inspect repository")

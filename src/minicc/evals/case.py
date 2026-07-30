@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import yaml
+
+from minicc.sandbox.workspace import workspace_content_digest
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,7 @@ class EvalCase:
     assertions: list[dict[str, Any]] = field(default_factory=list)
     writable_paths: tuple[str, ...] | None = None
     context: dict[str, Any] = field(default_factory=dict)
+    definition_sha256: str = ""
 
 
 def discover_cases(path: Path) -> list[EvalCase]:
@@ -33,7 +38,8 @@ def discover_cases(path: Path) -> list[EvalCase]:
 
 
 def load_case(path: Path) -> EvalCase:
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    source = path.read_bytes()
+    data = yaml.safe_load(source.decode("utf-8")) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Eval case must be a YAML mapping: {path}")
 
@@ -87,7 +93,76 @@ def load_case(path: Path) -> EvalCase:
         assertions=[item for item in assertions if isinstance(item, dict)],
         writable_paths=writable_paths,
         context={**context, "retention_markers": list(retention_markers)},
+        definition_sha256=hashlib.sha256(source).hexdigest(),
     )
+
+
+def build_case_authority_profiles(
+    cases: Sequence[EvalCase],
+    *,
+    project_root: Path,
+) -> dict[str, dict[str, str]]:
+    profiles: dict[str, dict[str, str]] = {}
+    for case in cases:
+        profiles[case.name] = {
+            "source_path": case_source_path(case, project_root=project_root),
+            "fixture_source_path": fixture_source_path(
+                case,
+                project_root=project_root,
+            ),
+            "case_definition_sha256": case.definition_sha256,
+            "fixture_content_sha256": workspace_content_digest(case.fixture_dir),
+        }
+    return profiles
+
+
+def case_source_path(case: EvalCase, *, project_root: Path) -> str:
+    return _project_relative_path(
+        case.case_dir / "case.yaml",
+        project_root=project_root,
+    )
+
+
+def fixture_source_path(case: EvalCase, *, project_root: Path) -> str:
+    return _project_relative_path(case.fixture_dir, project_root=project_root)
+
+
+def _project_relative_path(path: Path, *, project_root: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return f"external:{resolved.as_posix()}"
+
+
+def case_authority_bundle_sha256(
+    profiles: Mapping[str, Mapping[str, str]],
+) -> str:
+    payload = {
+        "schema_version": 1,
+        "cases": {
+            str(name): {
+                "source_path": str(profile.get("source_path") or ""),
+                "fixture_source_path": str(
+                    profile.get("fixture_source_path") or ""
+                ),
+                "case_definition_sha256": str(
+                    profile.get("case_definition_sha256") or ""
+                ),
+                "fixture_content_sha256": str(
+                    profile.get("fixture_content_sha256") or ""
+                ),
+            }
+            for name, profile in profiles.items()
+        },
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _safe_relative_path(value: Any, case_path: Path) -> str:

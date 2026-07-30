@@ -218,6 +218,59 @@ Stable V2.1.1 的最终报告为 `PASS`。`round-19`（P1→P0）与 `round-20`�
 prompt 分别下降 14.08% 和 16.60%，未缓存 token 分别下降 31.75% 和 34.77%；归档只保留
 精简入口与机器/人工可读报告，原始 run/suite 继续留在 `.minicc` 技术账本中。
 
+## V2.1.2 Prompt Cache P1/P2
+
+P2 使用 `epoch` 消息布局：一个 epoch 内的 action/observation 只追加，不再因
+`recent_turns` 滑窗逐回合删除旧消息；真正触及上下文预算时，一次压缩到 65% 目标水位，写入
+不可变 summary checkpoint 并开始新 epoch。每个请求都会记录相邻完整消息的 LCP、epoch、
+冷启动、reset 原因、理论可复用 token、实际 hit/miss、兑现率和经验命中粒度。Provider HTTP
+client 在一个 run 内复用；连接、读写或协议类传输错误发生后丢弃失效 client，再按配置重试。
+
+正式固定探针使用 12 个不同动态后缀。长稳定前缀来自仓库真实的
+`src/minicc/evals/cache_probe.py` 代码片段，并在证据中记录来源、字符数和 SHA-256；它不是
+重复请求或无语义 padding。P1 保留 V2.1.1 的 6-turn 滑窗作为基线，P2 保留整个 epoch。
+每轮还对短任务 C02 和长日志任务 C07 各运行 3 次；C07 锁定为 9 个请求，沿
+artifact→contract→binding test→source 的依赖链独立读取三份真实文件证据，第 8 个请求完成
+全量 release check 并首次越过 P1 的滑窗边界，第 9 个请求给出 final。
+
+```bash
+uv run minicc cache-probe --cache-variant p1 --cache-sequence-id round-21 --repeat 12 --execution-order p1-first --milestone v2.1.2-development --release-gate
+uv run minicc eval eval_cases/capability_suite_v1 --case C02_fix_failing_test --case C07_large_log_debugging --cache-variant p1 --cache-sequence-id round-21 --execution-order p1-first --repeat 3 --milestone v2.1.2-development --release-gate
+uv run minicc cache-probe --cache-variant p2 --cache-sequence-id round-21 --repeat 12 --execution-order p1-first --milestone v2.1.2-development --release-gate
+uv run minicc eval eval_cases/capability_suite_v1 --case C02_fix_failing_test --case C07_large_log_debugging --cache-variant p2 --cache-sequence-id round-21 --execution-order p1-first --repeat 3 --milestone v2.1.2-development --release-gate
+```
+
+第二轮使用独立 namespace 并倒置为 `p2-first`。八份不可变 probe/suite 报告由
+`minicc cache-utilization-report` 汇总。未同时满足固定长序列与 C07 全链路命中率 70%、稳态
+80%、兑现率 85%、prompt 膨胀不超过 10% 和任务/事实保留 100% 时，命令只打印失败门禁，
+不创建 acceptance 目录。Provider 重试必须不超过配置且逐请求记录原因；重试请求按
+`attempt_count × 最终 prompt` 的物理输入上界计费，有效 hit 强制为 0、全部计入 miss，不能
+通过失败请求自预热提高成绩。固定序列要求全链路 miss 降低至少 40%；C07 的前 7 个请求中
+P1/P2 尚未分叉，因此要求第 8 个请求起的 post-slide miss 降低至少 40%，全链路降低只作
+诊断。每个 C07 run 必须同时证明严格递增的 1–9 request index、锁定 spec SHA-256 的 8-step
+bash action shape（初始测试、artifact grep、三次独立读取、独立 edit、focused/full 验证），
+以及恰好 2 个 post-slide 请求，避免比较不同语义阶段。固定探针的稳态排除预先锁定的 2 次
+warm-up；真实任务从首次**单次 attempt**的实际
+非零命中开始，并保留其后所有 miss。成功输出 `report.json`、`report.md` 和校验报告及八份输入证据的
+`manifest.json`；八份入选 report/manifest 合并封装在单个 `evidence.json` 中，避免生成
+零散输入目录，同时保证归档脱离本机 `.minicc` 后仍可复核。
+
+V2.1.2 正式 eval 还锁定 canonical suite 路径和精确 C02/C07 矩阵。每个 run 在 agent 修改前
+记录 workspace 基线的路径+内容摘要，并将 `case.yaml`、fixture 内容和来源路径组成的 authority
+profile 贯通 workspace manifest、run report、suite report 与最终聚合门禁；两种布局、两轮和
+全部 attempts 的 profile 必须一致，并逐文件通过 Git clean filter 与声明 commit 的 tree
+object 对照，避免误选 suite、`skip-worktree` 或执行期间夹具漂移。由已哈希 trace 验证过的
+逐请求 rows 直接固化进 suite report；聚合与最终 evidence 不再二次读取活 trace 路径。
+
+```bash
+uv run minicc cache-utilization-report \
+  --p1-probe <round-21-p1-probe.json> --p2-probe <round-21-p2-probe.json> \
+  --p1-eval <round-21-p1-suite.json> --p2-eval <round-21-p2-suite.json> \
+  --p1-probe <round-22-p1-probe.json> --p2-probe <round-22-p2-probe.json> \
+  --p1-eval <round-22-p1-suite.json> --p2-eval <round-22-p2-suite.json> \
+  --output-dir acceptance/stable-v2.1.2
+```
+
 ## 快速开始
 
 安装依赖并查看 CLI：

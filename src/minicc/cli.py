@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
+import re
 import subprocess
 import sys
 from dataclasses import replace
 from datetime import timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from minicc import __version__
 from minicc.config import BudgetSettings, PolicySettings, SandboxSettings, Settings, load_settings
@@ -18,7 +20,12 @@ from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
-from minicc.evals.case import EvalCase, discover_cases
+from minicc.evals.case import (
+    EvalCase,
+    build_case_authority_profiles,
+    case_authority_bundle_sha256,
+    discover_cases,
+)
 from minicc.evals.compaction_ab import (
     build_compaction_ab_report,
     load_suite_report as load_compaction_suite_report,
@@ -35,6 +42,11 @@ from minicc.evals.cache_probe_runner import (
     cache_sequence_namespace,
     run_fixed_cache_probe,
 )
+from minicc.evals.cache_utilization import (
+    build_cache_utilization_report,
+    failed_criteria as failed_cache_utilization_criteria,
+    write_cache_utilization_report,
+)
 from minicc.evals.runner import run_eval_suite, write_eval_report, write_suite_report
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.compaction import SemanticCompactor
@@ -42,7 +54,11 @@ from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
 from minicc.sandbox.docker_runner import DockerCommandExecutor, DockerSandboxConfig, DockerSandboxRunner
 from minicc.sandbox.local_runner import LocalCommandExecutor
-from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
+from minicc.sandbox.workspace import (
+    prepare_run_workspace,
+    workspace_content_records,
+    write_workspace_diff,
+)
 from minicc.skills.registry import SkillRegistry
 from minicc.trace.recorder import TraceRecorder, trace_path_for
 
@@ -161,9 +177,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_parser.add_argument(
         "--cache-variant",
-        choices=("p0", "p1"),
+        choices=("p0", "p1", "p2"),
         default=None,
-        help="V2.1.1 experiment variant: p0=rebuild layout, p1=append-only layout.",
+        help="Cache experiment variant: p0=rebuild, p1=windowed append, p2=epoch append.",
     )
     eval_parser.add_argument(
         "--cache-sequence-id",
@@ -172,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_parser.add_argument(
         "--execution-order",
-        choices=("p0-first", "p1-first"),
+        choices=("p0-first", "p1-first", "p2-first"),
         default=None,
         help="Record the balanced P0/P1 order used for this cache experiment round.",
     )
@@ -205,15 +221,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cache_probe_parser.add_argument(
         "--cache-variant",
-        choices=("p0", "p1"),
+        choices=("p0", "p1", "p2"),
         required=True,
-        help="p0=rebuild layout, p1=append-only layout.",
+        help="p0=rebuild, p1=windowed append, p2=epoch append.",
     )
     cache_probe_parser.add_argument(
         "--repeat",
         type=int,
         default=5,
-        help="Number of growing fixed-sequence requests (formal minimum: 5).",
+        help=(
+            "Number of growing fixed-sequence requests "
+            "(formal minimum: 5; V2.1.2 requires exactly 12)."
+        ),
     )
     cache_probe_parser.add_argument(
         "--milestone",
@@ -222,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cache_probe_parser.add_argument(
         "--execution-order",
-        choices=("p0-first", "p1-first"),
+        choices=("p0-first", "p1-first", "p2-first"),
         default=None,
         help="Record the balanced variant order used for this independent round.",
     )
@@ -234,7 +253,10 @@ def build_parser() -> argparse.ArgumentParser:
     cache_probe_parser.add_argument(
         "--release-gate",
         action="store_true",
-        help="Require a clean immutable Git commit and repeat >= 5.",
+        help=(
+            "Require a clean immutable Git commit and the milestone's formal "
+            "repeat count (V2.1.2: exactly 12)."
+        ),
     )
     cache_probe_parser.set_defaults(handler=cache_probe_command)
 
@@ -272,6 +294,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cache_report_parser.add_argument("--output-dir", type=Path, required=True)
     cache_report_parser.set_defaults(handler=cache_report_command)
+
+    cache_utilization_parser = subparsers.add_parser(
+        "cache-utilization-report",
+        help="Validate exactly two V2.1.2 P1/P2 long-cache acceptance rounds.",
+    )
+    for flag, help_text in (
+        ("--p1-probe", "P1 fixed-long probe report.json; repeat once per round."),
+        ("--p2-probe", "P2 fixed-long probe report.json; repeat once per round."),
+        ("--p1-eval", "P1 C02/C07 suite report.json; repeat once per round."),
+        ("--p2-eval", "P2 C02/C07 suite report.json; repeat once per round."),
+    ):
+        cache_utilization_parser.add_argument(
+            flag,
+            action="append",
+            type=Path,
+            required=True,
+            help=help_text,
+        )
+    cache_utilization_parser.add_argument("--output-dir", type=Path, required=True)
+    cache_utilization_parser.set_defaults(handler=cache_utilization_report_command)
 
     traces_parser = subparsers.add_parser("traces", help="List runs that have trace or metrics files.")
     traces_parser.set_defaults(handler=traces_command)
@@ -573,6 +615,10 @@ def _build_loop(
     stream: bool | None = None,
     interrupt_after_steps: int | None = None,
 ) -> AgentLoop:
+    if state is not None:
+        start_session = getattr(provider, "start_session", None)
+        if callable(start_session):
+            start_session(state.run_id)
     skill_root = (state.workspace_host_path if state and state.workspace_host_path else Path.cwd()) / "skills"
     trace = TraceRecorder(trace_path_for(state)) if state is not None else TraceRecorder()
     checkpoint_manager = (
@@ -592,7 +638,9 @@ def _build_loop(
     prompt_layout = settings.context.prompt_layout
     if state is not None and int(state.metrics.get("turns") or 0) > 0:
         stored_layout = state.metrics.get("prompt_layout")
-        prompt_layout = stored_layout if stored_layout in {"rebuild", "append"} else "rebuild"
+        prompt_layout = (
+            stored_layout if stored_layout in {"rebuild", "append", "epoch"} else "rebuild"
+        )
     feedback_memory = (
         None
         if state is not None
@@ -685,13 +733,93 @@ def eval_command(args: argparse.Namespace) -> int:
             print(str(exc), file=sys.stderr)
             return 2
     if cache_variant is not None:
-        prompt_layout = "append" if cache_variant == "p1" else "rebuild"
+        prompt_layout = {"p0": "rebuild", "p1": "append", "p2": "epoch"}[cache_variant]
         settings = replace(settings, context=replace(settings.context, prompt_layout=prompt_layout))
     milestone = _effective_milestone(settings, args)
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     git_commit, worktree_dirty = _git_evidence(Path.cwd())
+    selected_case_names = set(args.case_names or [])
+    discovered_cases = discover_cases(Path(args.path))
+    discovered_names = {case.name for case in discovered_cases}
+    missing_cases = sorted(selected_case_names - discovered_names)
+    if missing_cases:
+        print(f"Unknown eval case(s): {', '.join(missing_cases)}", file=sys.stderr)
+        return 2
+    selected_cases = [
+        case
+        for case in discovered_cases
+        if not selected_case_names or case.name in selected_case_names
+    ]
+    if (
+        args.release_gate
+        and "2.1.2" in milestone
+        and len(selected_cases) != 2
+    ):
+        print(
+            "Release gate rejected: V2.1.2 requires one canonical definition "
+            "for each C02/C07 case",
+            file=sys.stderr,
+        )
+        return 2
+    live_case_authority_profiles = build_case_authority_profiles(
+        selected_cases,
+        project_root=Path.cwd(),
+    )
+    case_authority_profiles = live_case_authority_profiles
+    if args.release_gate and "2.1.2" in milestone:
+        profile_error = _v212_authority_profile_error(
+            live_case_authority_profiles
+        )
+        if profile_error:
+            print(f"Release gate rejected: {profile_error}", file=sys.stderr)
+            return 2
+        try:
+            committed_profiles = _committed_case_authority_profiles(
+                live_case_authority_profiles,
+                project_root=Path.cwd(),
+                git_commit=git_commit,
+            )
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            print(
+                f"Release gate rejected: cannot bind eval fixtures to Git commit: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        if committed_profiles != live_case_authority_profiles:
+            print(
+                "Release gate rejected: live eval authority profile differs from Git commit",
+                file=sys.stderr,
+            )
+            return 2
+        case_authority_profiles = committed_profiles
+    profile_git_commit, profile_worktree_dirty = _git_evidence(Path.cwd())
+    if args.release_gate and (
+        profile_git_commit != git_commit or profile_worktree_dirty
+    ):
+        print(
+            "Release gate rejected: Git state changed while binding eval authority",
+            file=sys.stderr,
+        )
+        return 2
+    git_preflight_verified = False
+    if args.release_gate and "2.1.2" in milestone:
+        formal_git_error = _git_formal_state_error(Path.cwd())
+        if formal_git_error:
+            print(
+                f"Release gate rejected: {formal_git_error}",
+                file=sys.stderr,
+            )
+            return 2
+        git_preflight_verified = True
+    case_authority_bundle = case_authority_bundle_sha256(case_authority_profiles)
     if args.release_gate:
-        gate_error = _release_gate_error(args, git_commit, worktree_dirty, settings.sandbox.image)
+        gate_error = _release_gate_error(
+            args,
+            git_commit,
+            worktree_dirty,
+            settings.sandbox.image,
+            milestone=milestone,
+        )
         if gate_error:
             print(f"Release gate rejected: {gate_error}", file=sys.stderr)
             return 2
@@ -751,12 +879,13 @@ def eval_command(args: argparse.Namespace) -> int:
         finally:
             if runner is not None:
                 runner.cleanup(state.container_name)
+            close_provider = getattr(provider, "close", None)
+            if callable(close_provider):
+                close_provider()
 
-    selected_case_names = set(args.case_names or [])
     case_contexts = {
         case.name: dict(case.context)
-        for case in discover_cases(Path(args.path))
-        if not selected_case_names or case.name in selected_case_names
+        for case in selected_cases
     }
     configuration = {
         "base_url": settings.base_url or "",
@@ -788,6 +917,10 @@ def eval_command(args: argparse.Namespace) -> int:
         "recent_turns": settings.context.recent_turns,
         "semantic_max_completion_tokens": settings.context.semantic_max_completion_tokens,
         "case_contexts": case_contexts,
+        "case_authority_profiles": case_authority_profiles,
+        "case_authority_bundle_sha256": case_authority_bundle,
+        "git_preflight_verified": git_preflight_verified,
+        "git_postflight_verified": False,
     }
 
     result = run_eval_suite(
@@ -801,6 +934,50 @@ def eval_command(args: argparse.Namespace) -> int:
         milestone=milestone,
         stage=suite_stage,
     )
+    if args.release_gate:
+        post_git_commit, post_worktree_dirty = _git_evidence(Path.cwd())
+        post_formal_git_error = (
+            _git_formal_state_error(Path.cwd())
+            if "2.1.2" in milestone
+            else ""
+        )
+        try:
+            post_cases = [
+                case
+                for case in discover_cases(Path(args.path))
+                if case.name in selected_case_names
+            ]
+            post_live_profiles = build_case_authority_profiles(
+                post_cases,
+                project_root=Path.cwd(),
+            )
+            post_profiles = (
+                _committed_case_authority_profiles(
+                    post_live_profiles,
+                    project_root=Path.cwd(),
+                    git_commit=git_commit,
+                )
+                if "2.1.2" in milestone
+                else post_live_profiles
+            )
+        except (OSError, ValueError):
+            post_profiles = {}
+        if (
+            post_git_commit != git_commit
+            or post_worktree_dirty
+            or bool(post_formal_git_error)
+            or post_profiles != case_authority_profiles
+        ):
+            print(
+                "Release gate rejected: Git or eval authority changed during execution",
+                file=sys.stderr,
+            )
+            return 2
+        if isinstance(result.configuration, dict):
+            result.configuration["git_postflight_verified"] = True
+        for case_result in result.cases:
+            if isinstance(case_result.configuration, dict):
+                case_result.configuration["git_postflight_verified"] = True
     bundle = write_suite_report(result, suites_root)
     json_path = bundle.report_json_path
     markdown_path = bundle.report_markdown_path
@@ -857,10 +1034,25 @@ def cache_probe_command(args: argparse.Namespace) -> int:
     milestone = _effective_milestone(settings, args)
     git_commit, worktree_dirty = _git_evidence(Path.cwd())
     if args.release_gate:
-        gate_error = _cache_probe_release_gate_error(args, git_commit, worktree_dirty)
+        gate_error = _cache_probe_release_gate_error(
+            args,
+            git_commit,
+            worktree_dirty,
+            milestone=milestone,
+        )
         if gate_error:
             print(f"Cache probe release gate rejected: {gate_error}", file=sys.stderr)
             return 2
+    git_preflight_verified = False
+    if args.release_gate and "2.1.2" in milestone:
+        formal_git_error = _git_formal_state_error(Path.cwd())
+        if formal_git_error:
+            print(
+                f"Cache probe release gate rejected: {formal_git_error}",
+                file=sys.stderr,
+            )
+            return 2
+        git_preflight_verified = True
     if args.repeat < 1:
         print("--repeat must be at least 1.", file=sys.stderr)
         return 2
@@ -874,7 +1066,7 @@ def cache_probe_command(args: argparse.Namespace) -> int:
     provider = _build_provider_or_print_error(settings)
     if provider is None:
         return 2
-    prompt_layout = "append" if args.cache_variant == "p1" else "rebuild"
+    prompt_layout = {"p0": "rebuild", "p1": "append", "p2": "epoch"}[args.cache_variant]
     context = ContextConfig(
         max_prompt_chars=settings.context.max_prompt_chars,
         recent_turns=settings.context.recent_turns,
@@ -905,7 +1097,15 @@ def cache_probe_command(args: argparse.Namespace) -> int:
         "max_prompt_chars": settings.context.max_prompt_chars,
         "execution_order": args.execution_order,
         "feedback_memory_mode": "disabled",
+        "git_preflight_verified": git_preflight_verified,
+        "git_postflight_verified": False,
     }
+    postflight_check = None
+    if git_preflight_verified:
+        postflight_check = lambda: _git_postflight_error(
+            Path.cwd(),
+            expected_commit=git_commit,
+        )
     try:
         bundle = run_fixed_cache_probe(
             provider,
@@ -925,6 +1125,7 @@ def cache_probe_command(args: argparse.Namespace) -> int:
                 configuration=configuration,
                 milestone=milestone,
                 stage="formal_acceptance" if args.release_gate else "development_precheck",
+                postflight_check=postflight_check,
             ),
         )
         report = load_cache_probe_report(
@@ -934,6 +1135,10 @@ def cache_probe_command(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"Cannot run cache probe: {exc}", file=sys.stderr)
         return 2
+    finally:
+        close_provider = getattr(provider, "close", None)
+        if callable(close_provider):
+            close_provider()
 
     print(f"cache_probe_status: {report['result']}")
     print(f"cache_probe_id: {bundle.probe_id}")
@@ -995,6 +1200,57 @@ def cache_report_command(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
+def cache_utilization_report_command(args: argparse.Namespace) -> int:
+    lengths = {
+        len(args.p1_probe),
+        len(args.p2_probe),
+        len(args.p1_eval),
+        len(args.p2_eval),
+    }
+    if lengths != {2}:
+        print(
+            "cache-utilization-report requires exactly two of every P1/P2 probe/eval report.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        rounds = [
+            (
+                load_cache_probe_report(p1_probe, verify_manifest=True),
+                load_cache_probe_report(p2_probe, verify_manifest=True),
+                load_cache_suite_report(p1_eval, verify_manifest=True),
+                load_cache_suite_report(p2_eval, verify_manifest=True),
+            )
+            for p1_probe, p2_probe, p1_eval, p2_eval in zip(
+                args.p1_probe,
+                args.p2_probe,
+                args.p1_eval,
+                args.p2_eval,
+                strict=True,
+            )
+        ]
+        report = build_cache_utilization_report(rounds)
+        if not report["passed"]:
+            print("cache_utilization_status: FAIL")
+            for criterion in failed_cache_utilization_criteria(report):
+                print(f"failed_criterion: {criterion}", file=sys.stderr)
+            print(
+                "V2.1.2 cache utilization did not pass; no acceptance report was written.",
+                file=sys.stderr,
+            )
+            return 1
+        bundle = write_cache_utilization_report(report, args.output_dir)
+    except (OSError, ValueError) as exc:
+        print(f"Cannot build V2.1.2 cache utilization report: {exc}", file=sys.stderr)
+        return 2
+    print(f"cache_utilization_status: {report['status']}")
+    print(f"json_report: {bundle.json_path}")
+    print(f"markdown_report: {bundle.markdown_path}")
+    print(f"evidence_bundle: {bundle.evidence_path}")
+    print(f"manifest: {bundle.manifest_path}")
+    return 0
+
+
 def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
     budget = settings.budget
     if case.budget:
@@ -1013,7 +1269,17 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
         settings.context,
         max_prompt_chars=_context_int(case, "max_prompt_chars", settings.context.max_prompt_chars),
         recent_turns=_context_int(case, "recent_turns", settings.context.recent_turns),
+        artifact_preview_chars=_context_int(
+            case,
+            "artifact_preview_chars",
+            settings.context.artifact_preview_chars,
+        ),
         summary_max_chars=_context_int(case, "summary_max_chars", settings.context.summary_max_chars),
+        field_preview_chars=_context_int(
+            case,
+            "field_preview_chars",
+            settings.context.field_preview_chars,
+        ),
         retention_markers=(
             tuple(str(item) for item in case.context.get("retention_markers", []))
             or settings.context.retention_markers
@@ -1093,6 +1359,238 @@ def _case_constraints(case: EvalCase) -> list[str]:
     return constraints
 
 
+def _v212_authority_profile_error(
+    profiles: dict[str, dict[str, str]],
+) -> str:
+    expected = {
+        "C02_fix_failing_test": {
+            "source_path": (
+                "eval_cases/capability_suite_v1/"
+                "C02_fix_failing_test/case.yaml"
+            ),
+            "fixture_source_path": (
+                "eval_cases/capability_suite_v1/"
+                "C02_fix_failing_test/fixture"
+            ),
+        },
+        "C07_large_log_debugging": {
+            "source_path": (
+                "eval_cases/capability_suite_v1/"
+                "C07_large_log_debugging/case.yaml"
+            ),
+            "fixture_source_path": (
+                "eval_cases/capability_suite_v1/"
+                "C07_large_log_debugging/fixture"
+            ),
+        },
+    }
+    if set(profiles) != set(expected):
+        return "V2.1.2 authority profile requires the exact C02/C07 cases"
+    if any(
+        profiles[name].get(field) != value
+        for name, paths in expected.items()
+        for field, value in paths.items()
+    ):
+        return "V2.1.2 authority profile requires canonical sibling fixtures"
+    return ""
+
+
+def _committed_case_authority_profiles(
+    live_profiles: dict[str, dict[str, str]],
+    *,
+    project_root: Path,
+    git_commit: str,
+) -> dict[str, dict[str, str]]:
+    for name, live_profile in live_profiles.items():
+        source_path = str(live_profile.get("source_path") or "")
+        fixture_path = str(live_profile.get("fixture_source_path") or "")
+        if (
+            not source_path
+            or not fixture_path
+            or source_path.startswith("external:")
+            or fixture_path.startswith("external:")
+        ):
+            raise ValueError(f"authority source is outside the project: {name}")
+        expected_definition_id = _git_object_id_at_commit(
+            project_root,
+            git_commit,
+            source_path,
+        )
+        actual_definition_id = _git_worktree_object_id(
+            project_root,
+            source_path,
+        )
+        if actual_definition_id != expected_definition_id:
+            raise ValueError(f"case definition differs from Git commit: {name}")
+        expected_files = _git_tree_entries(
+            project_root,
+            git_commit,
+            fixture_path,
+        )
+        fixture_root = project_root / fixture_path
+        actual_records = {
+            relative: (kind, content)
+            for relative, kind, content in workspace_content_records(
+                fixture_root
+            )
+        }
+        if set(actual_records) != set(expected_files):
+            raise ValueError(f"fixture inventory differs from Git commit: {name}")
+        expected_directories = _git_tree_directories(expected_files)
+        actual_directories = _worktree_directories(fixture_root)
+        if actual_directories != expected_directories:
+            raise ValueError(
+                f"fixture directory inventory differs from Git commit: {name}"
+            )
+        for relative, (mode, object_id, git_path) in expected_files.items():
+            kind, content = actual_records[relative]
+            expected_kind = "symlink" if mode == "120000" else "file"
+            if kind != expected_kind:
+                raise ValueError(f"fixture file type differs from Git commit: {git_path}")
+            actual_object_id = (
+                _git_raw_object_id(project_root, content)
+                if kind == "symlink"
+                else _git_worktree_object_id(project_root, git_path)
+            )
+            if actual_object_id != object_id:
+                raise ValueError(f"fixture file differs from Git commit: {git_path}")
+    return {
+        name: dict(profile)
+        for name, profile in live_profiles.items()
+    }
+
+
+def _git_object_id_at_commit(
+    project_root: Path,
+    git_commit: str,
+    relative_path: str,
+) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", f"{git_commit}:{relative_path}"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        timeout=120,
+        check=True,
+    )
+    object_id = result.stdout.strip()
+    if re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None:
+        raise ValueError(f"invalid Git object id for {relative_path}")
+    return object_id
+
+
+def _git_tree_entries(
+    project_root: Path,
+    git_commit: str,
+    root_path: str,
+) -> dict[str, tuple[str, str, str]]:
+    result = subprocess.run(
+        [
+            "git",
+            "ls-tree",
+            "-rz",
+            "--full-tree",
+            git_commit,
+            "--",
+            root_path,
+        ],
+        cwd=project_root,
+        capture_output=True,
+        timeout=120,
+        check=True,
+    )
+    entries: dict[str, tuple[str, str, str]] = {}
+    prefix = f"{root_path.rstrip('/')}/"
+    for raw_entry in result.stdout.split(b"\0"):
+        if not raw_entry:
+            continue
+        metadata, separator, raw_path = raw_entry.partition(b"\t")
+        parts = metadata.split()
+        if not separator or len(parts) != 3:
+            raise ValueError(f"invalid Git tree entry under {root_path}")
+        mode, object_type, object_id = (
+            part.decode("ascii", errors="strict") for part in parts
+        )
+        path = raw_path.decode("utf-8", errors="surrogateescape")
+        if object_type != "blob" or not path.startswith(prefix):
+            raise ValueError(f"unsupported Git tree entry: {path}")
+        if mode not in {"100644", "100755", "120000"}:
+            raise ValueError(f"unsupported Git file mode {mode}: {path}")
+        entries[path.removeprefix(prefix)] = (mode, object_id, path)
+    if not entries:
+        raise ValueError(f"Git fixture tree is empty: {root_path}")
+    return entries
+
+
+def _git_worktree_object_id(
+    project_root: Path,
+    relative_path: str,
+) -> str:
+    result = subprocess.run(
+        [
+            "git",
+            "hash-object",
+            f"--path={relative_path}",
+            "--filters",
+            "--",
+            str(project_root / relative_path),
+        ],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        timeout=120,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _git_tree_directories(
+    files: dict[str, tuple[str, str, str]],
+) -> set[str]:
+    directories: set[str] = set()
+    for relative in files:
+        parent = PurePosixPath(relative).parent
+        while parent != PurePosixPath("."):
+            directories.add(parent.as_posix())
+            parent = parent.parent
+    return directories
+
+
+def _worktree_directories(root: Path) -> set[str]:
+    directories: set[str] = set()
+    for directory, dir_names, _ in os.walk(
+        root,
+        topdown=True,
+        followlinks=False,
+    ):
+        directory_path = Path(directory)
+        kept_names: list[str] = []
+        for name in dir_names:
+            path = directory_path / name
+            if path.is_symlink():
+                continue
+            kept_names.append(name)
+            directories.add(path.relative_to(root).as_posix())
+        dir_names[:] = kept_names
+    return directories
+
+
+def _git_raw_object_id(project_root: Path, content: bytes) -> str:
+    result = subprocess.run(
+        ["git", "hash-object", "--stdin"],
+        cwd=project_root,
+        input=content,
+        capture_output=True,
+        timeout=120,
+        check=True,
+    )
+    return result.stdout.decode("ascii", errors="strict").strip()
+
+
 def _git_evidence(cwd: Path) -> tuple[str, bool]:
     try:
         commit = subprocess.run(
@@ -1120,11 +1618,111 @@ def _git_evidence(cwd: Path) -> tuple[str, bool]:
         return "", True
 
 
+def _git_index_flags_error(cwd: Path) -> str:
+    """Reject index flags that can hide tracked-file changes from Git status."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-v", "-z"],
+            cwd=cwd,
+            capture_output=True,
+            timeout=10,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "cannot inspect Git skip-worktree/assume-unchanged flags"
+    flagged: list[str] = []
+    for raw_record in result.stdout.split(b"\0"):
+        if not raw_record:
+            continue
+        tag = chr(raw_record[0])
+        if tag != "S" and not tag.islower():
+            continue
+        raw_path = (
+            raw_record[2:]
+            if len(raw_record) > 1 and raw_record[1:2] == b" "
+            else raw_record[1:]
+        )
+        path = raw_path.decode("utf-8", errors="replace")
+        flag = "skip-worktree" if tag.upper() == "S" else "assume-unchanged"
+        flagged.append(f"{flag}:{path}")
+    if not flagged:
+        return ""
+    preview = ", ".join(flagged[:5])
+    if len(flagged) > 5:
+        preview += f", ... ({len(flagged)} total)"
+    return f"Git index contains hidden-change flags: {preview}"
+
+
+def _git_transform_attributes_error(cwd: Path) -> str:
+    """Reject ambient attributes that can transform committed content."""
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=cwd,
+            capture_output=True,
+            timeout=10,
+            check=True,
+        ).stdout
+        result = subprocess.run(
+            [
+                "git",
+                "check-attr",
+                "-z",
+                "--stdin",
+                "filter",
+                "ident",
+                "working-tree-encoding",
+            ],
+            cwd=cwd,
+            input=tracked,
+            capture_output=True,
+            timeout=30,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "cannot inspect Git content-transform attributes"
+    fields = result.stdout.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    if len(fields) % 3:
+        return "Git content-transform attribute output is malformed"
+    transformed: list[str] = []
+    for index in range(0, len(fields), 3):
+        raw_path, raw_attribute, raw_value = fields[index : index + 3]
+        if raw_value == b"unspecified":
+            continue
+        path = raw_path.decode("utf-8", errors="replace")
+        attribute = raw_attribute.decode("ascii", errors="replace")
+        value = raw_value.decode("utf-8", errors="replace")
+        transformed.append(f"{path}:{attribute}={value}")
+    if not transformed:
+        return ""
+    preview = ", ".join(transformed[:5])
+    if len(transformed) > 5:
+        preview += f", ... ({len(transformed)} total)"
+    return f"Git content-transform attributes are not allowed: {preview}"
+
+
+def _git_formal_state_error(cwd: Path) -> str:
+    return _git_index_flags_error(cwd) or _git_transform_attributes_error(cwd)
+
+
+def _git_postflight_error(cwd: Path, *, expected_commit: str) -> str:
+    post_git_commit, post_worktree_dirty = _git_evidence(cwd)
+    if post_git_commit != expected_commit:
+        return "Git commit changed during execution"
+    if post_worktree_dirty:
+        return "Git worktree changed during execution"
+    return _git_formal_state_error(cwd)
+
+
 def _release_gate_error(
     args: argparse.Namespace,
     git_commit: str,
     worktree_dirty: bool,
     docker_image: str = "python:test@sha256:test",
+    *,
+    milestone: str = "",
 ) -> str:
     if not git_commit:
         return "the workspace is not pinned to a Git commit"
@@ -1138,6 +1736,18 @@ def _release_gate_error(
         return "release acceptance requires --repeat 3 or greater"
     if not args.case_names:
         return "release acceptance requires an explicit complete --case matrix"
+    if "2.1.2" in milestone:
+        if args.repeat != 3:
+            return "V2.1.2 acceptance requires exactly --repeat 3"
+        expected_path = (Path.cwd() / "eval_cases" / "capability_suite_v1").resolve()
+        if Path(args.path).resolve() != expected_path:
+            return "V2.1.2 acceptance requires eval_cases/capability_suite_v1"
+        expected_cases = {
+            "C02_fix_failing_test",
+            "C07_large_log_debugging",
+        }
+        if set(args.case_names) != expected_cases:
+            return "V2.1.2 acceptance requires the exact C02/C07 case matrix"
     return ""
 
 
@@ -1145,13 +1755,16 @@ def _cache_probe_release_gate_error(
     args: argparse.Namespace,
     git_commit: str,
     worktree_dirty: bool,
+    *,
+    milestone: str = "",
 ) -> str:
     if not git_commit:
         return "the workspace is not pinned to a Git commit"
     if worktree_dirty:
         return "the Git worktree has uncommitted changes"
-    if args.repeat != 5:
-        return "formal cache probes require exactly --repeat 5"
+    expected_repeat = 12 if "2.1.2" in milestone else 5
+    if args.repeat != expected_repeat:
+        return f"formal cache probes require exactly --repeat {expected_repeat}"
     if not getattr(args, "execution_order", None):
         return "formal cache probes require --execution-order"
     return ""

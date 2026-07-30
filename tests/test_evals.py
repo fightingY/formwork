@@ -66,6 +66,7 @@ def test_eval_assertions_cover_files_metrics_trace_and_diff(tmp_path) -> None:
             {"type": "file_not_exists", "path": "missing.txt"},
             {"type": "file_contains", "path": "README.md", "patterns": ["eval"]},
             {"type": "metric_at_least", "name": "turns", "value": 2},
+            {"type": "metric_equals", "name": "turns", "value": 3},
             {"type": "run_status", "value": "waiting_approval"},
             {"type": "trace_contains_event", "event_type": "artifact_written"},
             {
@@ -82,6 +83,331 @@ def test_eval_assertions_cover_files_metrics_trace_and_diff(tmp_path) -> None:
     )
 
     assert all(result.passed for result in results)
+
+
+def test_metric_equals_rejects_a_different_value(tmp_path) -> None:
+    result = assertions.run_assertion(
+        {"type": "metric_equals", "name": "turns", "value": 9},
+        workspace_dir=tmp_path,
+        run_dir=tmp_path,
+        metrics={"turns": 8},
+    )
+
+    assert result.passed is False
+    assert "expected exactly 9.0" in result.message
+
+
+def test_metric_equals_rejects_a_missing_zero_valued_field(tmp_path) -> None:
+    result = assertions.run_assertion(
+        {"type": "metric_equals", "name": "repeated_file_reads", "value": 0},
+        workspace_dir=tmp_path,
+        run_dir=tmp_path,
+        metrics={},
+    )
+
+    assert result.passed is False
+    assert "field_present=False" in result.message
+
+
+def test_trace_action_sequence_accepts_contiguous_independent_commands(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    commands = [
+        "python -m unittest discover -s tests",
+        "cat VALIDATION_CONTRACT.md",
+        "cat tests/test_validator.py",
+        "cat src/validator.py",
+        "python -m unittest tests.test_validator -v",
+    ]
+    _write_action_trace(run_dir, commands)
+
+    result = assertions.run_assertion(
+        {
+            "type": "trace_action_sequence",
+            "start_index": 2,
+            "commands": [
+                "cat VALIDATION_CONTRACT.md",
+                "cat tests/test_validator.py",
+                "cat src/validator.py",
+            ],
+        },
+        workspace_dir=tmp_path,
+        run_dir=run_dir,
+        metrics={},
+    )
+
+    assert result.passed is True
+
+
+def test_trace_action_sequence_rejects_right_commands_at_wrong_position(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_action_trace(
+        run_dir,
+        [
+            "cat VALIDATION_CONTRACT.md",
+            "cat tests/test_validator.py",
+            "cat src/validator.py",
+        ],
+    )
+
+    result = assertions.run_assertion(
+        {
+            "type": "trace_action_sequence",
+            "start_index": 3,
+            "commands": [
+                "cat VALIDATION_CONTRACT.md",
+                "cat tests/test_validator.py",
+                "cat src/validator.py",
+            ],
+        },
+        workspace_dir=tmp_path,
+        run_dir=run_dir,
+        metrics={},
+    )
+
+    assert result.passed is False
+
+
+@pytest.mark.parametrize(
+    "commands",
+    [
+        ["cat VALIDATION_CONTRACT.md", "cat src/validator.py"],
+        [
+            "cat tests/test_validator.py",
+            "cat VALIDATION_CONTRACT.md",
+            "cat src/validator.py",
+        ],
+        [
+            "cat VALIDATION_CONTRACT.md && cat tests/test_validator.py",
+            "cat src/validator.py",
+        ],
+        [
+            "cat\nVALIDATION_CONTRACT.md",
+            "cat tests/test_validator.py",
+            "cat src/validator.py",
+        ],
+    ],
+    ids=["missing-test-read", "wrong-order", "combined-read", "newline-split-read"],
+)
+def test_trace_action_sequence_rejects_incomplete_or_non_independent_reads(
+    tmp_path,
+    commands,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_action_trace(run_dir, commands)
+
+    result = assertions.run_assertion(
+        {
+            "type": "trace_action_sequence",
+            "commands": [
+                "cat VALIDATION_CONTRACT.md",
+                "cat tests/test_validator.py",
+                "cat src/validator.py",
+            ],
+        },
+        workspace_dir=tmp_path,
+        run_dir=run_dir,
+        metrics={},
+    )
+
+    assert result.passed is False
+
+
+def test_trace_action_shape_locks_exact_and_regex_commands(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    actions = [
+        {"command": "python -m unittest discover -s tests"},
+        {
+            "heredoc_write": {
+                "path": "src/validator.py",
+                "delimiter": "EOF",
+            }
+        },
+    ]
+    _write_action_trace(
+        run_dir,
+        [
+            "python -m unittest discover -s tests",
+            "cat > src/validator.py << 'EOF'\ndef repaired():\n    return True\nEOF",
+        ],
+    )
+
+    result = assertions.run_assertion(
+        {"type": "trace_action_shape", "actions": actions},
+        workspace_dir=tmp_path,
+        run_dir=run_dir,
+        metrics={},
+    )
+
+    assert result.passed is True
+    assert result.spec_sha256 == assertions.assertion_spec_sha256(
+        {"type": "trace_action_shape", "actions": actions}
+    )
+
+
+def test_trace_action_shape_binds_exit_code_and_artifact_to_action(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    actions = [
+        {
+            "command": "python -m unittest discover -s tests",
+            "expect_exit_code": 1,
+            "artifact_ids": ["art_0001"],
+        },
+    ]
+    _write_action_trace(
+        run_dir,
+        ["python -m unittest discover -s tests"],
+        exit_codes=[1],
+        artifact_ids=[["art_0001"]],
+    )
+
+    result = assertions.run_assertion(
+        {"type": "trace_action_shape", "actions": actions},
+        workspace_dir=tmp_path,
+        run_dir=run_dir,
+        metrics={},
+    )
+
+    assert result.passed is True
+
+
+def test_trace_action_shape_rejects_wrong_exit_code_or_unbound_artifact(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    actions = [
+        {
+            "command": "python -m unittest discover -s tests",
+            "expect_exit_code": 1,
+            "artifact_ids": ["art_0001"],
+        },
+    ]
+    _write_action_trace(
+        run_dir,
+        ["python -m unittest discover -s tests"],
+        exit_codes=[0],
+    )
+
+    result = assertions.run_assertion(
+        {"type": "trace_action_shape", "actions": actions},
+        workspace_dir=tmp_path,
+        run_dir=run_dir,
+        metrics={},
+    )
+
+    assert result.passed is False
+
+
+@pytest.mark.parametrize(
+    "commands",
+    [
+        [
+            "python -m unittest discover -s tests",
+            (
+                "cat > src/validator.py << 'EOF'\n"
+                "def repaired():\n"
+                "    return True\n"
+                "EOF\n"
+                "python -m unittest tests.test_validator -v"
+            ),
+        ],
+        [
+            "python -m unittest discover -s tests",
+            (
+                "cat > src/validator.py << 'EOF'\n"
+                "def repaired():\n"
+                "    return True\n"
+                "EOF\n"
+                "cat VALIDATION_CONTRACT.md\n"
+                "EOF"
+            ),
+        ],
+        [
+            "python -m unittest discover -s tests",
+            "cat > src/validator.py << 'EOF'\ndef repaired():\n    return True\nEOF",
+            "echo extra-action",
+        ],
+    ],
+    ids=[
+        "trailing-command-after-heredoc",
+        "early-delimiter-with-hidden-command",
+        "extra-bash-action",
+    ],
+)
+def test_trace_action_shape_rejects_unlocked_or_extra_actions(
+    tmp_path,
+    commands,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_action_trace(run_dir, commands)
+    actions = [
+        {"command": "python -m unittest discover -s tests"},
+        {
+            "heredoc_write": {
+                "path": "src/validator.py",
+                "delimiter": "EOF",
+            }
+        },
+    ]
+
+    result = assertions.run_assertion(
+        {"type": "trace_action_shape", "actions": actions},
+        workspace_dir=tmp_path,
+        run_dir=run_dir,
+        metrics={},
+    )
+
+    assert result.passed is False
+
+
+def _write_action_trace(
+    run_dir,
+    commands,
+    *,
+    exit_codes=None,
+    artifact_ids=None,
+) -> None:
+    resolved_exit_codes = exit_codes or [0] * len(commands)
+    resolved_artifact_ids = artifact_ids or [[] for _ in commands]
+    assert len(resolved_exit_codes) == len(commands)
+    assert len(resolved_artifact_ids) == len(commands)
+    events = []
+    for command, exit_code, action_artifacts in zip(
+        commands,
+        resolved_exit_codes,
+        resolved_artifact_ids,
+        strict=True,
+    ):
+        events.append(
+            {
+                "event": "action_parsed",
+                "action": {"type": "bash", "command": command},
+            }
+        )
+        events.append(
+            {
+                "event": "sandbox_exec_finished",
+                "observation": {
+                    "exit_code": exit_code,
+                    "artifact_ids": action_artifacts,
+                },
+            }
+        )
+        events.extend(
+            {
+                "event": "artifact_written",
+                "artifact_id": artifact_id,
+            }
+            for artifact_id in action_artifacts
+        )
+    (run_dir / "trace.jsonl").write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
 
 
 def test_eval_runner_writes_reports(tmp_path) -> None:
@@ -376,7 +702,9 @@ budget:
 context:
   max_prompt_chars: 2000
   recent_turns: 2
+  artifact_preview_chars: 1500
   summary_max_chars: 500
+  field_preview_chars: 750
   retention_markers: [src/app.py]
 """,
         encoding="utf-8",
@@ -396,7 +724,9 @@ context:
     assert adjusted.budget.max_action_timeout_sec == 5
     assert adjusted.context.max_prompt_chars == 2000
     assert adjusted.context.recent_turns == 2
+    assert adjusted.context.artifact_preview_chars == 1500
     assert adjusted.context.summary_max_chars == 500
+    assert adjusted.context.field_preview_chars == 750
     assert adjusted.context.retention_markers == ("src/app.py",)
 
 

@@ -126,3 +126,85 @@ def test_action_handler_counts_repeated_reads_and_searches() -> None:
     assert state.metrics["repeated_file_reads"] == 2
     assert blocked.steps[0].observation.kind == "policy_violation"
     assert "repeated I/O guard" in blocked.steps[0].observation.message
+
+
+def test_action_handler_does_not_count_cat_heredoc_writes_as_file_reads() -> None:
+    state = RunState.start("write fixture")
+    handler = ActionHandler(FakeExecutor())
+
+    handler.handle(
+        BashAction(
+            command="cat > src/app.py << 'EOF'\nprint('first')\nEOF",
+        ),
+        state,
+    )
+    handler.handle(
+        BashAction(
+            command="cat << 'EOF' > src/other.py\nprint('second')\nEOF",
+        ),
+        state,
+    )
+    handler.handle(BashAction(command="cat src/app.py"), state)
+
+    assert state.metrics["file_read_actions"] == 1
+    assert state.metrics["repeated_file_reads"] == 0
+
+
+def test_action_handler_finds_cat_read_after_multiline_heredoc_write() -> None:
+    state = RunState.start("write then read")
+    handler = ActionHandler(FakeExecutor())
+
+    handler.handle(
+        BashAction(
+            command=(
+                "cat > src/app.py << 'EOF'\n"
+                "print('first')\n"
+                "EOF\n"
+                "cat src/secret.py"
+            ),
+        ),
+        state,
+    )
+
+    assert state.metrics["file_read_actions"] == 1
+
+
+def test_action_handler_counts_cat_input_redirection_and_wrapped_cat_reads() -> None:
+    state = RunState.start("redirected reads")
+    handler = ActionHandler(FakeExecutor())
+
+    handler.handle(BashAction(command="cat > output.txt < input.txt"), state)
+    handler.handle(BashAction(command="/bin/cat src/app.py"), state)
+    handler.handle(BashAction(command="command cat src/other.py"), state)
+
+    assert state.metrics["file_read_actions"] == 3
+
+
+def test_action_handler_ignores_comparison_operators_inside_heredoc_body() -> None:
+    state = RunState.start("write comparison")
+    handler = ActionHandler(FakeExecutor())
+
+    handler.handle(
+        BashAction(
+            command=(
+                "cat > src/validator.py << 'EOF'\n"
+                "ok = all('0' <= char <= '9' for char in suffix)\n"
+                "EOF"
+            ),
+        ),
+        state,
+    )
+
+    assert state.metrics["file_read_actions"] == 0
+
+
+def test_action_handler_counts_file_argument_after_output_redirection_as_read() -> None:
+    state = RunState.start("copy input")
+    handler = ActionHandler(FakeExecutor())
+
+    handler.handle(
+        BashAction(command="cat > output.txt input.txt"),
+        state,
+    )
+
+    assert state.metrics["file_read_actions"] == 1

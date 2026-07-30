@@ -50,7 +50,7 @@ git switch -c stable-v1 8f19cd3
 提交: fix(eval): prevent approval in locked benchmark case
 ```
 
-### 2.4 当前稳定线交接状态（2026-07-27）
+### 2.4 当前稳定线交接状态（2026-07-29）
 
 - `archive/long-run-11-of-60` branch 和 `archive-long-run-11-of-60` tag 已存在，旧 5x12 cognition
   结果不再参与 Stable 主线开发或统计。
@@ -62,8 +62,9 @@ git switch -c stable-v1 8f19cd3
 - 当前代码回归为 `209 passed`；V2.1.1 两轮 P0/P1 真实 C02 均为 3/3 PASS，正式 Provider
   请求无重试。
 - Stable V2.1 已完成 context compaction 两轮独立 A/B；Stable V2.1.1 已完成 Prompt Cache
-  两轮独立 A/B，semantic compaction 与追加式稳定前缀布局均升格为稳定能力；Skill/Feedback
-  Memory 仍保持 experimental。
+  两轮独立 A/B，semantic compaction 与追加式稳定前缀布局均升格为稳定能力。V2.1.1 只证明
+  短任务上的相对改善，不代表已经达到高缓存利用率；绝对命中率与长任务前缀生命周期由
+  V2.1.2 继续验收。Skill/Feedback Memory 仍保持 experimental。
 - C05-C08、SWE-bench v2、working memory、runtime tools 和 meta review 均不属于 V2.0.1/V2.0.2，
   不得借技术债治理之名提前混入。
 
@@ -397,6 +398,15 @@ combined 指标仅展示，不作为可被 workload 权重影响的发布门禁�
 分别下降 31.75%/34.77%，总 prompt 分别下降 14.08%/16.60%。完整归档位于
 `acceptance/stable-v2.1.1/`，默认布局升格为 `append`，稳定标签为 `stable-v2.1.1`。
 
+后续审计（2026-07-29）：C02 的 P1 每个 run 只有 4–5 个请求，首个请求约 546 prompt
+tokens；在这段短序列内，消息数为 `2 -> 4 -> 6 -> 8 -> 10`，没有触发 compaction 或
+`recent_turns` 滑窗，应用消息确实保持严格追加。去掉每个 run 的首个冷请求后，两轮实际
+命中率也只有 26.48%/28.11%，所以低命中不能只归因于冷启动。按“下一请求最多复用上一请求
+输入”计算，应用侧未取整的全链路理论上限为 72.29%/70.56%；实际只兑现其中约三到四成。
+正式证据中的非零 hit 以 256-token 倍数出现，但该粒度未见供应商公开契约，因此只能记录为
+本次 Provider 的经验现象，不能硬编码为跨 Provider 规则。V2.1.1 的结论仍然有效，但只能
+表述为“相对改善且减少 miss tokens”，不得外推为“已达到 70%–90% 的高利用率”。
+
 验收标准：
 
 - P0/P1 均报告请求数、hit tokens、miss tokens、加权命中率、prompt tokens、延迟和任务结果。
@@ -406,13 +416,104 @@ combined 指标仅展示，不作为可被 workload 权重影响的发布门禁�
 - 不设绝对命中率目标，不用增加重复请求、扩大 token 或降低验证强度制造虚假提升。
 
 失败回退：保持 V2.1 消息布局，Prompt Cache 优化继续标记为 experimental。成功后标记
-`stable-v2.1.1`，再进入 V2.2；失败不阻塞 V2.2。
+`stable-v2.1.1`。根据后续正式证据审计，下一阶段调整为 V2.1.2，不再从 V2.1.1 直接进入
+V2.2。
+
+### V2.1.2：长任务 Prompt Cache 利用率与前缀生命周期
+
+目标：把 V2.1.1 从“短任务相对改善”推进到“长任务高利用率可复现”，并把应用可缓存性与
+Provider 实际兑现率分开度量。目标不是靠加长 system prompt、重复相同请求或增加无意义回合
+刷到一个高百分比，而是在任务正确性和总 prompt 基本不退化的前提下，使自然增长的多轮上下文
+稳定复用。
+
+进入条件：`stable-v2.1.1` 已验收。V2.1.1 的 tag 与 acceptance 不重写；V2.1.2 使用新版本、
+新分支和独立证据目录。该阶段先于 V2.2，因为 working memory 的插入位置和更新频率会直接改变
+缓存前缀，先做 memory 再修前缀生命周期会使两套验收都需要重跑。
+
+根因假设必须分别验证：
+
+1. 短任务效应：每个 namespace 的首请求必然冷启动，4–5 请求的 C02 对全链路命中率有明显
+   上限；稳定 system/goal 占比高本身不是坏事，缓存建立后反而应提高可复用比例。
+2. Provider/传输效应：当前 SiliconFlow 公共 API 的命中兑现有明显轮间和请求间波动。需要
+   对比复用 HTTP client/keep-alive、请求间缓存落盘时间和同一前缀路由；未被 Provider 文档
+   支持的 cache key、显式 breakpoint 或预热参数不得擅自发送。
+3. 应用生命周期效应：当前 `append` 在滑窗移动前保持严格追加，但默认
+   `recent_turns=6`；第 7 个 trajectory step 进入后会逐轮丢弃最老消息，使完整动态前缀失效。
+   compaction 若每回合改写 `state_summary`，也会从 summary 位置开始反复打断缓存。
+
+实施阶段：
+
+1. **M1 可缓存性仪表盘**：每个请求记录 `prefix_epoch`、`cold_start`、相邻请求完整消息
+   prefix/LCP、`prefix_reset_reason`、理论可复用 token、实际 hit/miss、Provider 经验粒度和
+   `cache_capture_efficiency = actual_hit / theoretical_cacheable`。理论值必须标注 tokenizer、
+   request-boundary/output-boundary 和块取整假设；无法精确计算时不得伪装成精确 token。
+2. **M2 传输与 Provider 隔离实验**：在同一模型、API key、温度和 payload 下比较“每次新建
+   client”与“run 级持久 client”，再用 0/2/5 秒 settle 仅做诊断，报告总 wall time。只有
+   miss token、成本和端到端延迟的综合结果更好时才允许引入等待；不得用重试失败请求或重复
+   相同请求制造命中。若当前模型无法稳定兑现，再对同一 Provider 中明确支持缓存的模型做
+   能力探针，但不得把换模型结果混入当前模型 A/B。
+3. **M3 cache epoch 布局**：在一个 epoch 内保留单调追加的 action/observation 消息，不因
+   `recent_turns` 的滚动视图逐回合删除头部。接近上下文预算时一次性批量压缩到目标水位，
+   生成不可变 summary checkpoint 并开启新 epoch；使用 hysteresis 避免以后每回合压缩和
+   prefix reset。逻辑 working set 与 Provider 传输前缀分开建模，但关键事实保留率仍须 100%。
+4. **M4 P1/P2 A/B**：P1 为 V2.1.1 当前 append，P2 为 epoch append。保留 C02 作为短任务
+   回归；新增恰好 12 个不同动态后缀的固定长序列，以及自然需要恰好 9 次请求的真实长任务
+   C07。C07 必须沿 artifact→contract→binding test→source 的依赖链，用独立工具回合核对
+   contract、tests 与 source，不能通过跳过测试证据缩短 workload。默认 `recent_turns=6`
+   时，第 8 个请求才首次包含第 7 个 trajectory step 并使 P1 滑窗移动；第 8 个请求锁定为
+   全量 release check，第 9 个请求锁定为 final。固定序列中的长前缀和 C07 的稳定任务契约
+   必须来自真实代码、日志或调查约束，不得使用无语义 padding。
+5. **M5 正式验收与归档**：连续两轮使用独立 namespace，倒置 P1/P2 顺序，固定 Provider、
+   model、temperature、预算和动态输入顺序；每个真实 workload 各运行 3 次，正式报告只引用
+   入选证据，开发试跑不复制进 acceptance。
+
+正式门禁：
+
+- 主指标为包含每个 namespace/epoch 首次冷请求、零命中和 eviction 的**全链路 token 加权
+  命中率**；固定长序列与真实长任务在两轮中均须达到 `>= 70%`。
+- 固定探针的稳态区间使用预先锁定的前 2 个 warm-up 请求；真实任务的稳态从 Provider 首次
+  报告非零 cache hit 的请求开始，并把其后所有请求（包括后续零命中、reset 和 eviction）
+  全部计入。该指标两轮均须达到 `>= 80%`；它用于排除实际缓存尚未建立的 warm-up，不得用来
+  替代未达标的全链路主指标，也不得删除稳态区间内的不利请求。
+- `cache_capture_efficiency` 两轮均须达到 `>= 85%`。若预先锁定 workload 后测得其理论
+  全链路上限 `< 80%`，该 workload 不具备证明 70%–80% 目标的资格，必须更换为自然长上下文
+  case，而不是 padding、增加无意义回合或删掉低命中请求。
+- P2 的真实任务通过率和关键事实保留率均为 100%；固定序列和 C07 的总 prompt tokens
+  相对 P1 均不得膨胀超过 10%，固定序列全链路 uncached tokens 至少下降 40%。C07 由于前
+  7 个请求的 P1/P2 消息布局按定义相同，全链路 miss reduction 只作诊断；从第 8 个请求开始
+  的 post-slide uncached tokens 必须至少下降 40%。Provider 重试不得超过配置，必须逐请求
+  记录原因，并用保守物理口径核算：`attempt_count=N` 的逻辑请求以 `N × 最终 prompt` 计入
+  prompt/miss/cost，cache hit 强制记 0，理论可缓存机会同样按 N 倍计；不得用失败 attempt
+  的自预热制造命中收益。
+- C02 仍须 P2 3/3 PASS，prompt/miss 不得显著劣化，但不为该短任务设置 70% 的绝对门槛。
+- P1/P2 的每个 C07 run 都必须有严格递增的 1–9 request index，并通过锁定 spec SHA-256 的
+  8-step bash action shape：初始测试、指定 artifact grep、contract/tests/source 三次独立
+  读取、独立 source edit、focused/full 验证。每侧 3 个 run 都必须产生恰好 6 个第 8 请求起
+  的 post-slide 样本；请求数、断言定义或语义阶段不配对时不得计算为有效改善。
+- 报告必须同时给出每请求序列、全链路/稳态命中及其区间口径、理论上限、兑现率、prefix
+  reset 原因、compaction epoch、端到端延迟和费用估算；只报告一个聚合百分比视为验收失败。
+- 两轮必须锁定同一干净 Git commit、Provider/model/temperature/预算、Docker digest 和动态
+  输入，并固定 `recent_turns=6`、`max_prompt_chars=120000` 和 deterministic compaction；
+  使用独立 namespace 并由时间戳证明倒置后的真实执行顺序。固定探针必须逐请求核验 payload
+  SHA-256，并锁定 2 次 warm-up 与 10 次 steady-state；suite 只允许 C02/C07 精确矩阵且
+  顶层/case 均 PASS。正式 eval 必须锁定 canonical suite 路径，并把 `case.yaml` 定义摘要、
+  agent 修改前的 fixture 路径+内容摘要及来源路径闭环到 workspace/run/suite/聚合证据；C02/C07
+  在 P1/P2、两轮和全部 attempts 中必须使用同一 authority profile，并逐文件与声明 Git commit
+  的 tree object 对照。已哈希 trace 的逐请求 rows 必须固化进 suite report，聚合不得重新读取
+  活 trace。最终归档 manifest 必须校验汇总报告及八份源证据的 SHA-256；八份入选
+  report/manifest（suite report 已携带逐请求证据）合并为单个可搬运 evidence bundle，开发预检
+  不得混入 acceptance。
+
+失败回退：任何绝对命中门禁未通过时保留 `stable-v2.1.1`，不得创建 `stable-v2.1.2` tag，
+高利用率能力继续标记为 experimental。默认不进入 V2.2；若确认瓶颈属于当前 Provider 公共池
+且应用侧兑现率已达门禁，必须先形成明确的 Provider/模型选型决定并修改路线图，不能静默跳过。
+通过后归档 `acceptance/stable-v2.1.2/` 并标记 `stable-v2.1.2`。
 
 ### V2.2：分层记忆与 Follow-up
 
 目标：证明记忆能够减少重复 I/O，而不是只证明文件被写入。
 
-进入条件：`stable-v2.1` 已验收。
+进入条件：`stable-v2.1.2` 已验收。
 
 先做 1 个两阶段 follow-up task，各配置运行 3 次；成功后扩到 3 个，最后才允许扩到 12 个 memory dependency task。
 
@@ -426,7 +527,8 @@ combined 指标仅展示，不作为可被 workload 权重影响的发布门禁�
 - 报告给出原始命令、trace 证据、读取次数和 prompt 成本。
 - 只有实际测得时，才允许写“12 个任务从 N 次降到 M 次”，不得预设 `60 -> 0`。
 
-失败回退：回到 `stable-v2.1`，working memory 降级为 experimental。通过后标记 `stable-v2.2`。
+失败回退：回到 `stable-v2.1.2`，working memory 降级为 experimental。通过后标记
+`stable-v2.2`。
 
 ### V3.0：评测闭环与简历发布版
 
@@ -496,7 +598,9 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                                    |
                                       |                                    +-> V2.1.1 prompt cache
                                       |                                               |
-                                      |                                               +-> V2.2 memory
+                                      |                                               +-> V2.1.2 cache utilization
+                                      |                                                          |
+                                      |                                                          +-> V2.2 memory
                                       |
                                       +-> experimental/runtime-tools
                                       +-> experimental/meta-review

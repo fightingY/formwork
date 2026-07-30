@@ -49,6 +49,8 @@ Observation contract:
 - approval_result means the user approved, denied, or answered a pending request.
 """
 
+EPOCH_COMPACTION_TARGET_RATIO = 0.65
+
 
 @dataclass(frozen=True)
 class ContextConfig:
@@ -59,7 +61,7 @@ class ContextConfig:
     field_preview_chars: int = 4_000
     compaction_strategy: Literal["disabled", "deterministic", "semantic"] = "deterministic"
     retention_markers: tuple[str, ...] = ()
-    prompt_layout: Literal["rebuild", "append"] = "rebuild"
+    prompt_layout: Literal["rebuild", "append", "epoch"] = "rebuild"
 
 
 class ContextBuilder:
@@ -75,14 +77,15 @@ class ContextBuilder:
         self.config = config or ContextConfig()
         if self.config.compaction_strategy not in {"disabled", "deterministic", "semantic"}:
             raise ValueError("compaction_strategy must be disabled, deterministic, or semantic")
-        if self.config.prompt_layout not in {"rebuild", "append"}:
-            raise ValueError("prompt_layout must be rebuild or append")
+        if self.config.prompt_layout not in {"rebuild", "append", "epoch"}:
+            raise ValueError("prompt_layout must be rebuild, append, or epoch")
         if self.config.compaction_strategy == "semantic" and semantic_compactor is None:
             raise ValueError("semantic compaction requires a semantic_compactor")
         self.skill_registry = skill_registry
         self.feedback_memory = feedback_memory
         self.trace = trace
         self.semantic_compactor = semantic_compactor
+        self._previous_messages_by_run: dict[str, list[dict[str, str]]] = {}
 
     def build_messages(
         self,
@@ -90,8 +93,8 @@ class ContextBuilder:
         trajectory: list[TrajectoryStep],
     ) -> list[dict[str, str]]:
         state.metrics["context_compaction_strategy"] = self.config.compaction_strategy
-        recent = self.recent_trajectory(trajectory)
-        if self.config.prompt_layout == "append":
+        recent = self._active_trajectory(state, trajectory)
+        if self.config.prompt_layout in {"append", "epoch"}:
             messages, stable_prefix_messages = self._append_messages(state, recent)
         else:
             messages = self._rebuild_messages(state, recent)
@@ -139,15 +142,24 @@ class ContextBuilder:
             return
 
         compacted_steps = int(state.metrics.get("context_compacted_steps", 0))
-        compactable_end = len(trajectory) - max(self.config.recent_turns, 0)
-        if compactable_end <= compacted_steps:
-            return
-
         uncompressed_trajectory = trajectory[compacted_steps:]
         estimated_messages = self._build_messages_with_trajectory(state, uncompressed_trajectory)
         if self._messages_len(estimated_messages) <= self.config.max_prompt_chars:
             return
         state.metrics["context_budget_triggered"] = True
+
+        if self.config.prompt_layout == "epoch":
+            compactable_end = compacted_steps + self._epoch_compactable_steps(
+                state,
+                uncompressed_trajectory,
+            )
+        else:
+            compactable_end = len(trajectory) - max(self.config.recent_turns, 0)
+        if compactable_end <= compacted_steps:
+            state.metrics["context_budget_overflows"] = (
+                state.metrics.get("context_budget_overflows", 0) + 1
+            )
+            return
 
         compactable = trajectory[compacted_steps:compactable_end]
         if not compactable:
@@ -203,6 +215,12 @@ class ContextBuilder:
             state.metrics.get("context_compaction_chars_saved", 0)
             + max(len(trajectory_text) - len(state.state_summary), 0)
         )
+        if self.config.prompt_layout == "epoch":
+            state.metrics["cache_prefix_pending_reset_reason"] = "compaction_epoch_rollover"
+            state.metrics["context_compaction_target_ratio"] = EPOCH_COMPACTION_TARGET_RATIO
+            state.metrics["context_compaction_target_chars"] = int(
+                self.config.max_prompt_chars * EPOCH_COMPACTION_TARGET_RATIO
+            )
         active_context = _append_summary(
             state.state_summary,
             self.format_trajectory(trajectory[compactable_end:]),
@@ -216,6 +234,30 @@ class ContextBuilder:
             input_chars=len(trajectory_text),
             output_chars=len(state.state_summary),
         )
+        state.metrics["context_compaction_post_chars"] = self._messages_len(
+            self._build_messages_with_trajectory(
+                state,
+                trajectory[compactable_end:],
+            )
+        )
+
+    def _epoch_compactable_steps(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep],
+    ) -> int:
+        if not trajectory:
+            return 0
+        target_chars = max(
+            int(self.config.max_prompt_chars * EPOCH_COMPACTION_TARGET_RATIO),
+            1,
+        )
+        for compact_count in range(1, len(trajectory) + 1):
+            suffix = trajectory[compact_count:]
+            estimated = self._build_messages_with_trajectory(state, suffix)
+            if self._messages_len(estimated) <= target_chars:
+                return compact_count
+        return len(trajectory)
 
     def recent_trajectory(self, trajectory: list[TrajectoryStep]) -> list[TrajectoryStep]:
         if self.config.compaction_strategy == "disabled":
@@ -223,6 +265,16 @@ class ContextBuilder:
         if self.config.recent_turns <= 0:
             return []
         return trajectory[-self.config.recent_turns :]
+
+    def _active_trajectory(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep],
+    ) -> list[TrajectoryStep]:
+        if self.config.prompt_layout != "epoch":
+            return self.recent_trajectory(trajectory)
+        compacted_steps = max(int(state.metrics.get("context_compacted_steps", 0)), 0)
+        return trajectory[min(compacted_steps, len(trajectory)) :]
 
     def _dynamic_context(
         self,
@@ -451,8 +503,91 @@ class ContextBuilder:
         state.metrics["stable_prefix_chars"] = profile["content_chars"]
         state.metrics["stable_prefix_estimated_tokens"] = profile["estimated_tokens"]
         state.metrics["stable_prefix_message_count"] = profile["message_count"]
-        state.metrics["stable_prefix_profile"] = profile
-        return profile
+        cache_profile = self._cache_prefix_profile(
+            state,
+            messages,
+            stable_prefix_messages=stable_prefix_messages,
+        )
+        combined_profile = {**profile, **cache_profile}
+        state.metrics["stable_prefix_profile"] = combined_profile
+        self._previous_messages_by_run[state.run_id] = [dict(message) for message in messages]
+        return combined_profile
+
+    def _cache_prefix_profile(
+        self,
+        state: RunState,
+        messages: list[dict[str, str]],
+        *,
+        stable_prefix_messages: int,
+    ) -> dict[str, object]:
+        previous = self._previous_messages_by_run.get(state.run_id)
+        cold_start = previous is None
+        lcp_messages = 0
+        if previous is not None:
+            lcp_messages = _message_lcp_count(previous, messages)
+        lcp_prefix = messages[:lcp_messages]
+        previous_is_exact_prefix = (
+            previous is not None
+            and len(previous) <= len(messages)
+            and previous == messages[: len(previous)]
+        )
+        epoch = max(int(state.metrics.get("cache_prefix_epoch", 0)), 0)
+        if cold_start:
+            epoch = max(epoch, 1)
+            reset_reason = "cold_start"
+            state.metrics["cache_prefix_cold_start_requests"] = (
+                int(state.metrics.get("cache_prefix_cold_start_requests", 0)) + 1
+            )
+        elif previous_is_exact_prefix:
+            reset_reason = "exact_append"
+            state.metrics["cache_prefix_exact_append_requests"] = (
+                int(state.metrics.get("cache_prefix_exact_append_requests", 0)) + 1
+            )
+        else:
+            epoch = max(epoch, 1) + 1
+            pending_reason = str(state.metrics.pop("cache_prefix_pending_reset_reason", "") or "")
+            if pending_reason:
+                reset_reason = pending_reason
+            elif lcp_messages < stable_prefix_messages:
+                reset_reason = "stable_prefix_changed"
+            elif self.config.prompt_layout == "append":
+                reset_reason = "recent_window_moved"
+            else:
+                reset_reason = "dynamic_prefix_changed"
+            state.metrics["cache_prefix_reset_requests"] = (
+                int(state.metrics.get("cache_prefix_reset_requests", 0)) + 1
+            )
+            raw_reasons = state.metrics.get("cache_prefix_reset_reasons", {})
+            reasons = dict(raw_reasons) if isinstance(raw_reasons, dict) else {}
+            reasons[reset_reason] = int(reasons.get(reset_reason, 0)) + 1
+            state.metrics["cache_prefix_reset_reasons"] = reasons
+
+        request_index = int(state.metrics.get("prompt_char_samples", 0))
+        lcp_chars = self._messages_len(lcp_prefix)
+        lcp_estimated_tokens = _estimate_messages_tokens(lcp_prefix)
+        current_estimated_tokens = _estimate_messages_tokens(messages)
+        state.metrics["cache_prefix_epoch"] = epoch
+        state.metrics["cache_prefix_request_index"] = request_index
+        state.metrics["cache_prefix_local_cold_start"] = cold_start
+        state.metrics["cache_prefix_previous_is_exact"] = previous_is_exact_prefix
+        state.metrics["cache_prefix_lcp_message_count"] = lcp_messages
+        state.metrics["cache_prefix_lcp_chars"] = lcp_chars
+        state.metrics["cache_prefix_lcp_estimated_tokens"] = lcp_estimated_tokens
+        state.metrics["cache_prefix_current_estimated_tokens"] = current_estimated_tokens
+        state.metrics["cache_prefix_reset_reason"] = reset_reason
+        state.metrics["cache_prefix_request_sha256"] = _messages_sha256(messages)
+        return {
+            "request_sha256": state.metrics["cache_prefix_request_sha256"],
+            "cache_request_index": request_index,
+            "prefix_epoch": epoch,
+            "local_cold_start": cold_start,
+            "previous_request_is_exact_prefix": previous_is_exact_prefix,
+            "lcp_message_count": lcp_messages,
+            "lcp_content_chars": lcp_chars,
+            "lcp_estimated_tokens": lcp_estimated_tokens,
+            "current_estimated_tokens": current_estimated_tokens,
+            "prefix_reset_reason": reset_reason,
+        }
 
     def _record_retention_metrics(self, state: RunState, *, active_context: str) -> None:
         raw_markers = state.metrics.get("context_retention_markers", self.config.retention_markers)
@@ -623,21 +758,37 @@ def state_snapshot_text(state: RunState) -> str:
 
 
 def _prefix_profile(messages: list[dict[str, str]]) -> dict[str, object]:
+    return {
+        "scope": "application_message_prefix",
+        "hash_algorithm": "sha256",
+        "sha256": _messages_sha256(messages),
+        "message_count": len(messages),
+        "content_chars": sum(len(message.get("content", "")) for message in messages),
+        "estimated_tokens": _estimate_messages_tokens(messages),
+        "token_count_kind": "estimated",
+    }
+
+
+def _messages_sha256(messages: list[dict[str, str]]) -> str:
     canonical = json.dumps(
         messages,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
-    return {
-        "scope": "application_message_prefix",
-        "hash_algorithm": "sha256",
-        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-        "message_count": len(messages),
-        "content_chars": sum(len(message.get("content", "")) for message in messages),
-        "estimated_tokens": _estimate_messages_tokens(messages),
-        "token_count_kind": "estimated",
-    }
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _message_lcp_count(
+    previous: list[dict[str, str]],
+    current: list[dict[str, str]],
+) -> int:
+    count = 0
+    for before, after in zip(previous, current):
+        if before != after:
+            break
+        count += 1
+    return count
 
 
 def _estimate_messages_tokens(messages: list[dict[str, str]]) -> int:

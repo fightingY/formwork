@@ -5,10 +5,10 @@ import io
 import json
 import shlex
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from minicc.core.ledger import (
     LEDGER_SCHEMA_VERSION,
@@ -18,8 +18,17 @@ from minicc.core.ledger import (
     write_immutable_suite,
 )
 from minicc.core.state import RunState, new_run_id, save_run_state
-from minicc.evals.assertions import AssertionResult, run_assertions
-from minicc.evals.case import EvalCase, discover_cases
+from minicc.evals.assertions import (
+    AssertionResult,
+    run_assertions,
+    trace_action_shape_evidence_events,
+)
+from minicc.evals.case import (
+    EvalCase,
+    case_source_path,
+    discover_cases,
+    fixture_source_path,
+)
 from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
 
 
@@ -49,6 +58,13 @@ class EvalCaseResult:
     milestone: str = ""
     stage: str = "development_precheck"
     configuration: dict | None = None
+    case_source_path: str = ""
+    fixture_source_path: str = ""
+    case_definition_sha256: str = ""
+    fixture_content_sha256: str = ""
+    request_rows: list[dict] = field(default_factory=list)
+    trace_assertion_events: list[dict] = field(default_factory=list)
+    assertion_specs: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -146,7 +162,34 @@ def run_eval_case(
         stage=stage,
     )
     state.run_id = workspace.run_id
+    actual_authority_profile = {
+        "source_path": case_source_path(case, project_root=Path.cwd()),
+        "fixture_source_path": fixture_source_path(
+            case,
+            project_root=Path.cwd(),
+        ),
+        "case_definition_sha256": case.definition_sha256,
+        "fixture_content_sha256": workspace.content_digest_sha256,
+    }
+    expected_profiles = (configuration or {}).get("case_authority_profiles")
+    expected_profile = (
+        expected_profiles.get(case.name)
+        if isinstance(expected_profiles, Mapping)
+        else None
+    )
+    authority_profile_required = (
+        "2.1.2" in milestone
+        and (configuration or {}).get("release_gate") is True
+    )
     try:
+        if authority_profile_required and expected_profile is None:
+            raise RuntimeError(
+                f"formal case authority profile is missing: {case.name}"
+            )
+        if expected_profile is not None and expected_profile != actual_authority_profile:
+            raise RuntimeError(
+                f"case authority profile changed before snapshot: {case.name}"
+            )
         state = agent_runner(case, state)
     except Exception as exc:
         state.status = "failed"
@@ -172,6 +215,9 @@ def run_eval_case(
     )
     policy_outcome = "denied" if int(result_metrics.get("policy_denials", 0) or 0) else "clear"
     passed = agent_success and infrastructure_success and all(result.passed for result in assertion_results)
+    request_rows, trace_assertion_events = _trace_evidence_rows(
+        workspace.run_dir / "trace.jsonl"
+    )
     result = EvalCaseResult(
         name=case.name,
         capability=case.capability,
@@ -193,6 +239,13 @@ def run_eval_case(
         milestone=milestone,
         stage=stage,
         configuration=dict(configuration or {}),
+        case_source_path=actual_authority_profile["source_path"],
+        fixture_source_path=actual_authority_profile["fixture_source_path"],
+        case_definition_sha256=case.definition_sha256,
+        fixture_content_sha256=workspace.content_digest_sha256,
+        request_rows=request_rows,
+        trace_assertion_events=trace_assertion_events,
+        assertion_specs=[dict(assertion) for assertion in case.assertions],
     )
     write_eval_case_report(result, workspace.run_dir)
     write_artifact_index(
@@ -270,6 +323,13 @@ def suite_to_dict(result: EvalSuiteResult) -> dict:
                 "infrastructure_success": case.infrastructure_success,
                 "policy_outcome": case.policy_outcome,
                 "formal_metric_eligible": _formal_metric_eligible(case),
+                "case_source_path": case.case_source_path,
+                "fixture_source_path": case.fixture_source_path,
+                "case_definition_sha256": case.case_definition_sha256,
+                "fixture_content_sha256": case.fixture_content_sha256,
+                "request_rows": case.request_rows,
+                "trace_assertion_events": case.trace_assertion_events,
+                "assertion_specs": case.assertion_specs,
                 "evidence": _run_evidence_paths(case),
                 "metrics": case.metrics,
                 "assertions": [asdict(assertion) for assertion in case.assertions],
@@ -462,6 +522,13 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         "policy_outcome": result.policy_outcome,
         "result": "PASS" if result.passed else "FAIL",
         "source_commit": str((result.configuration or {}).get("git_commit") or ""),
+        "case_source_path": result.case_source_path,
+        "fixture_source_path": result.fixture_source_path,
+        "case_definition_sha256": result.case_definition_sha256,
+        "fixture_content_sha256": result.fixture_content_sha256,
+        "request_rows": result.request_rows,
+        "trace_assertion_events": result.trace_assertion_events,
+        "assertion_specs": result.assertion_specs,
         "workspace_manifest": str((run_dir / "workspace_manifest.json").resolve()),
         "provider": {
             "base_url": str((result.configuration or {}).get("base_url") or ""),
@@ -569,6 +636,27 @@ def _run_evidence_paths(result: EvalCaseResult) -> dict[str, str]:
         "run_report": str(run_dir / "eval_result.json"),
         "suite_manifest": str(suite_manifest),
     }
+
+
+def _trace_evidence_rows(
+    trace_path: Path,
+) -> tuple[list[dict], list[dict]]:
+    if not trace_path.is_file():
+        return [], []
+    request_rows: list[dict] = []
+    trace_events: list[dict] = []
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        trace_events.append(event)
+        event_type = event.get("event")
+        if event_type == "model_response":
+            request_rows.append(event)
+    return request_rows, trace_action_shape_evidence_events(trace_events)
 
 
 def _formal_metric_eligible(result: EvalCaseResult) -> bool:

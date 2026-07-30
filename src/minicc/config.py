@@ -283,8 +283,8 @@ def _compaction_strategy(config: dict[str, Any]) -> str:
 
 def _prompt_layout(config: dict[str, Any]) -> str:
     value = str(config.get("prompt_layout", "rebuild")).strip().lower()
-    if value not in {"rebuild", "append"}:
-        raise ValueError("context.prompt_layout must be rebuild or append")
+    if value not in {"rebuild", "append", "epoch"}:
+        raise ValueError("context.prompt_layout must be rebuild, append, or epoch")
     return value
 
 

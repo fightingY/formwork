@@ -1,3 +1,4 @@
+import httpx
 import pytest
 
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider, ProviderError, extract_chat_text, parse_model_usage
@@ -76,6 +77,41 @@ def test_provider_retries_transient_request_failures(monkeypatch) -> None:
     response = provider.complete([])
 
     assert calls == 3
+    assert response.text == '{"type":"final","answer":"done"}'
+
+
+def test_provider_retries_empty_completion(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+        max_retries=1,
+    )
+    calls = 0
+
+    def empty_then_valid(payload):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "choices": [{"message": {"content": ""}}],
+                "usage": {"completion_tokens": 9},
+            }
+        return {
+            "choices": [
+                {"message": {"content": '{"type":"final","answer":"done"}'}}
+            ],
+            "usage": {},
+        }
+
+    monkeypatch.setattr(provider, "_post_json", empty_then_valid)
+    monkeypatch.setattr("minicc.core.provider.time.sleep", lambda seconds: None)
+
+    response = provider.complete([])
+
+    assert calls == 2
+    assert response.attempt_count == 2
+    assert response.retry_reasons == ("empty_completion",)
     assert response.text == '{"type":"final","answer":"done"}'
 
 
@@ -187,3 +223,92 @@ def test_provider_falls_back_when_native_json_mode_is_unsupported(monkeypatch) -
     assert "response_format" in payloads[0]
     assert "response_format" not in payloads[1]
     assert response.text.startswith("text ")
+
+
+def test_provider_reuses_one_http_client_within_session(monkeypatch) -> None:
+    clients = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"type":"final","answer":"done"}'}}],
+                "usage": {},
+            }
+
+    class FakeClient:
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+            self.closed = False
+            self.posts = 0
+            clients.append(self)
+
+        def post(self, *args, **kwargs):
+            self.posts += 1
+            return FakeResponse()
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr("minicc.core.provider.httpx.Client", FakeClient)
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+    )
+
+    provider.start_session("run-1")
+    provider.complete([])
+    provider.complete([])
+
+    assert len(clients) == 1
+    assert clients[0].posts == 2
+    provider.close()
+    assert clients[0].closed is True
+
+
+def test_provider_discards_broken_persistent_client_before_retry(monkeypatch) -> None:
+    clients = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"type":"final","answer":"done"}'}}],
+                "usage": {},
+            }
+
+    class FakeClient:
+        def __init__(self, *, timeout):
+            self.closed = False
+            clients.append(self)
+
+        def post(self, *args, **kwargs):
+            if self is clients[0]:
+                raise httpx.ConnectError(
+                    "stale pooled connection",
+                    request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+                )
+            return FakeResponse()
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr("minicc.core.provider.httpx.Client", FakeClient)
+    monkeypatch.setattr("minicc.core.provider.time.sleep", lambda seconds: None)
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+        max_retries=1,
+    )
+
+    response = provider.complete([])
+
+    assert response.text == '{"type":"final","answer":"done"}'
+    assert len(clients) == 2
+    assert clients[0].closed is True
