@@ -8,6 +8,7 @@ from minicc.core.state import RunState
 from minicc.trace.metrics import write_metrics
 from minicc.trace.recorder import TraceRecorder
 from minicc.trace.report import write_run_report
+from minicc.memory.working import write_working_memory_snapshot
 
 
 @dataclass
@@ -34,6 +35,13 @@ class RunLifecycle:
                 (time.perf_counter() - self._started_at) * 1000
             )
         if state.status == "completed":
+            memory_path = write_working_memory_snapshot(state)
+            if memory_path is not None:
+                self.trace.working_memory_captured(
+                    state,
+                    memory_path,
+                    len(state.memory_references),
+                )
             self.trace.run_completed(state)
         elif state.status == "interrupted":
             self.trace.run_interrupted(state, int(state.metrics.get("interrupted_after_steps", 0)))

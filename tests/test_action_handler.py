@@ -1,5 +1,5 @@
 from minicc.core.action_handler import ActionHandler
-from minicc.core.protocol import AskAction, BashAction, FinalAction
+from minicc.core.protocol import AskAction, BashAction, FinalAction, MemoryReference
 from minicc.core.state import Observation, RunState
 from minicc.policy.base import PolicyChain, PolicyDecision
 from minicc.trace.recorder import TraceRecorder
@@ -22,6 +22,26 @@ def test_action_handler_final_completes_state() -> None:
     assert outcome.should_continue is False
     assert state.status == "completed"
     assert state.final_answer == "done"
+
+
+def test_action_handler_grounds_final_memory_reference(tmp_path) -> None:
+    (tmp_path / "contract.txt").write_text("name=atlas\nport=8142\n", encoding="utf-8")
+    trace = TraceRecorder()
+    state = RunState.start("finish", workspace_host_path=tmp_path)
+
+    outcome = ActionHandler(FakeExecutor(), trace=trace).handle(
+        FinalAction(
+            answer="done",
+            memory=(MemoryReference("contract.txt", 1, 2),),
+        ),
+        state,
+    )
+
+    assert outcome.should_continue is False
+    assert state.memory_references[0]["excerpt"] == "name=atlas\nport=8142"
+    assert state.metrics["memory_references_captured"] == 1
+    assert state.metrics["memory_references_rejected"] == 0
+    assert any(event["event"] == "memory_reference_captured" for event in trace.events)
 
 
 def test_action_handler_ask_waits_and_saves_state(tmp_path) -> None:

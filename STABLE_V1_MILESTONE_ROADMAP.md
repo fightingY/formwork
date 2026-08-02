@@ -530,6 +530,14 @@ C02/C07 均为 3/3 PASS，全部 C07 run 均通过哈希 trace 动作回放。�
 
 先做 1 个两阶段 follow-up task，各配置运行 3 次；成功后扩到 3 个，最后才允许扩到 12 个 memory dependency task。
 
+开发入口（2026-08-02）：代码版本进入 `2.2.0.dev0`，从 `stable-v2.1.2` 建立独立开发分支。
+首个 `M01_service_contract_follow_up` 使用同一 source run 配对 M0（不注入）与 M1（显式来源 run）;
+working memory 只接受相对 workspace 文件的有限行区间，由 Harness 保存原文、文件哈希和项目初始快照哈希，
+新 run 不做环境式自动检索。项目快照不一致、记录完整性失败、路径越界或行区间无效时拒绝绑定。
+开发评测入口为 `minicc memory-eval eval_cases/memory_suite_v1/M01_service_contract_follow_up --repeat 3
+--execution-order alternating`；报告保存在不可覆盖的 `.minicc/suites/<suite-id>/`，不会直接写入正式
+`acceptance/`。只有 M01 连续配对通过并确认每次 M1 读取数均低于 M0 后，才扩到 3 个 case。
+
 验收标准：
 
 - short-term、long-term、working memory 的所有权和生命周期有明确测试。

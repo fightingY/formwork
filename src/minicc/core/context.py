@@ -10,6 +10,7 @@ from minicc.core.protocol import action_to_json
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.memory.compaction import CompactionError, ContextCompactor
 from minicc.memory.feedback import FeedbackMemory
+from minicc.memory.working import working_memory_context
 from minicc.skills.registry import SkillRegistry
 from minicc.trace.recorder import TraceRecorder
 
@@ -93,6 +94,7 @@ class ContextBuilder:
         trajectory: list[TrajectoryStep],
     ) -> list[dict[str, str]]:
         state.metrics["context_compaction_strategy"] = self.config.compaction_strategy
+        self._record_working_memory_injection(state)
         recent = self._active_trajectory(state, trajectory)
         if self.config.prompt_layout in {"append", "epoch"}:
             messages, stable_prefix_messages = self._append_messages(state, recent)
@@ -324,7 +326,22 @@ class ContextBuilder:
             memory_context = self.feedback_memory.context_text(state.goal)
             if memory_context:
                 context.append(memory_context)
+        follow_up_context = working_memory_context(state)
+        if follow_up_context:
+            context.append(follow_up_context)
         return context
+
+    def _record_working_memory_injection(self, state: RunState) -> None:
+        if not state.working_memory or state.metrics.get("working_memory_injection_events"):
+            return
+        state.metrics["working_memory_injection_events"] = 1
+        state.metrics["working_memory_items_injected"] = len(state.working_memory)
+        if self.trace is not None:
+            self.trace.working_memory_injected(
+                state,
+                source_run_id=state.working_memory_source_run_id or "",
+                items=state.working_memory,
+            )
 
     def _stable_run_context(self, state: RunState) -> list[str]:
         context: list[str] = []

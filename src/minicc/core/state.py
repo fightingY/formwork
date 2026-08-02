@@ -82,6 +82,9 @@ class RunState:
     latest_checkpoint_id: str | None = None
     resume_count: int = 0
     execution_journal: list[dict[str, Any]] = field(default_factory=list)
+    memory_references: list[dict[str, Any]] = field(default_factory=list)
+    working_memory: list[dict[str, Any]] = field(default_factory=list)
+    working_memory_source_run_id: str | None = None
 
     @classmethod
     def start(
@@ -157,6 +160,9 @@ class RunState:
             latest_checkpoint_id=data.get("latest_checkpoint_id"),
             resume_count=int(data.get("resume_count", 0)),
             execution_journal=list(data.get("execution_journal", [])),
+            memory_references=list(data.get("memory_references", [])),
+            working_memory=list(data.get("working_memory", [])),
+            working_memory_source_run_id=data.get("working_memory_source_run_id"),
         )
 
 
@@ -253,6 +259,13 @@ def initial_metrics() -> dict[str, Any]:
         "search_actions": 0,
         "repeated_file_reads": 0,
         "repeated_searches": 0,
+        "memory_references_requested": 0,
+        "memory_references_captured": 0,
+        "memory_references_rejected": 0,
+        "working_memory_candidates": 0,
+        "working_memory_items_injected": 0,
+        "working_memory_invalid_adoptions": 0,
+        "working_memory_injection_events": 0,
         "checkpoints_created": 0,
         "resumes_completed": 0,
         "resume_drift_errors": 0,

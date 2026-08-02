@@ -1,6 +1,14 @@
 import pytest
 
-from minicc.core.protocol import AskAction, BashAction, FinalAction, ProtocolError, parse_action
+from minicc.core.protocol import (
+    AskAction,
+    BashAction,
+    FinalAction,
+    MemoryReference,
+    ProtocolError,
+    action_to_dict,
+    parse_action,
+)
 
 
 def test_parse_bash_action_defaults_timeout() -> None:
@@ -19,6 +27,36 @@ def test_parse_final_action() -> None:
     action = parse_action('{"type":"final","answer":"Done."}')
 
     assert action == FinalAction(answer="Done.")
+
+
+def test_parse_final_action_with_grounded_memory_references() -> None:
+    action = parse_action(
+        '{"type":"final","answer":"Done.","memory":['
+        '{"path":"docs/contract.md","line_start":4,"line_end":7}]}'
+    )
+
+    assert action == FinalAction(
+        answer="Done.",
+        memory=(MemoryReference("docs/contract.md", 4, 7),),
+    )
+    assert action_to_dict(action)["memory"] == [
+        {"path": "docs/contract.md", "line_start": 4, "line_end": 7}
+    ]
+
+
+@pytest.mark.parametrize(
+    "memory",
+    [
+        '{}',
+        '[{"path":"../secret","line_start":1,"line_end":1}]',
+        '[{"path":"C:/secret","line_start":1,"line_end":1}]',
+        '[{"path":"docs/a.md","line_start":5,"line_end":4}]',
+        '[{"path":"docs/a.md","line_start":1,"line_end":21}]',
+    ],
+)
+def test_parse_final_action_rejects_unsafe_memory(memory: str) -> None:
+    with pytest.raises(ProtocolError, match="final.memory"):
+        parse_action(f'{{"type":"final","answer":"Done.","memory":{memory}}}')
 
 
 def test_accepts_common_provider_json_wrappers() -> None:

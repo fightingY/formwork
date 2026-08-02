@@ -15,6 +15,7 @@ from minicc.core.session import (
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.policy.base import PolicyChain, PolicyDecision
 from minicc.trace.recorder import TraceRecorder
+from minicc.memory.working import ground_memory_references
 
 
 class BashExecutor(Protocol):
@@ -47,6 +48,16 @@ class ActionHandler:
             self.trace.action_started(state, action)
 
         if isinstance(action, FinalAction):
+            state.metrics["memory_references_requested"] = len(action.memory)
+            accepted, rejected = ground_memory_references(state, action.memory)
+            state.memory_references = accepted
+            state.metrics["memory_references_captured"] = len(accepted)
+            state.metrics["memory_references_rejected"] = len(rejected)
+            if self.trace is not None:
+                for item in accepted:
+                    self.trace.memory_reference_captured(state, item)
+                for item in rejected:
+                    self.trace.memory_reference_rejected(state, item)
             state.status = "completed"
             state.final_answer = action.answer
             return ActionOutcome(should_continue=False)

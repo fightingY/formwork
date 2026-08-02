@@ -627,7 +627,7 @@ def _suite_payloads(result: EvalSuiteResult) -> tuple[dict, dict]:
 def _run_evidence_paths(result: EvalCaseResult) -> dict[str, str]:
     run_dir = Path(result.run_dir).resolve()
     suite_manifest = run_dir.parent.parent / "suites" / result.suite_id / "manifest.json"
-    return {
+    evidence = {
         "state": str(run_dir / "state.json"),
         "trace": str(run_dir / "trace.jsonl"),
         "metrics": str(run_dir / "metrics.json"),
@@ -636,6 +636,10 @@ def _run_evidence_paths(result: EvalCaseResult) -> dict[str, str]:
         "run_report": str(run_dir / "eval_result.json"),
         "suite_manifest": str(suite_manifest),
     }
+    working_memory = run_dir / "working_memory.json"
+    if working_memory.is_file():
+        evidence["working_memory"] = str(working_memory)
+    return evidence
 
 
 def _trace_evidence_rows(

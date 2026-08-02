@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from pathlib import PurePosixPath
+import re
 from typing import Any, Literal, Union
 
 
@@ -23,8 +25,16 @@ class AskAction:
 
 
 @dataclass(frozen=True)
+class MemoryReference:
+    path: str
+    line_start: int
+    line_end: int
+
+
+@dataclass(frozen=True)
 class FinalAction:
     answer: str
+    memory: tuple[MemoryReference, ...] = ()
     type: Literal["final"] = "final"
 
 
@@ -100,6 +110,10 @@ def _unwrap_model_json(text: str) -> str:
 def action_to_dict(action: Action) -> dict[str, Any]:
     data = asdict(action)
     action_type = data.pop("type")
+    if action_type == "final" and not data.get("memory"):
+        data.pop("memory", None)
+    elif action_type == "final":
+        data["memory"] = list(data["memory"])
     return {"type": action_type, **data}
 
 
@@ -141,7 +155,47 @@ def _parse_final(payload: dict[str, Any], raw_text: str) -> FinalAction:
     answer = payload.get("answer")
     if not isinstance(answer, str) or not answer.strip():
         raise ProtocolError("final.answer must be a non-empty string.", raw_text=raw_text)
-    return FinalAction(answer=answer.strip())
+    raw_memory = payload.get("memory", [])
+    if not isinstance(raw_memory, list):
+        raise ProtocolError("final.memory must be a list when provided.", raw_text=raw_text)
+    if len(raw_memory) > 8:
+        raise ProtocolError("final.memory supports at most 8 references.", raw_text=raw_text)
+    memory = tuple(_parse_memory_reference(item, raw_text) for item in raw_memory)
+    return FinalAction(answer=answer.strip(), memory=memory)
+
+
+def _parse_memory_reference(value: Any, raw_text: str) -> MemoryReference:
+    if not isinstance(value, dict):
+        raise ProtocolError("final.memory entries must be objects.", raw_text=raw_text)
+    path = str(value.get("path") or "").replace("\\", "/").strip().strip("/")
+    parts = PurePosixPath(path).parts
+    if (
+        not path
+        or path.startswith("/")
+        or re.match(r"^[A-Za-z]:", path)
+        or ".." in parts
+        or "." in parts
+    ):
+        raise ProtocolError("final.memory.path must be a safe relative path.", raw_text=raw_text)
+    line_start = _positive_int(value.get("line_start"), "final.memory.line_start", raw_text)
+    line_end = _positive_int(value.get("line_end"), "final.memory.line_end", raw_text)
+    if line_end < line_start:
+        raise ProtocolError("final.memory.line_end must not precede line_start.", raw_text=raw_text)
+    if line_end - line_start + 1 > 20:
+        raise ProtocolError("final.memory references may span at most 20 lines.", raw_text=raw_text)
+    return MemoryReference(path=path, line_start=line_start, line_end=line_end)
+
+
+def _positive_int(value: Any, name: str, raw_text: str) -> int:
+    if isinstance(value, bool):
+        raise ProtocolError(f"{name} must be a positive integer.", raw_text=raw_text)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ProtocolError(f"{name} must be a positive integer.", raw_text=raw_text) from exc
+    if parsed <= 0:
+        raise ProtocolError(f"{name} must be a positive integer.", raw_text=raw_text)
+    return parsed
 
 
 def _parse_timeout(value: Any, default_timeout_sec: int, raw_text: str) -> int:

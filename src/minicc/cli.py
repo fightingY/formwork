@@ -14,7 +14,12 @@ from minicc import __version__
 from minicc.config import BudgetSettings, PolicySettings, SandboxSettings, Settings, load_settings
 from minicc.core.checkpoint import CheckpointError, CheckpointManager
 from minicc.core.context import STABLE_PREFIX, ContextBuilder, ContextConfig
-from minicc.core.ledger import apply_cleanup_plan, build_cleanup_plan, write_artifact_index
+from minicc.core.ledger import (
+    apply_cleanup_plan,
+    build_cleanup_plan,
+    new_suite_id,
+    write_artifact_index,
+)
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
@@ -48,7 +53,9 @@ from minicc.evals.cache_utilization import (
     write_cache_utilization_report,
 )
 from minicc.evals.runner import run_eval_suite, write_eval_report, write_suite_report
+from minicc.evals.memory_ab import load_follow_up_case, run_memory_ab, write_memory_ab_report
 from minicc.memory.feedback import FeedbackMemory
+from minicc.memory.working import WorkingMemoryError, attach_working_memory
 from minicc.memory.compaction import SemanticCompactor
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
@@ -104,6 +111,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Override provider.stream to true.",
+    )
+    run_parser.add_argument(
+        "--follow-up-from",
+        default=None,
+        metavar="RUN_ID",
+        help="Explicitly attach grounded working memory captured by a completed source run.",
     )
     run_parser.set_defaults(handler=run_command)
 
@@ -193,6 +206,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record the balanced P0/P1 order used for this cache experiment round.",
     )
     eval_parser.set_defaults(handler=eval_command)
+
+    memory_eval_parser = subparsers.add_parser(
+        "memory-eval",
+        help="Run the paired two-stage V2.2 working-memory A/B evaluation.",
+    )
+    memory_eval_parser.add_argument("path", help="Follow-up case directory or case.yaml path.")
+    memory_eval_parser.add_argument("--milestone", default=None)
+    memory_eval_parser.add_argument("--repeat", type=int, default=3)
+    memory_eval_parser.add_argument(
+        "--execution-order",
+        choices=("alternating", "m0-first", "m1-first"),
+        default="alternating",
+    )
+    memory_eval_parser.add_argument(
+        "--execute-local",
+        action="store_true",
+        help="Run bash actions locally instead of in Docker.",
+    )
+    memory_eval_parser.set_defaults(handler=memory_eval_command)
 
     compaction_parser = subparsers.add_parser(
         "compaction-report",
@@ -355,6 +387,10 @@ def run_command(args: argparse.Namespace) -> int:
     state = RunState.start(args.goal, milestone=milestone, stage="daily_development")
     result = None
     try:
+        follow_up_from = getattr(args, "follow_up_from", None)
+        if follow_up_from and args.no_workspace_copy:
+            print("--follow-up-from cannot be used with --no-workspace-copy.", file=sys.stderr)
+            return 2
         if args.no_workspace_copy:
             if not args.execute_local:
                 print("--no-workspace-copy requires --execute-local.", file=sys.stderr)
@@ -398,6 +434,17 @@ def run_command(args: argparse.Namespace) -> int:
                     artifacts_dir=workspace.artifacts_dir,
                 )
                 executor = DockerCommandExecutor(runner, artifacts=artifacts)
+
+        if follow_up_from:
+            try:
+                attach_working_memory(
+                    state,
+                    str(follow_up_from),
+                    runs_root=Path.cwd() / ".minicc" / "runs",
+                )
+            except WorkingMemoryError as exc:
+                print(f"Cannot attach follow-up memory: {exc}", file=sys.stderr)
+                return 2
 
         session = SessionManager()
         session.save(state)
@@ -644,7 +691,7 @@ def _build_loop(
     feedback_memory = (
         None
         if state is not None
-        and state.prompt_namespace.startswith("cache-experiment/")
+        and state.prompt_namespace.startswith(("cache-experiment/", "memory-experiment/"))
         else FeedbackMemory(Path.cwd() / ".minicc" / "memory" / "feedback_rules.jsonl")
     )
     return AgentLoop(
@@ -1003,6 +1050,140 @@ def eval_command(args: argparse.Namespace) -> int:
     print(f"suite_manifest: {bundle.manifest_path}")
     print(f"json_report: {json_path}")
     print(f"markdown_report: {markdown_path}")
+    return 0 if result.passed and ledger_complete else 1
+
+
+def memory_eval_command(args: argparse.Namespace) -> int:
+    if args.repeat < 1:
+        print("--repeat must be at least 1.", file=sys.stderr)
+        return 2
+    settings = load_settings()
+    milestone = _effective_milestone(settings, args)
+    try:
+        case = load_follow_up_case(Path(args.path))
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    provider = _build_provider_or_print_error(settings)
+    if provider is None:
+        return 2
+    suite_id = new_suite_id()
+    runs_root = Path.cwd() / ".minicc" / "runs"
+    suites_root = Path.cwd() / ".minicc" / "suites"
+    catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
+    git_commit, worktree_dirty = _git_evidence(Path.cwd())
+
+    def agent_runner(eval_case: EvalCase, state: RunState, source_run_id: str | None) -> RunState:
+        state.constraints.extend(_case_constraints(eval_case))
+        state.prompt_namespace = f"memory-experiment/{suite_id}"
+        if source_run_id is not None:
+            attach_working_memory(state, source_run_id, runs_root=runs_root)
+        artifacts = ArtifactStore(
+            state.artifacts_dir or state.run_dir / "artifacts",
+            display_path_prefix=".minicc_artifacts",
+            preview_chars=settings.context.artifact_preview_chars,
+        )
+        runner = None
+        try:
+            if args.execute_local or eval_case.sandbox_mode == "local":
+                executor = LocalCommandExecutor(
+                    artifacts=artifacts,
+                    preview_chars=settings.context.artifact_preview_chars,
+                )
+            else:
+                runner = DockerSandboxRunner(
+                    DockerSandboxConfig(
+                        image=settings.sandbox.image,
+                        cpus=settings.sandbox.cpus,
+                        memory=settings.sandbox.memory,
+                        pids_limit=settings.sandbox.pids_limit,
+                        network=(
+                            "bridge" if eval_case.sandbox_mode == "dev" else settings.sandbox.network
+                        ),
+                    )
+                )
+                state.container_name = runner.start(
+                    run_id=state.run_id,
+                    workspace_dir=state.workspace_host_path,
+                    artifacts_dir=state.artifacts_dir,
+                    writable_paths=eval_case.writable_paths,
+                )
+                executor = DockerCommandExecutor(runner, artifacts=artifacts)
+            session = SessionManager()
+            session.save(state)
+            case_settings = _settings_for_eval_case(settings, eval_case)
+            loop = _build_loop(
+                provider,
+                executor,
+                settings=case_settings,
+                session=session,
+                state=state,
+                max_turns=_case_int(eval_case, "max_turns", case_settings.budget.max_turns),
+            )
+            return loop.run(state).state
+        finally:
+            if runner is not None:
+                runner.cleanup(state.container_name)
+
+    configuration = {
+        "command": (
+            f"minicc memory-eval {Path(args.path).as_posix()} --repeat {args.repeat} "
+            f"--execution-order {args.execution_order}"
+            + (" --execute-local" if args.execute_local else "")
+        ),
+        "base_url": settings.base_url or "",
+        "model": settings.model or "",
+        "temperature": settings.temperature,
+        "provider_timeout_sec": settings.provider.timeout_sec,
+        "provider_max_retries": settings.provider.max_retries,
+        "sandbox_mode": "local" if args.execute_local else settings.sandbox.mode,
+        "docker_image": settings.sandbox.image,
+        "git_commit": git_commit,
+        "worktree_dirty": worktree_dirty,
+        "feedback_memory_mode": "disabled",
+        "working_memory_mode": "explicit_source_run",
+        "prompt_layout": settings.context.prompt_layout,
+        "compaction_strategy": settings.context.compaction_strategy,
+        "expected_memory_paths": list(case.expected_memory_paths),
+    }
+    try:
+        result = run_memory_ab(
+            case,
+            runs_root=runs_root,
+            agent_runner=agent_runner,
+            repeat=args.repeat,
+            execution_order=args.execution_order,
+            configuration=configuration,
+            milestone=milestone,
+            suite_id=suite_id,
+        )
+        bundle = write_memory_ab_report(result, suites_root)
+    except (FileNotFoundError, WorkingMemoryError, RuntimeError, ValueError) as exc:
+        print(f"Memory A/B failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        close_provider = getattr(provider, "close", None)
+        if callable(close_provider):
+            close_provider()
+
+    catalog_entries = [
+        catalog.register_eval_result(
+            milestone,
+            case_result,
+            stage=result.stage,
+            source="memory-eval",
+            git_commit=git_commit,
+            report_path=str(bundle.report_json_path),
+            suite_path=str(bundle.manifest_path),
+        )
+        for case_result in result.case_results
+    ]
+    ledger_complete = all(entry is not None for entry in catalog_entries)
+    print(f"memory_ab_result: {'PASS' if result.passed else 'FAIL'}")
+    print(f"ledger_status: {'COMPLETE' if ledger_complete else 'INCOMPLETE'}")
+    print(f"suite_id: {result.suite_id}")
+    print(f"report_json: {bundle.report_json_path}")
+    print(f"report_markdown: {bundle.report_markdown_path}")
     return 0 if result.passed and ledger_complete else 1
 
 

@@ -188,6 +188,38 @@ class TraceRecorder:
     def semantic_compaction_failed(self, state: RunState, *, error: str) -> None:
         self.record("semantic_compaction_failed", state, error=error)
 
+    def memory_reference_captured(self, state: RunState, reference: dict[str, Any]) -> None:
+        self.record("memory_reference_captured", state, reference=reference)
+
+    def memory_reference_rejected(self, state: RunState, rejection: dict[str, Any]) -> None:
+        self.record("memory_reference_rejected", state, **rejection)
+
+    def working_memory_captured(self, state: RunState, path: Path, item_count: int) -> None:
+        self.record("working_memory_captured", state, path=str(path), item_count=item_count)
+
+    def working_memory_injected(
+        self,
+        state: RunState,
+        *,
+        source_run_id: str,
+        items: list[dict[str, Any]],
+    ) -> None:
+        self.record(
+            "working_memory_injected",
+            state,
+            source_run_id=source_run_id,
+            item_count=len(items),
+            references=[
+                {
+                    "path": item.get("path"),
+                    "line_start": item.get("line_start"),
+                    "line_end": item.get("line_end"),
+                    "excerpt_sha256": item.get("excerpt_sha256"),
+                }
+                for item in items
+            ],
+        )
+
     def approval_requested(self, state: RunState, question: str) -> None:
         self.record("approval_requested", state, question=question)
 
