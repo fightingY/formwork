@@ -856,6 +856,7 @@ def test_v30_release_gate_locks_fixed_five_case_matrix(tmp_path, monkeypatch) ->
 
 def test_v30_release_report_gate_requires_current_formal_suite(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cli, "_git_formal_state_error", lambda root: "")
+    monkeypatch.setattr(cli, "_formal_system_case_eligible", lambda row, suite_id: True)
     case_names = [
         "C01_repo_onboarding",
         "C02_fix_failing_test",
@@ -905,6 +906,27 @@ def test_v30_release_report_gate_requires_current_formal_suite(tmp_path, monkeyp
         output_dir=output,
         system_report=report,
     )
+
+
+def test_formal_system_case_eligibility_recomputes_waiting_hitl_run(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    monkeypatch.setattr(
+        cli,
+        "inspect_run",
+        lambda path: {
+            "formal_metric_eligible": True,
+            "run_id": "run-1",
+            "suite_id": "suite-1",
+            "stage": "formal_acceptance",
+            "status": "waiting_approval",
+        },
+    )
+
+    assert cli._formal_system_case_eligible(
+        {"run_id": "run-1", "run_dir": str(run_dir), "formal_metric_eligible": False},
+        suite_id="suite-1",
+    ) is True
 
 
 def test_v212_eval_rejects_external_fixture_before_provider(

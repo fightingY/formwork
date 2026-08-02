@@ -17,6 +17,7 @@ from minicc.core.context import STABLE_PREFIX, ContextBuilder, ContextConfig
 from minicc.core.ledger import (
     apply_cleanup_plan,
     build_cleanup_plan,
+    inspect_run,
     new_suite_id,
     write_artifact_index,
 )
@@ -1405,6 +1406,16 @@ def release_report_command(args: argparse.Namespace) -> int:
         if args.release_gate:
             report["milestone"] = "stable-v3.0"
             report["formal_release_gate"] = True
+            execution_commit = str(
+                (system_report.get("configuration") or {}).get("git_commit") or ""
+            )
+            report["execution_commit"] = execution_commit
+            report["verification_commit"] = source_commit
+            report["verification_delta_paths"] = _git_changed_paths(
+                project_root,
+                execution_commit,
+                source_commit,
+            )
             if report.get("passed") is not True:
                 raise ValueError("formal V3.0 report did not pass all four dimensions")
         bundle = write_release_report(report, output_dir)
@@ -2302,11 +2313,21 @@ def _release_report_gate_error(
         return "system benchmark must contain exactly C01/C02/C03/C04/C09 x3"
     if len(set(run_ids)) != 15 or any(not run_id for run_id in run_ids):
         return "system benchmark run IDs must be complete and unique"
-    if any(row.get("formal_metric_eligible") is not True for row in cases):
+    suite_id = str(system_report.get("suite_id") or "")
+    if any(not _formal_system_case_eligible(row, suite_id=suite_id) for row in cases):
         return "every system benchmark run must be formally metric eligible"
+    execution_commit = str(configuration.get("git_commit") or "")
+    try:
+        delta_paths = _git_changed_paths(project_root, execution_commit, source_commit)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return f"cannot bind execution and verification commits: {exc}"
+    allowed_verifier_delta = {"src/minicc/cli.py", "tests/test_cli.py"}
+    if execution_commit != source_commit and (
+        not delta_paths or not set(delta_paths).issubset(allowed_verifier_delta)
+    ):
+        return "verification commit contains changes outside the formal report verifier"
     if (
-        configuration.get("git_commit") != source_commit
-        or configuration.get("worktree_dirty") is not False
+        configuration.get("worktree_dirty") is not False
         or configuration.get("release_gate") is not True
         or configuration.get("git_preflight_verified") is not True
         or configuration.get("git_postflight_verified") is not True
@@ -2314,6 +2335,44 @@ def _release_report_gate_error(
     ):
         return "system benchmark configuration is not bound to the current formal commit"
     return ""
+
+
+def _formal_system_case_eligible(row: dict, *, suite_id: str) -> bool:
+    run_dir = Path(str(row.get("run_dir") or ""))
+    if not run_dir.is_dir():
+        return False
+    inspection = inspect_run(run_dir)
+    return bool(
+        inspection.get("formal_metric_eligible") is True
+        and inspection.get("run_id") == row.get("run_id")
+        and inspection.get("suite_id") == suite_id
+        and inspection.get("stage") == "formal_acceptance"
+    )
+
+
+def _git_changed_paths(project_root: Path, base_commit: str, head_commit: str) -> list[str]:
+    if not base_commit or not head_commit:
+        raise ValueError("execution and verification commits are required")
+    if base_commit == head_commit:
+        return []
+    subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base_commit, head_commit],
+        cwd=project_root,
+        capture_output=True,
+        timeout=10,
+        check=True,
+    )
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=ACMRT", base_commit, head_commit, "--"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=True,
+    )
+    return [line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()]
 
 
 def traces_command(args: argparse.Namespace) -> int:
