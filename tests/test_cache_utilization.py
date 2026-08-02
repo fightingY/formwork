@@ -422,6 +422,32 @@ def test_cache_utilization_conservatively_costs_retried_physical_attempts() -> N
     assert report["rounds"][0]["criteria"]["retry_cache_penalty_accounted"] is True
 
 
+def test_cache_utilization_accepts_fixed_probe_saturation_fallback() -> None:
+    rounds = [_round(1, "p1-first"), _round(2, "p2-first")]
+    _set_probe_non_cold_hit(rounds[0][0], 900)
+    _set_probe_non_cold_hit(rounds[0][1], 920)
+
+    report = build_cache_utilization_report(rounds)
+
+    assert report["passed"] is True
+    assert report["rounds"][0]["criteria"][
+        "fixed_miss_improvement_or_saturation_target"
+    ] is True
+
+
+def test_cache_utilization_rejects_saturated_baseline_regression() -> None:
+    rounds = [_round(1, "p1-first"), _round(2, "p2-first")]
+    _set_probe_non_cold_hit(rounds[0][0], 900)
+    _set_probe_non_cold_hit(rounds[0][1], 850)
+
+    report = build_cache_utilization_report(rounds)
+
+    assert report["passed"] is False
+    assert report["rounds"][0]["criteria"][
+        "fixed_miss_improvement_or_saturation_target"
+    ] is False
+
+
 def test_cache_utilization_treats_zero_to_zero_short_miss_as_no_regression() -> None:
     rounds = [_round(1, "p1-first"), _round(2, "p2-first")]
     for round_ in rounds:
@@ -447,10 +473,7 @@ def test_cache_utilization_treats_zero_to_zero_short_miss_as_no_regression() -> 
 
     report = build_cache_utilization_report(rounds)
 
-    assert all(
-        round_["criteria"]["short_miss_not_regressed"]
-        for round_ in report["rounds"]
-    )
+    assert report["criteria"]["short_balanced_miss_inflation_within_15"] is True
 
 
 def _round(index: int, order: str):
@@ -761,6 +784,29 @@ def _row_metrics(rows: list[dict], *, steady_offset: int = 1) -> dict:
         "capture_hit_tokens": capture_hit,
         "capture_efficiency_input": capture_hit / theoretical,
     }
+
+
+def _set_probe_non_cold_hit(probe: dict, hit_tokens: int) -> None:
+    for request in probe["requests"]:
+        hit = 0 if request["request_index"] == 1 else hit_tokens
+        request["cache_hit_tokens"] = hit
+        request["cache_miss_tokens"] = request["prompt_tokens"] - hit
+    metrics = _row_metrics(probe["requests"], steady_offset=2)
+    probe["cache"].update(metrics)
+    probe["steady_state_cache"].update(
+        {
+            "request_count": metrics["steady_state_request_count"],
+            "metric_requests": metrics["steady_state_request_count"],
+            "unreported_requests": 0,
+            "prompt_tokens": metrics["steady_state_prompt_tokens"],
+            "hit_tokens": metrics["steady_state_hit_tokens"],
+            "miss_tokens": (
+                metrics["steady_state_prompt_tokens"]
+                - metrics["steady_state_hit_tokens"]
+            ),
+            "weighted_hit_rate": metrics["steady_state_weighted_hit_rate"],
+        }
+    )
 
 
 def _interval(index: int, order: str, variant: str, kind: str) -> tuple[str, str]:

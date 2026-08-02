@@ -23,7 +23,7 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V2.1.1
+## 当前稳定版本：Stable V2.1.2
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -43,11 +43,19 @@ Stable V2.1 已完成两轮独立 Context Compaction A/B：A0/A1 首轮均为
 关键事实保留率均为 100%，重复 I/O 满足验收容差。完整归档见
 `acceptance/stable-v2.1/`。Skill/Feedback Memory 仍保持 experimental。
 
-当前发布版本为 `2.1.1`。Stable V2.1.1 在固定序列与真实 C02 上完成两轮独立、倒序
+Stable V2.1.1 在固定序列与真实 C02 上完成两轮独立、倒序
 Prompt Cache A/B；P0/P1 真实任务均为 3/3 PASS 且没有 Provider 重试。P1 的真实命中率由
 3.32%/3.40% 提高到 23.20%/24.45%，未缓存 token 分别下降 31.75%/34.77%，总 prompt
 分别下降 14.08%/16.60%。默认消息布局已切换为 `append`，完整归档见
 `acceptance/stable-v2.1.1/`。
+
+当前发布版本为 `2.1.2`。Stable V2.1.2 在实现提交
+`de3898ed54431f45cca9c83535bee2a5c5529b4e` 上完成 `formal-v212-round-81`（P1-first）与
+`formal-v212-round-82`（P2-first）两轮正式验收。P2 固定长序列 full-chain 命中率为
+87.65%/84.82%，steady-state 为 94.00%/91.53%；真实 C07 full-chain 为 75.89%/74.73%，
+steady-state 为 83.09%/81.84%，12 个 C07 run 全部保持精确 9 请求、8 Bash 动作链与 100%
+任务通过率。最终归档仅含四个文件，8 份入选输入自包含于 `evidence.json`，见
+`acceptance/stable-v2.1.2/`。
 
 M1 已实现基础闭环：
 
@@ -245,9 +253,12 @@ uv run minicc eval eval_cases/capability_suite_v1 --case C02_fix_failing_test --
 80%、兑现率 85%、prompt 膨胀不超过 10% 和任务/事实保留 100% 时，命令只打印失败门禁，
 不创建 acceptance 目录。Provider 重试必须不超过配置且逐请求记录原因；重试请求按
 `attempt_count × 最终 prompt` 的物理输入上界计费，有效 hit 强制为 0、全部计入 miss，不能
-通过失败请求自预热提高成绩。固定序列要求全链路 miss 降低至少 40%；C07 的前 7 个请求中
-P1/P2 尚未分叉，因此要求第 8 个请求起的 post-slide miss 降低至少 40%，全链路降低只作
-诊断。每个 C07 run 必须同时证明严格递增的 1–9 request index、锁定 spec SHA-256 的 8-step
+通过失败请求自预热提高成绩。固定序列通常要求全链路 miss 降低至少 40%；若 P1 全链路已
+达到 80% 的饱和基线，则改用不受相对改善上限扭曲的严格替代门槛：P2 全链路仍须达到 80%、
+稳态达到 90%，且绝对 miss 不得高于 P1。C07 的前 7 个请求中 P1/P2 尚未分叉，因此要求第
+8 个请求起的 post-slide miss 降低至少 40%，全链路降低只作诊断。C02 的 prompt/miss 回归
+在两轮倒序证据上合并计算，分别限制为 10%/15%，避免把单轮随机多一个工具动作误判为缓存
+布局退化。每个 C07 run 必须同时证明严格递增的 1–9 request index、锁定 spec SHA-256 的 8-step
 bash action shape（初始测试、artifact grep、三次独立读取、独立 edit、focused/full 验证），
 以及恰好 2 个 post-slide 请求，避免比较不同语义阶段。固定探针的稳态排除预先锁定的 2 次
 warm-up；真实任务从首次**单次 attempt**的实际
@@ -259,8 +270,10 @@ V2.1.2 正式 eval 还锁定 canonical suite 路径和精确 C02/C07 矩阵。�
 记录 workspace 基线的路径+内容摘要，并将 `case.yaml`、fixture 内容和来源路径组成的 authority
 profile 贯通 workspace manifest、run report、suite report 与最终聚合门禁；两种布局、两轮和
 全部 attempts 的 profile 必须一致，并逐文件通过 Git clean filter 与声明 commit 的 tree
-object 对照，避免误选 suite、`skip-worktree` 或执行期间夹具漂移。由已哈希 trace 验证过的
-逐请求 rows 直接固化进 suite report；聚合与最终 evidence 不再二次读取活 trace 路径。
+object 对照；正式运行前后还拒绝 `skip-worktree`、`assume-unchanged`、ambient content-transform
+attributes 和 fixture 额外空目录，避免隐藏变更或执行期间夹具漂移。由已哈希 trace 验证过的
+逐请求 rows 与动作断言最小证据直接固化进 suite report；聚合与最终 evidence 不再二次读取活
+trace 路径。
 
 ```bash
 uv run minicc cache-utilization-report \

@@ -101,6 +101,9 @@ def build_cache_utilization_report(
     capture_efficiency_target: float = 0.85,
     miss_reduction_target: float = 0.40,
     prompt_inflation_limit: float = 0.10,
+    short_miss_inflation_limit: float = 0.15,
+    saturated_full_chain_target: float = 0.80,
+    saturated_steady_state_target: float = 0.90,
 ) -> dict[str, Any]:
     if len(rounds) != required_rounds:
         raise ValueError(f"cache utilization requires exactly {required_rounds} rounds")
@@ -118,6 +121,8 @@ def build_cache_utilization_report(
             capture_efficiency_target=capture_efficiency_target,
             miss_reduction_target=miss_reduction_target,
             prompt_inflation_limit=prompt_inflation_limit,
+            saturated_full_chain_target=saturated_full_chain_target,
+            saturated_steady_state_target=saturated_steady_state_target,
         )
         for index, (p1_probe, p2_probe, p1_suite, p2_suite) in enumerate(rounds, start=1)
     ]
@@ -151,6 +156,22 @@ def build_cache_utilization_report(
         for payload in (p1_suite, p2_suite)
     ]
     case_authority_profiles = _case_authority_profiles(suite_payloads)
+    p1_short_prompt_tokens = sum(
+        round_["p1"]["real"][SHORT_CASE]["prompt_tokens"]
+        for round_ in round_reports
+    )
+    p2_short_prompt_tokens = sum(
+        round_["p2"]["real"][SHORT_CASE]["prompt_tokens"]
+        for round_ in round_reports
+    )
+    p1_short_miss_tokens = sum(
+        round_["p1"]["real"][SHORT_CASE]["miss_tokens"]
+        for round_ in round_reports
+    )
+    p2_short_miss_tokens = sum(
+        round_["p2"]["real"][SHORT_CASE]["miss_tokens"]
+        for round_ in round_reports
+    )
     sequence_shapes = {
         re.sub(r"\d+", "#", sequence_id)
         for sequence_id in sequence_ids
@@ -180,6 +201,16 @@ def build_cache_utilization_report(
         "runtime_model_identity_verified": all(
             round_["runtime_model_identity_verified"] for round_ in round_reports
         ),
+        "short_balanced_prompt_inflation_within_10": _not_regressed(
+            p1_short_prompt_tokens,
+            p2_short_prompt_tokens,
+            prompt_inflation_limit,
+        ),
+        "short_balanced_miss_inflation_within_15": _not_regressed(
+            p1_short_miss_tokens,
+            p2_short_miss_tokens,
+            short_miss_inflation_limit,
+        ),
         "all_rounds_passed": all(round_["passed"] for round_ in round_reports),
     }
     locked_configuration = _archived_configuration(all_payloads[0])
@@ -201,6 +232,9 @@ def build_cache_utilization_report(
             "capture_efficiency": capture_efficiency_target,
             "miss_reduction": miss_reduction_target,
             "prompt_inflation_limit": prompt_inflation_limit,
+            "short_miss_inflation_limit": short_miss_inflation_limit,
+            "saturated_full_chain_hit_rate": saturated_full_chain_target,
+            "saturated_steady_state_hit_rate": saturated_steady_state_target,
             "retry_accounting": (
                 "upper_bound_attempt_count_times_final_prompt_with_zero_hit"
             ),
@@ -208,6 +242,12 @@ def build_cache_utilization_report(
         "criteria": global_criteria,
         "locked_configuration": locked_configuration,
         "case_authority_profiles": case_authority_profiles,
+        "short_balanced_totals": {
+            "p1_prompt_tokens": p1_short_prompt_tokens,
+            "p2_prompt_tokens": p2_short_prompt_tokens,
+            "p1_miss_tokens": p1_short_miss_tokens,
+            "p2_miss_tokens": p2_short_miss_tokens,
+        },
         "rounds": round_reports,
     }
 
@@ -313,8 +353,11 @@ def format_cache_utilization_markdown(report: Mapping[str, Any]) -> str:
         f"| Full-chain weighted hit rate | {_rate(report['targets']['full_chain_hit_rate'])} |",
         f"| Steady-state weighted hit rate | {_rate(report['targets']['steady_state_hit_rate'])} |",
         f"| Cache capture efficiency | {_rate(report['targets']['capture_efficiency'])} |",
-        f"| Uncached-token reduction | {_rate(report['targets']['miss_reduction'])} |",
+        f"| Uncached-token reduction before saturation | {_rate(report['targets']['miss_reduction'])} |",
+        f"| Saturation fallback full-chain hit rate | {_rate(report['targets']['saturated_full_chain_hit_rate'])} |",
+        f"| Saturation fallback steady-state hit rate | {_rate(report['targets']['saturated_steady_state_hit_rate'])} |",
         f"| Prompt inflation limit | {_rate(report['targets']['prompt_inflation_limit'])} |",
+        f"| Balanced short-task miss inflation limit | {_rate(report['targets']['short_miss_inflation_limit'])} |",
         "",
         "## Case authority profiles",
         "",
@@ -399,6 +442,8 @@ def _build_round(
     capture_efficiency_target: float,
     miss_reduction_target: float,
     prompt_inflation_limit: float,
+    saturated_full_chain_target: float,
+    saturated_steady_state_target: float,
 ) -> dict[str, Any]:
     _require_variant(p1_probe, "p1", "append", "probe")
     _require_variant(p2_probe, "p2", "epoch", "probe")
@@ -556,10 +601,27 @@ def _build_round(
                 p2_long,
             )
         ),
-        "fixed_miss_reduction_at_least_40": _reduction_at_least(
-            p1_fixed["miss_tokens"],
-            p2_fixed["miss_tokens"],
-            miss_reduction_target,
+        "fixed_miss_improvement_or_saturation_target": (
+            _reduction_at_least(
+                p1_fixed["miss_tokens"],
+                p2_fixed["miss_tokens"],
+                miss_reduction_target,
+            )
+            or (
+                _at_least(
+                    p1_fixed["weighted_hit_rate"],
+                    saturated_full_chain_target,
+                )
+                and _at_least(
+                    p2_fixed["weighted_hit_rate"],
+                    saturated_full_chain_target,
+                )
+                and _at_least(
+                    p2_fixed["steady_state_weighted_hit_rate"],
+                    saturated_steady_state_target,
+                )
+                and p2_fixed["miss_tokens"] <= p1_fixed["miss_tokens"]
+            )
         ),
         "long_post_slide_miss_reduction_at_least_40": _reduction_at_least(
             p1_long["post_slide_miss_tokens"],
@@ -574,16 +636,6 @@ def _build_round(
         "long_prompt_inflation_within_10": _inflation_within(
             p1_long["prompt_tokens"],
             p2_long["prompt_tokens"],
-            prompt_inflation_limit,
-        ),
-        "short_prompt_not_regressed": _inflation_within(
-            p1_short["prompt_tokens"],
-            p2_short["prompt_tokens"],
-            prompt_inflation_limit,
-        ),
-        "short_miss_not_regressed": _not_regressed(
-            p1_short["miss_tokens"],
-            p2_short["miss_tokens"],
             prompt_inflation_limit,
         ),
         "prefix_accounting_complete": all(

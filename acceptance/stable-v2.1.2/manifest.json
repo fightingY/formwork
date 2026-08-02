@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "entity_type": "prompt_cache_utilization_acceptance",
+  "milestone": "stable-v2.1.2",
+  "status": "PASS",
+  "source_commit": "de3898ed54431f45cca9c83535bee2a5c5529b4e",
+  "input_evidence": [
+    {
+      "id": "cache-probe-20260802-085125-7d33dc73",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\cache-probes\\cache-probe-20260802-085125-7d33dc73\\report.json",
+      "report_sha256": "188ae7d2e7abfeef7d7bd73b08b364b152a1337eaeabcb549a2c44691680f649",
+      "manifest_sha256": "cbef7528cb7f00b6523da17ef8177df12cfb5613eaecc0b021f39a2e2bfbb888",
+      "embedded_path": "evidence.json#/inputs/0"
+    },
+    {
+      "id": "cache-probe-20260802-085831-1f91f08e",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\cache-probes\\cache-probe-20260802-085831-1f91f08e\\report.json",
+      "report_sha256": "62cfb40aa2a05cbebb5485266f7d4d0be7d697153fe459e7c522e2ab92a6fa23",
+      "manifest_sha256": "a7e37788c349abf1151d32dc08943bf6ecf08d8d4973f82077370bc2a9954cf5",
+      "embedded_path": "evidence.json#/inputs/1"
+    },
+    {
+      "id": "suite-20260802-085153-6914d10d",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-085153-6914d10d\\report.json",
+      "report_sha256": "42fa1110be6577d245da91d5f0c2168b997eea5fa3eff637b49bf06f435d0055",
+      "manifest_sha256": "513628dae9be74abf9a5b730378cdd276da4232fc114f58ddf5de3e8d995b07b",
+      "embedded_path": "evidence.json#/inputs/2"
+    },
+    {
+      "id": "suite-20260802-085859-d683cc5c",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-085859-d683cc5c\\report.json",
+      "report_sha256": "fb209e0b5e6aa87308825150d7e236891934351be62c2aee167460e3392097a4",
+      "manifest_sha256": "9896ef402881ad67515ee3683718bfa3b2d881d2f8082803a8b87f397482bf0a",
+      "embedded_path": "evidence.json#/inputs/3"
+    },
+    {
+      "id": "cache-probe-20260802-091158-41f77517",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\cache-probes\\cache-probe-20260802-091158-41f77517\\report.json",
+      "report_sha256": "20a8f3a14c01f7c6e627f58b46407703da0d83927b3104c82eaa8547aedabaa0",
+      "manifest_sha256": "8d71f4453e41479515a20955a7990b875697bb7270d8910b74aaca93c0f35f7f",
+      "embedded_path": "evidence.json#/inputs/4"
+    },
+    {
+      "id": "cache-probe-20260802-090450-f639bff3",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\cache-probes\\cache-probe-20260802-090450-f639bff3\\report.json",
+      "report_sha256": "db5978cc3e2f41c140015a2a0f053f4bac269113b2b67ba48b6f0e353c9029f8",
+      "manifest_sha256": "0ec7380a202136ddcb78602422626b4e1965e768d194a3afd5fb594766769b47",
+      "embedded_path": "evidence.json#/inputs/5"
+    },
+    {
+      "id": "suite-20260802-091216-4b21d464",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-091216-4b21d464\\report.json",
+      "report_sha256": "425a383b2bebbbe1db67fccf14e53aea9447d9dd9a2795f2286a445de6a9d1b3",
+      "manifest_sha256": "738d11a99fd2ca7b5565f10d897047373dbe7bc58f3eed11fba1123411daad48",
+      "embedded_path": "evidence.json#/inputs/6"
+    },
+    {
+      "id": "suite-20260802-090509-bfc41c2b",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-090509-bfc41c2b\\report.json",
+      "report_sha256": "d7159f96b868467e8b7510be447880204d259bb77d93b385693494763d4f53b6",
+      "manifest_sha256": "50335eaf9d6d171a3a46f9e34de836e63d083f909d8a29adfc3b6c70fa87565d",
+      "embedded_path": "evidence.json#/inputs/7"
+    }
+  ],
+  "artifacts": {
+    "report_json": {
+      "path": "report.json",
+      "bytes": 396873,
+      "sha256": "fef545dffd16aadeb41e0e8fc1d750b9a6c9056bfb4b9b0bd212069a85d0eb40"
+    },
+    "report_markdown": {
+      "path": "report.md",
+      "bytes": 52367,
+      "sha256": "1a92c4226dab0a954992adf82255d9c3b086d9dc4dd4b131d1b5aef4588a3c35"
+    },
+    "evidence_bundle": {
+      "path": "evidence.json",
+      "bytes": 914321,
+      "sha256": "15c726d3260b4a65dc175f2ba7ea23124aeca6efa0975f4d8b0e17f8a50a71ce"
+    }
+  }
+}
