@@ -39,7 +39,14 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V2.2
+## 当前稳定版本：Stable V3.0
+
+当前发布版本为 `3.0.0`。Stable V3.0 的固定 C01/C02/C03/C04/C09 系统矩阵在执行提交
+`7d346fb77a191f0a5dbbb3157419cd0c0079c0cf` 上达到 15/15 PASS；正式聚合器在验证提交
+`cc150b0ae815e2add2f4ac036b3e0371205ddda4` 上逐 run 复核资格，二者之间仅包含报告验证器及其
+测试。最终四维报告覆盖系统回归 15 runs、Context 24 runs、Memory 27 runs、Resume 1 run，
+所有 claim 均携带配置、run ID、原始 artifact 和复跑命令。归档见 `acceptance/stable-v3.0/`，
+七层能力与诚实边界见 `docs/ETCLOVG_CAPABILITY_MATRIX.md`。
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -588,7 +595,7 @@ uv run pytest -q
 uv run minicc traces
 ```
 
-版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/`、`acceptance/stable-v1.2/`、`acceptance/stable-v1.3/`、`acceptance/stable-v2.0/`、`acceptance/stable-v2.0.1/`、`acceptance/stable-v2.0.2/`、`acceptance/stable-v2.1/`、`acceptance/stable-v2.1.1/`、`acceptance/stable-v2.1.2/` 和 `acceptance/stable-v2.2/`。V2.2 的 working-memory 正式结论与四文件证据入口见 `acceptance/stable-v2.2/report.md`。
+版本化验收结果保存在 `acceptance/stable-v1.0/` 至 `acceptance/stable-v3.0/`。V3.0 的系统回归、Context、Memory、Resume 四维结论与逐 claim 证据入口见 `acceptance/stable-v3.0/report.md`。
 
 ```bash
 uv run minicc eval eval_cases \

@@ -54,7 +54,7 @@ git switch -c stable-v1 8f19cd3
 
 - `archive/long-run-11-of-60` branch 和 `archive-long-run-11-of-60` tag 已存在，旧 5x12 cognition
   结果不再参与 Stable 主线开发或统计。
-- `stable-v1.0` 至 `stable-v2.2` tag 已存在；当前正式能力基线为 Stable V2.2 acceptance。
+- `stable-v1.0` 至 `stable-v3.0` tag 已存在；当前正式能力基线为 Stable V3.0 acceptance。
 - 本地旧 SWE、5x12 run、旧式 memory、开发报告副本和未被正式验收引用的 run 已清理；Git 中的
   archive ref 与 `acceptance/` 正式证据未删除。
 - `.minicc/runs` 与 `.minicc/suites` 保留正式验收引用的原始 run/suite；失败和中断尝试不复制进
@@ -621,6 +621,16 @@ Git 状态。再由 `release-report --release-gate` 校验 15 个新系统 run �
 uv run minicc eval eval_cases/capability_suite_v1 --case C01_repo_onboarding --case C02_fix_failing_test --case C03_add_cli_option --case C04_add_regression_test --case C09_hitl_destructive_command --repeat 3 --milestone v3.0-acceptance --release-gate
 uv run minicc release-report --system-report <formal-system-suite-report.json> --output-dir acceptance/stable-v3.0 --release-gate
 ```
+
+正式验收结果（2026-08-02）：首轮 `suite-20260802-144947-04ab8617` 完整结束但为 FAIL，暴露
+AskAction 审批计数遗漏与最后 1 turn 的收敛提示歧义；修复没有提高 case 预算或放宽断言。最终
+执行提交 `7d346fb77a191f0a5dbbb3157419cd0c0079c0cf` 上的
+`suite-20260802-150630-4df523ea` 达到 C01/C02/C03/C04/C09 各 3/3、合计 15/15 PASS，
+Provider error/retry 和 protocol error 均为 0，3 个 C09 run 均按预期进入 `waiting_approval`。
+验证提交 `cc150b0ae815e2add2f4ac036b3e0371205ddda4` 使用既有 ledger 统一复核 HITL 正式指标
+资格，并把执行/验证提交间仅有的 `src/minicc/cli.py`、`tests/test_cli.py` 差异写入报告。最终
+四维聚合覆盖系统 15、Context 24、Memory 27、Resume 1 个 run，全部为 `stable/PASS`；
+`acceptance/stable-v3.0/` 恰好包含 report JSON/Markdown/CSV 和 manifest 四个文件。
 
 验收标准：
 

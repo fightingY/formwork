@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "entity_type": "release_evidence_manifest",
+  "milestone": "stable-v3.0",
+  "source_commit": "cc150b0ae815e2add2f4ac036b3e0371205ddda4",
+  "status": "PASS",
+  "artifacts": {
+    "report_json": {
+      "path": "report.json",
+      "bytes": 38349,
+      "sha256": "2765f343492441e72a19caba300dd1daf9831653ddd51c36019efa786b9944fb"
+    },
+    "report_markdown": {
+      "path": "report.md",
+      "bytes": 10435,
+      "sha256": "96ffba526b842db3592dbdfc97e010378c3631542edbb317512e1b921482b1b4"
+    },
+    "report_csv": {
+      "path": "report.csv",
+      "bytes": 10083,
+      "sha256": "ae62369fcd88390bacf2b0c521b5dccca3455cc343b52377c982c30d709693cb"
+    }
+  }
+}
