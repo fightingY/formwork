@@ -820,6 +820,93 @@ def test_v212_release_gate_locks_canonical_suite_path(tmp_path, monkeypatch) -> 
     )
 
 
+def test_v30_release_gate_locks_fixed_five_case_matrix(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    case_names = [
+        "C01_repo_onboarding",
+        "C02_fix_failing_test",
+        "C03_add_cli_option",
+        "C04_add_regression_test",
+        "C09_hitl_destructive_command",
+    ]
+    valid = argparse.Namespace(
+        execute_local=False,
+        repeat=3,
+        case_names=case_names,
+        path=tmp_path / "eval_cases" / "capability_suite_v1",
+    )
+
+    assert (
+        cli._release_gate_error(
+            valid,
+            "abc123",
+            False,
+            milestone="v3.0-acceptance",
+        )
+        == ""
+    )
+    valid.case_names = case_names[:-1]
+    assert "exact C01/C02/C03/C04/C09" in cli._release_gate_error(
+        valid,
+        "abc123",
+        False,
+        milestone="v3.0-acceptance",
+    )
+
+
+def test_v30_release_report_gate_requires_current_formal_suite(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_git_formal_state_error", lambda root: "")
+    case_names = [
+        "C01_repo_onboarding",
+        "C02_fix_failing_test",
+        "C03_add_cli_option",
+        "C04_add_regression_test",
+        "C09_hitl_destructive_command",
+    ]
+    report = {
+        "stage": "formal_acceptance",
+        "passed": True,
+        "repeat": 3,
+        "configuration": {
+            "git_commit": "abc123",
+            "worktree_dirty": False,
+            "release_gate": True,
+            "git_preflight_verified": True,
+            "git_postflight_verified": True,
+            "docker_image": "python@sha256:abc123",
+        },
+        "cases": [
+            {
+                "name": name,
+                "run_id": f"{name}-r{attempt}",
+                "formal_metric_eligible": True,
+            }
+            for attempt in range(1, 4)
+            for name in case_names
+        ],
+    }
+    output = tmp_path / "acceptance" / "stable-v3.0"
+
+    assert (
+        cli._release_report_gate_error(
+            project_root=tmp_path,
+            source_commit="abc123",
+            worktree_dirty=False,
+            output_dir=output,
+            system_report=report,
+        )
+        == ""
+    )
+    report["configuration"]["git_postflight_verified"] = False
+    assert "current formal commit" in cli._release_report_gate_error(
+        project_root=tmp_path,
+        source_commit="abc123",
+        worktree_dirty=False,
+        output_dir=output,
+        system_report=report,
+    )
+
+
 def test_v212_eval_rejects_external_fixture_before_provider(
     tmp_path,
     monkeypatch,
@@ -1019,5 +1106,5 @@ def test_cleanup_command_defaults_to_dry_run_and_apply_uses_same_candidate(tmp_p
     assert not run_dir.exists()
 
 
-def test_cli_version_matches_stable_v22_package() -> None:
-    assert __version__ == "2.2.0"
+def test_cli_version_matches_v30_development_package() -> None:
+    assert __version__ == "3.0.0.dev0"

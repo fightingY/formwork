@@ -60,6 +60,12 @@ from minicc.evals.memory_acceptance import (
     load_memory_suite_report,
     write_memory_acceptance_report,
 )
+from minicc.evals.release_report import (
+    build_release_report,
+    load_context_suite_evidence,
+    load_json_evidence,
+    write_release_report,
+)
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.working import WorkingMemoryError, attach_working_memory
 from minicc.memory.compaction import SemanticCompactor
@@ -250,6 +256,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     memory_report_parser.add_argument("--output-dir", type=Path, required=True)
     memory_report_parser.set_defaults(handler=memory_report_command)
+
+    release_report_parser = subparsers.add_parser(
+        "release-report",
+        help="Build the four-dimension V3.0 release evidence report.",
+    )
+    release_report_parser.add_argument(
+        "--system-report",
+        type=Path,
+        default=Path("acceptance/stable-v1.3/eval_report.json"),
+    )
+    release_report_parser.add_argument(
+        "--context-report",
+        type=Path,
+        default=Path("acceptance/stable-v2.1/context-compaction-ab/report.json"),
+    )
+    release_report_parser.add_argument(
+        "--memory-report",
+        type=Path,
+        default=Path("acceptance/stable-v2.2/report.json"),
+    )
+    release_report_parser.add_argument(
+        "--resume-report",
+        type=Path,
+        default=Path("acceptance/stable-v2.0/checkpoint_report.json"),
+    )
+    release_report_parser.add_argument(
+        "--suites-root",
+        type=Path,
+        default=Path(".minicc/suites"),
+        help="Raw immutable suite root used to resolve V2.1 run IDs.",
+    )
+    release_report_parser.add_argument("--output-dir", type=Path, default=None)
+    release_report_parser.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="Write an EMPTY/experimental dimension instead of failing on a missing input.",
+    )
+    release_report_parser.add_argument(
+        "--release-gate",
+        action="store_true",
+        help="Require a clean V3.0 formal system suite and acceptance/stable-v3.0 output.",
+    )
+    release_report_parser.set_defaults(handler=release_report_command)
 
     compaction_parser = subparsers.add_parser(
         "compaction-report",
@@ -808,6 +857,9 @@ def eval_command(args: argparse.Namespace) -> int:
         prompt_layout = {"p0": "rebuild", "p1": "append", "p2": "epoch"}[cache_variant]
         settings = replace(settings, context=replace(settings.context, prompt_layout=prompt_layout))
     milestone = _effective_milestone(settings, args)
+    v212_formal = bool(args.release_gate and "2.1.2" in milestone)
+    v30_formal = bool(args.release_gate and "3.0" in milestone)
+    authority_locked_formal = v212_formal or v30_formal
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     git_commit, worktree_dirty = _git_evidence(Path.cwd())
     selected_case_names = set(args.case_names or [])
@@ -822,14 +874,17 @@ def eval_command(args: argparse.Namespace) -> int:
         for case in discovered_cases
         if not selected_case_names or case.name in selected_case_names
     ]
-    if (
-        args.release_gate
-        and "2.1.2" in milestone
-        and len(selected_cases) != 2
-    ):
+    if v212_formal and len(selected_cases) != 2:
         print(
             "Release gate rejected: V2.1.2 requires one canonical definition "
             "for each C02/C07 case",
+            file=sys.stderr,
+        )
+        return 2
+    if v30_formal and len(selected_cases) != 5:
+        print(
+            "Release gate rejected: V3.0 requires one canonical definition "
+            "for each C01/C02/C03/C04/C09 case",
             file=sys.stderr,
         )
         return 2
@@ -838,9 +893,11 @@ def eval_command(args: argparse.Namespace) -> int:
         project_root=Path.cwd(),
     )
     case_authority_profiles = live_case_authority_profiles
-    if args.release_gate and "2.1.2" in milestone:
-        profile_error = _v212_authority_profile_error(
-            live_case_authority_profiles
+    if authority_locked_formal:
+        profile_error = (
+            _v212_authority_profile_error(live_case_authority_profiles)
+            if v212_formal
+            else _v30_authority_profile_error(live_case_authority_profiles)
         )
         if profile_error:
             print(f"Release gate rejected: {profile_error}", file=sys.stderr)
@@ -874,7 +931,7 @@ def eval_command(args: argparse.Namespace) -> int:
         )
         return 2
     git_preflight_verified = False
-    if args.release_gate and "2.1.2" in milestone:
+    if authority_locked_formal:
         formal_git_error = _git_formal_state_error(Path.cwd())
         if formal_git_error:
             print(
@@ -1010,7 +1067,7 @@ def eval_command(args: argparse.Namespace) -> int:
         post_git_commit, post_worktree_dirty = _git_evidence(Path.cwd())
         post_formal_git_error = (
             _git_formal_state_error(Path.cwd())
-            if "2.1.2" in milestone
+            if authority_locked_formal
             else ""
         )
         try:
@@ -1029,7 +1086,7 @@ def eval_command(args: argparse.Namespace) -> int:
                     project_root=Path.cwd(),
                     git_commit=git_commit,
                 )
-                if "2.1.2" in milestone
+                if authority_locked_formal
                 else post_live_profiles
             )
         except (OSError, ValueError):
@@ -1300,6 +1357,70 @@ def memory_report_command(args: argparse.Namespace) -> int:
     print(f"evidence_json: {bundle.evidence_path}")
     print(f"manifest_json: {bundle.manifest_path}")
     return 0
+
+
+def release_report_command(args: argparse.Namespace) -> int:
+    project_root = Path.cwd()
+    source_commit, worktree_dirty = _git_evidence(project_root)
+    output_dir = args.output_dir or (
+        Path.cwd() / ".minicc" / "release-reports" / new_suite_id().replace("suite-", "release-")
+    )
+    try:
+        loader = _optional_release_evidence if args.allow_missing else load_json_evidence
+        system_report = loader(args.system_report)
+        context_report = loader(args.context_report)
+        memory_report = loader(args.memory_report)
+        resume_report = loader(args.resume_report)
+        if context_report.get("rounds"):
+            try:
+                context_suites = load_context_suite_evidence(
+                    context_report,
+                    suites_root=args.suites_root,
+                )
+            except (OSError, ValueError):
+                if not args.allow_missing:
+                    raise
+                context_suites = []
+        else:
+            context_suites = []
+        if args.release_gate:
+            gate_error = _release_report_gate_error(
+                project_root=project_root,
+                source_commit=source_commit,
+                worktree_dirty=worktree_dirty,
+                output_dir=output_dir,
+                system_report=system_report,
+            )
+            if gate_error:
+                print(f"V3.0 release report rejected: {gate_error}", file=sys.stderr)
+                return 2
+        report = build_release_report(
+            system_report=system_report,
+            context_report=context_report,
+            context_suites=context_suites,
+            memory_report=memory_report,
+            resume_report=resume_report,
+            source_commit=source_commit,
+        )
+        if args.release_gate:
+            report["milestone"] = "stable-v3.0"
+            report["formal_release_gate"] = True
+            if report.get("passed") is not True:
+                raise ValueError("formal V3.0 report did not pass all four dimensions")
+        bundle = write_release_report(report, output_dir)
+    except (FileExistsError, OSError, ValueError) as exc:
+        print(f"Cannot build V3.0 release report: {exc}", file=sys.stderr)
+        return 1
+    print(f"release_report_status: {report['status']}")
+    print(f"report_json: {bundle.json_path}")
+    print(f"report_markdown: {bundle.markdown_path}")
+    print(f"report_csv: {bundle.csv_path}")
+    print(f"manifest_json: {bundle.manifest_path}")
+    return 0 if report["passed"] else 1
+
+
+def _optional_release_evidence(path: Path) -> dict:
+    return load_json_evidence(path) if path.is_file() else {}
 
 
 def compaction_report_command(args: argparse.Namespace) -> int:
@@ -1691,6 +1812,34 @@ def _v212_authority_profile_error(
     return ""
 
 
+def _v30_authority_profile_error(
+    profiles: dict[str, dict[str, str]],
+) -> str:
+    case_names = (
+        "C01_repo_onboarding",
+        "C02_fix_failing_test",
+        "C03_add_cli_option",
+        "C04_add_regression_test",
+        "C09_hitl_destructive_command",
+    )
+    expected = {
+        name: {
+            "source_path": f"eval_cases/capability_suite_v1/{name}/case.yaml",
+            "fixture_source_path": f"eval_cases/capability_suite_v1/{name}/fixture",
+        }
+        for name in case_names
+    }
+    if set(profiles) != set(expected):
+        return "V3.0 authority profile requires the exact C01/C02/C03/C04/C09 cases"
+    if any(
+        profiles[name].get(field) != value
+        for name, paths in expected.items()
+        for field, value in paths.items()
+    ):
+        return "V3.0 authority profile requires canonical sibling fixtures"
+    return ""
+
+
 def _committed_case_authority_profiles(
     live_profiles: dict[str, dict[str, str]],
     *,
@@ -2044,6 +2193,21 @@ def _release_gate_error(
         }
         if set(args.case_names) != expected_cases:
             return "V2.1.2 acceptance requires the exact C02/C07 case matrix"
+    if "3.0" in milestone:
+        if args.repeat != 3:
+            return "V3.0 acceptance requires exactly --repeat 3"
+        expected_path = (Path.cwd() / "eval_cases" / "capability_suite_v1").resolve()
+        if Path(args.path).resolve() != expected_path:
+            return "V3.0 acceptance requires eval_cases/capability_suite_v1"
+        expected_cases = {
+            "C01_repo_onboarding",
+            "C02_fix_failing_test",
+            "C03_add_cli_option",
+            "C04_add_regression_test",
+            "C09_hitl_destructive_command",
+        }
+        if set(args.case_names) != expected_cases:
+            return "V3.0 acceptance requires the exact C01/C02/C03/C04/C09 matrix"
     return ""
 
 
@@ -2097,6 +2261,58 @@ def _memory_release_gate_error(
         case_path = case_path / "case.yaml"
     if case_path != (Path.cwd() / expected[0]).resolve():
         return f"V2.2 acceptance requires canonical case path for {case_name}"
+    return ""
+
+
+def _release_report_gate_error(
+    *,
+    project_root: Path,
+    source_commit: str,
+    worktree_dirty: bool,
+    output_dir: Path,
+    system_report: dict,
+) -> str:
+    if not source_commit:
+        return "the workspace is not pinned to a Git commit"
+    if worktree_dirty:
+        return "the Git worktree has uncommitted changes"
+    formal_git_error = _git_formal_state_error(project_root)
+    if formal_git_error:
+        return formal_git_error
+    if output_dir.resolve() != (project_root / "acceptance" / "stable-v3.0").resolve():
+        return "formal output must be acceptance/stable-v3.0"
+    configuration = system_report.get("configuration") or {}
+    expected_cases = {
+        "C01_repo_onboarding",
+        "C02_fix_failing_test",
+        "C03_add_cli_option",
+        "C04_add_regression_test",
+        "C09_hitl_destructive_command",
+    }
+    cases = [row for row in system_report.get("cases", []) if isinstance(row, dict)]
+    case_names = {str(row.get("name") or "") for row in cases}
+    run_ids = [str(row.get("run_id") or "") for row in cases]
+    if (
+        system_report.get("stage") != "formal_acceptance"
+        or system_report.get("passed") is not True
+        or int(system_report.get("repeat") or 0) != 3
+    ):
+        return "system benchmark must be a repeat-3 formal PASS suite"
+    if case_names != expected_cases or len(cases) != 15:
+        return "system benchmark must contain exactly C01/C02/C03/C04/C09 x3"
+    if len(set(run_ids)) != 15 or any(not run_id for run_id in run_ids):
+        return "system benchmark run IDs must be complete and unique"
+    if any(row.get("formal_metric_eligible") is not True for row in cases):
+        return "every system benchmark run must be formally metric eligible"
+    if (
+        configuration.get("git_commit") != source_commit
+        or configuration.get("worktree_dirty") is not False
+        or configuration.get("release_gate") is not True
+        or configuration.get("git_preflight_verified") is not True
+        or configuration.get("git_postflight_verified") is not True
+        or "@sha256:" not in str(configuration.get("docker_image") or "")
+    ):
+        return "system benchmark configuration is not bound to the current formal commit"
     return ""
 
 

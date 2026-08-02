@@ -604,6 +604,24 @@ uv run minicc memory-report --report <M01-report.json> --report <M02-report.json
 进入条件：V1.2、V2.0、V2.0.1、V2.0.2、V2.1 已通过；V2.2 可选择性通过，未通过的能力必须
 明确标为 experimental。
 
+开发入口（2026-08-02）：从 `stable-v2.2` 建立 `codex/stable-v3.0`，版本进入
+`3.0.0.dev0`。新增 `minicc release-report`，默认聚合 Stable V1.3 系统回归、V2.1 Context、
+V2.2 Memory、V2.0 Resume 四维证据，输出不可覆盖的 JSON/Markdown/CSV/manifest。每条 claim
+必须携带 case/suite/run ID、配置、source SHA-256、原始 artifact 和复跑命令；缺失维度显示
+`EMPTY/experimental`，不能写成稳定能力。首个开发报告为
+`.minicc/release-reports/v3-development-first/`，四维分别定位 15/24/27/1 个正式 run，开发门为
+PASS，但不作为 V3.0 acceptance。
+
+正式协议：先在同一个干净提交上运行 canonical C01/C02/C03/C04/C09 各 3 次；release gate
+锁定 `eval_cases/capability_suite_v1`、Docker 摘要镜像、case/fixture Git authority 和执行前后
+Git 状态。再由 `release-report --release-gate` 校验 15 个新系统 run 的 formal metric 资格，并
+复用已经验收的 Context/Memory/Resume 证据，最终写入 `acceptance/stable-v3.0/`。
+
+```powershell
+uv run minicc eval eval_cases/capability_suite_v1 --case C01_repo_onboarding --case C02_fix_failing_test --case C03_add_cli_option --case C04_add_regression_test --case C09_hitl_destructive_command --repeat 3 --milestone v3.0-acceptance --release-gate
+uv run minicc release-report --system-report <formal-system-suite-report.json> --output-dir acceptance/stable-v3.0 --release-gate
+```
+
 验收标准：
 
 - README 首屏提供一条 10 分钟内可完成的演示路径。

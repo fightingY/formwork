@@ -12,6 +12,22 @@ miniCC 是一个面向面试展示的 Bash-first CodeAct Agent Harness。
 miniCC 用极简 bash / ask / final action space 承载模型智能，用 harness 把执行过程变得可控、可观测、可回归。
 ```
 
+## 10 分钟证据演示
+
+在依赖和 Docker 镜像已就绪的机器上，以下路径不调用 Provider，约 5 分钟即可验证发布证据闭环：
+
+```powershell
+uv sync
+uv run pytest -q tests/test_release_report.py tests/test_server.py
+uv run minicc release-report
+uv run minicc web --host 127.0.0.1 --port 8000
+```
+
+`release-report` 会生成系统回归、Context、Memory、Resume 四维 JSON/Markdown/CSV 和 manifest，
+每个数字都带 run ID、配置、原始 artifact 与复跑命令。需要真实运行时，按
+[`docs/V3_RELEASE_RUNBOOK.md`](docs/V3_RELEASE_RUNBOOK.md) 配置 Provider 后执行单 case；七层能力
+状态与边界见 [`docs/ETCLOVG_CAPABILITY_MATRIX.md`](docs/ETCLOVG_CAPABILITY_MATRIX.md)。
+
 当前项目按 6 个里程碑推进：
 
 ```text
