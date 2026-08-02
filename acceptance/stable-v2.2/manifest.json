@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "entity_type": "working_memory_acceptance",
+  "milestone": "stable-v2.2",
+  "status": "PASS",
+  "source_commit": "15fadae08d7d424853ba24b4dca534501493a183",
+  "input_evidence": [
+    {
+      "id": "suite-20260802-130812-5862115e",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-130812-5862115e\\report.json",
+      "report_sha256": "5dd28cc826989d710575e3425c80c17d1c5fd19c34916334275a5870291289c7",
+      "manifest_sha256": "78cc39f6621ca69851288d287f2373d9dcd90084614f4ae5ce861da2f34a77d8",
+      "embedded_path": "evidence.json#/inputs/0"
+    },
+    {
+      "id": "suite-20260802-131105-3763ea38",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-131105-3763ea38\\report.json",
+      "report_sha256": "87b7e34cb6560a0d15839705858957e92dd50dcabe4789fafdd957355f5455c2",
+      "manifest_sha256": "52798aef9693669a2935c97037032a55c3dc70e2f1c11359356da88b2b8daa68",
+      "embedded_path": "evidence.json#/inputs/1"
+    },
+    {
+      "id": "suite-20260802-131409-441c511f",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-131409-441c511f\\report.json",
+      "report_sha256": "6704f5a4b0699d04b72d116143a6a71b3559e5367ad87d6e3ec4fd74928f4fce",
+      "manifest_sha256": "81c6cbf528fcfa133fe173121682d4e3db57ea23f41361b1ba268f8d27f80db4",
+      "embedded_path": "evidence.json#/inputs/2"
+    }
+  ],
+  "artifacts": {
+    "report_json": {
+      "path": "report.json",
+      "bytes": 41015,
+      "sha256": "fb62db1c4a90ce15fb0aed1a2e447036fb1e164edab7b8aef6157dbf63d01252"
+    },
+    "report_markdown": {
+      "path": "report.md",
+      "bytes": 7786,
+      "sha256": "32b36c30768e628f06f27f608422fc4d11158643ea87d0a3dac5f03d575b8987"
+    },
+    "evidence_bundle": {
+      "path": "evidence.json",
+      "bytes": 108404,
+      "sha256": "b9481acb0843d3f2b0b23084ec68ee6866c7c2344c83d1e310c18b888b0fd1ab"
+    }
+  }
+}

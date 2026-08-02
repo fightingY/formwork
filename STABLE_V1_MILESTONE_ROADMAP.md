@@ -54,18 +54,18 @@ git switch -c stable-v1 8f19cd3
 
 - `archive/long-run-11-of-60` branch 和 `archive-long-run-11-of-60` tag 已存在，旧 5x12 cognition
   结果不再参与 Stable 主线开发或统计。
-- `stable-v1.0` 至 `stable-v2.1.2` tag 已存在；当前正式能力基线为 Stable V2.1.2 acceptance。
+- `stable-v1.0` 至 `stable-v2.2` tag 已存在；当前正式能力基线为 Stable V2.2 acceptance。
 - 本地旧 SWE、5x12 run、旧式 memory、开发报告副本和未被正式验收引用的 run 已清理；Git 中的
   archive ref 与 `acceptance/` 正式证据未删除。
 - `.minicc/runs` 与 `.minicc/suites` 保留正式验收引用的原始 run/suite；失败和中断尝试不复制进
   acceptance 归档，也不混入最终通过口径。
-- 当前代码回归为 `270 passed`；V2.1.2 两轮 P1/P2 的 C02/C07 均为 3/3 PASS，12 个 C07
-  run 全部保持精确 9 请求和 8 Bash 动作链。
+- 当前代码回归为 `288 passed`；V2.2 的 M01/M02/M03 共 27 个正式 run 全部 PASS，M0/M1
+  关键事实正确率均为 9/9，重复来源读取为 `9 -> 0`。
 - Stable V2.1 已完成 context compaction 两轮独立 A/B；Stable V2.1.1 已完成 Prompt Cache
   两轮独立 A/B，semantic compaction 与追加式稳定前缀布局均升格为稳定能力。V2.1.1 只证明
   短任务上的相对改善，不代表已经达到高缓存利用率；绝对命中率与长任务前缀生命周期由
-  V2.1.2 已把 epoch 布局与高缓存利用率升格为稳定能力。Skill/Feedback Memory 仍保持
-  experimental。
+  V2.1.2 已把 epoch 布局与高缓存利用率升格为稳定能力。V2.2 已把显式来源 working memory
+  与 Follow-up 配对链路升格为稳定能力；Skill/Feedback Memory 仍保持 experimental。
 - C05-C08、SWE-bench v2、working memory、runtime tools 和 meta review 均不属于 V2.0.1/V2.0.2，
   不得借技术债治理之名提前混入。
 
@@ -581,6 +581,18 @@ uv run minicc memory-report --report <M01-report.json> --report <M02-report.json
 - 无关记忆注入率和错误记忆采纳率均为 0。
 - 报告给出原始命令、trace 证据、读取次数和 prompt 成本。
 - 只有实际测得时，才允许写“12 个任务从 N 次降到 M 次”，不得预设 `60 -> 0`。
+
+正式验收结果（2026-08-02）：M01/M02/M03 分别生成
+`suite-20260802-130812-5862115e`、`suite-20260802-131105-3763ea38`、
+`suite-20260802-131409-441c511f`，全部绑定共同执行提交
+`15fadae08d7d424853ba24b4dca534501493a183`。三组共 27 个 run 全部为
+`completed/PASS`，M0/M1 follow-up 关键事实正确率均为 9/9，每对重复来源读取均下降，聚合
+`9 -> 0`；follow-up prompt token 为 `36878 -> 26617`（下降 27.82%）。旧 run 串入、
+无关注入、完整性无效采纳、provider error/retry、protocol error 和审批均为 0。首次聚合暴露
+读取器错误地要求原始 `eval_result.json` 包含派生字段 `formal_metric_eligible`；修复提交
+`ba5ac0cdb5003dc9a029943f5469820f6a31a5e0` 改为使用既有 ledger 从完整证据重新计算资格，
+没有改变 runner、case、prompt 或正式 run，因而复用三份已通过 suite 而未重复消耗 Provider。
+最终四文件归档位于 `acceptance/stable-v2.2/`。
 
 失败回退：回到 `stable-v2.1.2`，working memory 降级为 experimental。通过后标记
 `stable-v2.2`。

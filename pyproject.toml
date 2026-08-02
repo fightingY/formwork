@@ -1,6 +1,6 @@
 [project]
 name = "mini-claude-code"
-version = "2.2.0.dev0"
+version = "2.2.0"
 description = "A Bash-first CodeAct agent harness for interview-ready Agent engineering demos."
 readme = "README.md"
 requires-python = ">=3.11"

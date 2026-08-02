@@ -1,0 +1,794 @@
+{
+  "schema_version": 1,
+  "entity_type": "working_memory_acceptance_report",
+  "milestone": "stable-v2.2",
+  "status": "PASS",
+  "passed": true,
+  "locked_configuration": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "deepseek-ai/DeepSeek-V4-Flash",
+    "temperature": 0.0,
+    "provider_timeout_sec": 300.0,
+    "provider_max_retries": 2,
+    "sandbox_mode": "locked",
+    "docker_image": "python@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0",
+    "git_commit": "15fadae08d7d424853ba24b4dca534501493a183",
+    "feedback_memory_mode": "disabled",
+    "working_memory_mode": "explicit_source_run",
+    "prompt_layout": "append",
+    "compaction_strategy": "deterministic",
+    "release_gate": true
+  },
+  "criteria": {
+    "exactly_three_canonical_cases": true,
+    "independent_suite_and_run_ids": true,
+    "locked_configuration_consistent": true,
+    "case_authority_profiles_locked": true,
+    "all_sources_formal_and_passed": true,
+    "follow_up_key_fact_accuracy_m0": 1.0,
+    "follow_up_key_fact_accuracy_m1": 1.0,
+    "memory_reduces_reads_every_pair": true,
+    "old_run_memory_leaks": 0,
+    "irrelevant_memory_injections": 0,
+    "integrity_invalid_memory_adoptions": 0,
+    "provider_errors": 0,
+    "protocol_errors": 0,
+    "waiting_approval_runs": 0,
+    "runtime_model_identity_verified": true
+  },
+  "aggregate": {
+    "case_count": 3,
+    "pair_count": 9,
+    "run_count": 27,
+    "m0_repeated_source_file_reads": 9,
+    "m1_repeated_source_file_reads": 0,
+    "read_reduction": 9,
+    "m0_prompt_tokens": 36878,
+    "m1_prompt_tokens": 26617,
+    "prompt_token_reduction_rate": 0.27824177016107166,
+    "provider_retried_requests": 0
+  },
+  "observed_provider_models": [
+    "deepseek-ai/DeepSeek-V4-Flash"
+  ],
+  "sources": [
+    {
+      "id": "suite-20260802-130812-5862115e",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-130812-5862115e\\report.json",
+      "report_sha256": "5dd28cc826989d710575e3425c80c17d1c5fd19c34916334275a5870291289c7",
+      "manifest_sha256": "78cc39f6621ca69851288d287f2373d9dcd90084614f4ae5ce861da2f34a77d8"
+    },
+    {
+      "id": "suite-20260802-131105-3763ea38",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-131105-3763ea38\\report.json",
+      "report_sha256": "87b7e34cb6560a0d15839705858957e92dd50dcabe4789fafdd957355f5455c2",
+      "manifest_sha256": "52798aef9693669a2935c97037032a55c3dc70e2f1c11359356da88b2b8daa68"
+    },
+    {
+      "id": "suite-20260802-131409-441c511f",
+      "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-131409-441c511f\\report.json",
+      "report_sha256": "6704f5a4b0699d04b72d116143a6a71b3559e5367ad87d6e3ec4fd74928f4fce",
+      "manifest_sha256": "81c6cbf528fcfa133fe173121682d4e3db57ea23f41361b1ba268f8d27f80db4"
+    }
+  ],
+  "cases": [
+    {
+      "case_name": "M01_service_contract_follow_up",
+      "suite_id": "suite-20260802-130812-5862115e",
+      "source": {
+        "id": "suite-20260802-130812-5862115e",
+        "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-130812-5862115e\\report.json",
+        "report_sha256": "5dd28cc826989d710575e3425c80c17d1c5fd19c34916334275a5870291289c7",
+        "manifest_sha256": "78cc39f6621ca69851288d287f2373d9dcd90084614f4ae5ce861da2f34a77d8"
+      },
+      "criteria": {
+        "source_runs_passed": true,
+        "follow_up_key_fact_accuracy_m0": 1.0,
+        "follow_up_key_fact_accuracy_m1": 1.0,
+        "memory_reduces_reads_every_pair": true,
+        "old_run_memory_leaks": 0,
+        "irrelevant_memory_injections": 0,
+        "integrity_invalid_memory_adoptions": 0
+      },
+      "aggregate": {
+        "m0_repeated_source_file_reads": 3,
+        "m1_repeated_source_file_reads": 0,
+        "m0_prompt_tokens": 11129,
+        "m1_prompt_tokens": 8808
+      },
+      "runtime": {
+        "run_count": 9,
+        "provider_errors": 0,
+        "provider_retried_requests": 0,
+        "protocol_errors": 0,
+        "waiting_approval_runs": 0,
+        "provider_response_models": [
+          "deepseek-ai/DeepSeek-V4-Flash"
+        ]
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "execution_order": [
+            "m0",
+            "m1"
+          ],
+          "source": {
+            "run_id": "eval-M01_service_contract_follow_up_source-r1-20260802-130812-f2134992",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_source-r1-20260802-130812-f2134992",
+            "passed": true,
+            "prompt_tokens": 1283,
+            "captured_references": [
+              {
+                "path": "docs/SERVICE_CONTRACT.md",
+                "line_start": 3,
+                "line_end": 6,
+                "excerpt": "service_name=atlas-router\nhealth_path=/readyz\nready_body=atlas-ready-v2\nretry_budget=4",
+                "file_sha256": "c35b1be9b4cdedbde42df397da4fae84163cc30a7218349c1553a1b994cce55e",
+                "excerpt_sha256": "81e2bf10508dbcfd13cd5cddee1c93430dfd6b7781a37c732176d3e37da83771"
+              }
+            ],
+            "working_memory_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_source-r1-20260802-130812-f2134992\\working_memory.json",
+            "working_memory_sha256": "a7fba8d4e9e7269c9f0ab4af3d284920c19585be02c7124549b56eba53ba10eb",
+            "commands": [
+              "cat docs/SERVICE_CONTRACT.md"
+            ]
+          },
+          "m0": {
+            "variant": "m0",
+            "run_id": "eval-M01_service_contract_follow_up_follow_up_m0-r1-20260802-130832-988d4101",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_follow_up_m0-r1-20260802-130832-988d4101",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 3708,
+            "repeated_source_file_reads": 1,
+            "commands": [
+              "cat docs/SERVICE_CONTRACT.md",
+              "cat src/service.py",
+              "cat > src/service.py << 'EOF'\nSERVICE_NAME = \"atlas-router\"\nHEALTH_PATH = \"/readyz\"\nREADY_BODY = \"atlas-ready-v2\"\nRETRY_BUDGET = 4\n\n\ndef readiness_response() -> tuple[str, str, int]:\n    return HEALTH_PATH, READY_BODY, RETRY_BUDGET\nEOF\npython -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 0,
+            "memory_items_injected": 0,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "m1": {
+            "variant": "m1",
+            "run_id": "eval-M01_service_contract_follow_up_follow_up_m1-r1-20260802-130853-b6d47d43",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_follow_up_m1-r1-20260802-130853-b6d47d43",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 2939,
+            "repeated_source_file_reads": 0,
+            "commands": [
+              "cat src/service.py",
+              "sed -i 's/SERVICE_NAME = \"legacy-router\"/SERVICE_NAME = \"atlas-router\"/; s/HEALTH_PATH = \"\\/health\"/HEALTH_PATH = \"\\/readyz\"/; s/READY_BODY = \"legacy-ready\"/READY_BODY = \"atlas-ready-v2\"/; s/RETRY_BUDGET = 1/RETRY_BUDGET = 4/' src/service.py && python -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 1,
+            "memory_items_injected": 1,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "paired_read_reduction": 1,
+          "paired_read_decreased": true
+        },
+        {
+          "attempt": 2,
+          "execution_order": [
+            "m1",
+            "m0"
+          ],
+          "source": {
+            "run_id": "eval-M01_service_contract_follow_up_source-r2-20260802-130907-bc36e092",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_source-r2-20260802-130907-bc36e092",
+            "passed": true,
+            "prompt_tokens": 1283,
+            "captured_references": [
+              {
+                "path": "docs/SERVICE_CONTRACT.md",
+                "line_start": 3,
+                "line_end": 6,
+                "excerpt": "service_name=atlas-router\nhealth_path=/readyz\nready_body=atlas-ready-v2\nretry_budget=4",
+                "file_sha256": "c35b1be9b4cdedbde42df397da4fae84163cc30a7218349c1553a1b994cce55e",
+                "excerpt_sha256": "81e2bf10508dbcfd13cd5cddee1c93430dfd6b7781a37c732176d3e37da83771"
+              }
+            ],
+            "working_memory_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_source-r2-20260802-130907-bc36e092\\working_memory.json",
+            "working_memory_sha256": "6619ac55134752cc7e5cc5ad66e86236270f61d936b76c90fccb9e260b388111",
+            "commands": [
+              "cat docs/SERVICE_CONTRACT.md"
+            ]
+          },
+          "m0": {
+            "variant": "m0",
+            "run_id": "eval-M01_service_contract_follow_up_follow_up_m0-r2-20260802-130934-e903c507",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_follow_up_m0-r2-20260802-130934-e903c507",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 3713,
+            "repeated_source_file_reads": 1,
+            "commands": [
+              "cat docs/SERVICE_CONTRACT.md",
+              "cat src/service.py",
+              "cat > src/service.py << 'EOF'\nSERVICE_NAME = \"atlas-router\"\nHEALTH_PATH = \"/readyz\"\nREADY_BODY = \"atlas-ready-v2\"\nRETRY_BUDGET = 4\n\n\ndef readiness_response() -> tuple[str, str, int]:\n    return HEALTH_PATH, READY_BODY, RETRY_BUDGET\nEOF\npython -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 0,
+            "memory_items_injected": 0,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "m1": {
+            "variant": "m1",
+            "run_id": "eval-M01_service_contract_follow_up_follow_up_m1-r2-20260802-130916-a9020197",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_follow_up_m1-r2-20260802-130916-a9020197",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 2933,
+            "repeated_source_file_reads": 0,
+            "commands": [
+              "cat src/service.py",
+              "cat > src/service.py << 'EOF'\nSERVICE_NAME = \"atlas-router\"\nHEALTH_PATH = \"/readyz\"\nREADY_BODY = \"atlas-ready-v2\"\nRETRY_BUDGET = 4\n\n\ndef readiness_response() -> tuple[str, str, int]:\n    return HEALTH_PATH, READY_BODY, RETRY_BUDGET\nEOF\npython -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 1,
+            "memory_items_injected": 1,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "paired_read_reduction": 1,
+          "paired_read_decreased": true
+        },
+        {
+          "attempt": 3,
+          "execution_order": [
+            "m0",
+            "m1"
+          ],
+          "source": {
+            "run_id": "eval-M01_service_contract_follow_up_source-r3-20260802-130956-174bdc9a",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_source-r3-20260802-130956-174bdc9a",
+            "passed": true,
+            "prompt_tokens": 1283,
+            "captured_references": [
+              {
+                "path": "docs/SERVICE_CONTRACT.md",
+                "line_start": 3,
+                "line_end": 6,
+                "excerpt": "service_name=atlas-router\nhealth_path=/readyz\nready_body=atlas-ready-v2\nretry_budget=4",
+                "file_sha256": "c35b1be9b4cdedbde42df397da4fae84163cc30a7218349c1553a1b994cce55e",
+                "excerpt_sha256": "81e2bf10508dbcfd13cd5cddee1c93430dfd6b7781a37c732176d3e37da83771"
+              }
+            ],
+            "working_memory_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_source-r3-20260802-130956-174bdc9a\\working_memory.json",
+            "working_memory_sha256": "7451fbf3997e1eec1550a4a35c0b70630beff193d216ef067d609856010f9f73",
+            "commands": [
+              "cat docs/SERVICE_CONTRACT.md"
+            ]
+          },
+          "m0": {
+            "variant": "m0",
+            "run_id": "eval-M01_service_contract_follow_up_follow_up_m0-r3-20260802-131006-eba82b7c",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_follow_up_m0-r3-20260802-131006-eba82b7c",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 3708,
+            "repeated_source_file_reads": 1,
+            "commands": [
+              "cat docs/SERVICE_CONTRACT.md",
+              "cat src/service.py",
+              "cat > src/service.py << 'EOF'\nSERVICE_NAME = \"atlas-router\"\nHEALTH_PATH = \"/readyz\"\nREADY_BODY = \"atlas-ready-v2\"\nRETRY_BUDGET = 4\n\n\ndef readiness_response() -> tuple[str, str, int]:\n    return HEALTH_PATH, READY_BODY, RETRY_BUDGET\nEOF\npython -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 0,
+            "memory_items_injected": 0,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "m1": {
+            "variant": "m1",
+            "run_id": "eval-M01_service_contract_follow_up_follow_up_m1-r3-20260802-131026-aa12503e",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M01_service_contract_follow_up_follow_up_m1-r3-20260802-131026-aa12503e",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 2936,
+            "repeated_source_file_reads": 0,
+            "commands": [
+              "cat src/service.py",
+              "cat > src/service.py << 'EOF'\nSERVICE_NAME = \"atlas-router\"\nHEALTH_PATH = \"/readyz\"\nREADY_BODY = \"atlas-ready-v2\"\nRETRY_BUDGET = 4\n\n\ndef readiness_response() -> tuple[str, str, int]:\n    return HEALTH_PATH, READY_BODY, RETRY_BUDGET\nEOF\npython -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 1,
+            "memory_items_injected": 1,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "paired_read_reduction": 1,
+          "paired_read_decreased": true
+        }
+      ]
+    },
+    {
+      "case_name": "M02_deploy_cli_follow_up",
+      "suite_id": "suite-20260802-131105-3763ea38",
+      "source": {
+        "id": "suite-20260802-131105-3763ea38",
+        "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-131105-3763ea38\\report.json",
+        "report_sha256": "87b7e34cb6560a0d15839705858957e92dd50dcabe4789fafdd957355f5455c2",
+        "manifest_sha256": "52798aef9693669a2935c97037032a55c3dc70e2f1c11359356da88b2b8daa68"
+      },
+      "criteria": {
+        "source_runs_passed": true,
+        "follow_up_key_fact_accuracy_m0": 1.0,
+        "follow_up_key_fact_accuracy_m1": 1.0,
+        "memory_reduces_reads_every_pair": true,
+        "old_run_memory_leaks": 0,
+        "irrelevant_memory_injections": 0,
+        "integrity_invalid_memory_adoptions": 0
+      },
+      "aggregate": {
+        "m0_repeated_source_file_reads": 3,
+        "m1_repeated_source_file_reads": 0,
+        "m0_prompt_tokens": 14461,
+        "m1_prompt_tokens": 8842
+      },
+      "runtime": {
+        "run_count": 9,
+        "provider_errors": 0,
+        "provider_retried_requests": 0,
+        "protocol_errors": 0,
+        "waiting_approval_runs": 0,
+        "provider_response_models": [
+          "deepseek-ai/DeepSeek-V4-Flash"
+        ]
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "execution_order": [
+            "m0",
+            "m1"
+          ],
+          "source": {
+            "run_id": "eval-M02_deploy_cli_follow_up_source-r1-20260802-131105-5731b991",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_source-r1-20260802-131105-5731b991",
+            "passed": true,
+            "prompt_tokens": 1268,
+            "captured_references": [
+              {
+                "path": "docs/DEPLOYMENT_CONTRACT.md",
+                "line_start": 3,
+                "line_end": 6,
+                "excerpt": "command_name=orbit-deploy\ndefault_region=ap-southeast-1\nconfig_env=ORBIT_CONFIG\nmax_parallel=6",
+                "file_sha256": "98c90b09225f63ac27fa0eea3a610981897501d1b25b8cbf09452b44d8d3cbaa",
+                "excerpt_sha256": "fd5f37f777e5a87eb1afe085ff8e0dca605002422975e46ab7afe079a7907e61"
+              }
+            ],
+            "working_memory_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_source-r1-20260802-131105-5731b991\\working_memory.json",
+            "working_memory_sha256": "8f26f33d109c4d0aae911e4a6e909e02f34f70d6624639ec9ea40bb6952379cf",
+            "commands": [
+              "cat docs/DEPLOYMENT_CONTRACT.md"
+            ]
+          },
+          "m0": {
+            "variant": "m0",
+            "run_id": "eval-M02_deploy_cli_follow_up_follow_up_m0-r1-20260802-131117-a99be753",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_follow_up_m0-r1-20260802-131117-a99be753",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 3738,
+            "repeated_source_file_reads": 1,
+            "commands": [
+              "cat src/deploy_cli.py",
+              "cat docs/DEPLOYMENT_CONTRACT.md",
+              "sed -i 's/COMMAND_NAME = \"legacy-deploy\"/COMMAND_NAME = \"orbit-deploy\"/; s/DEFAULT_REGION = \"us-east-1\"/DEFAULT_REGION = \"ap-southeast-1\"/; s/CONFIG_ENV = \"LEGACY_CONFIG\"/CONFIG_ENV = \"ORBIT_CONFIG\"/; s/MAX_PARALLEL = 1/MAX_PARALLEL = 6/' src/deploy_cli.py && python -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 0,
+            "memory_items_injected": 0,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "m1": {
+            "variant": "m1",
+            "run_id": "eval-M02_deploy_cli_follow_up_follow_up_m1-r1-20260802-131141-51fb95a6",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_follow_up_m1-r1-20260802-131141-51fb95a6",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 2949,
+            "repeated_source_file_reads": 0,
+            "commands": [
+              "cat src/deploy_cli.py",
+              "sed -i 's/COMMAND_NAME = \"legacy-deploy\"/COMMAND_NAME = \"orbit-deploy\"/; s/DEFAULT_REGION = \"us-east-1\"/DEFAULT_REGION = \"ap-southeast-1\"/; s/CONFIG_ENV = \"LEGACY_CONFIG\"/CONFIG_ENV = \"ORBIT_CONFIG\"/; s/MAX_PARALLEL = 1/MAX_PARALLEL = 6/' src/deploy_cli.py && python -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 1,
+            "memory_items_injected": 1,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "paired_read_reduction": 1,
+          "paired_read_decreased": true
+        },
+        {
+          "attempt": 2,
+          "execution_order": [
+            "m1",
+            "m0"
+          ],
+          "source": {
+            "run_id": "eval-M02_deploy_cli_follow_up_source-r2-20260802-131157-b8d3c880",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_source-r2-20260802-131157-b8d3c880",
+            "passed": true,
+            "prompt_tokens": 1268,
+            "captured_references": [
+              {
+                "path": "docs/DEPLOYMENT_CONTRACT.md",
+                "line_start": 3,
+                "line_end": 6,
+                "excerpt": "command_name=orbit-deploy\ndefault_region=ap-southeast-1\nconfig_env=ORBIT_CONFIG\nmax_parallel=6",
+                "file_sha256": "98c90b09225f63ac27fa0eea3a610981897501d1b25b8cbf09452b44d8d3cbaa",
+                "excerpt_sha256": "fd5f37f777e5a87eb1afe085ff8e0dca605002422975e46ab7afe079a7907e61"
+              }
+            ],
+            "working_memory_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_source-r2-20260802-131157-b8d3c880\\working_memory.json",
+            "working_memory_sha256": "cfe150a7bcac5be1d9a048b78a1a62f54b851416a829527e855800308711d0ad",
+            "commands": [
+              "cat docs/DEPLOYMENT_CONTRACT.md"
+            ]
+          },
+          "m0": {
+            "variant": "m0",
+            "run_id": "eval-M02_deploy_cli_follow_up_follow_up_m0-r2-20260802-131223-1d24c626",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_follow_up_m0-r2-20260802-131223-1d24c626",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 5367,
+            "repeated_source_file_reads": 1,
+            "commands": [
+              "ls -la",
+              "cat docs/DEPLOYMENT_CONTRACT.md",
+              "cat src/deploy_cli.py",
+              "cat > src/deploy_cli.py << 'EOF'\nCOMMAND_NAME = \"orbit-deploy\"\nDEFAULT_REGION = \"ap-southeast-1\"\nCONFIG_ENV = \"ORBIT_CONFIG\"\nMAX_PARALLEL = 6\n\n\ndef defaults() -> tuple[str, str, str, int]:\n    return COMMAND_NAME, DEFAULT_REGION, CONFIG_ENV, MAX_PARALLEL\nEOF\npython -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 0,
+            "memory_items_injected": 0,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "m1": {
+            "variant": "m1",
+            "run_id": "eval-M02_deploy_cli_follow_up_follow_up_m1-r2-20260802-131207-2acbcc5c",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_follow_up_m1-r2-20260802-131207-2acbcc5c",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 2941,
+            "repeated_source_file_reads": 0,
+            "commands": [
+              "cat src/deploy_cli.py",
+              "cat > src/deploy_cli.py << 'EOF'\nCOMMAND_NAME = \"orbit-deploy\"\nDEFAULT_REGION = \"ap-southeast-1\"\nCONFIG_ENV = \"ORBIT_CONFIG\"\nMAX_PARALLEL = 6\n\n\ndef defaults() -> tuple[str, str, str, int]:\n    return COMMAND_NAME, DEFAULT_REGION, CONFIG_ENV, MAX_PARALLEL\nEOF\npython -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 1,
+            "memory_items_injected": 1,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "paired_read_reduction": 1,
+          "paired_read_decreased": true
+        },
+        {
+          "attempt": 3,
+          "execution_order": [
+            "m0",
+            "m1"
+          ],
+          "source": {
+            "run_id": "eval-M02_deploy_cli_follow_up_source-r3-20260802-131248-4d7a1664",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_source-r3-20260802-131248-4d7a1664",
+            "passed": true,
+            "prompt_tokens": 1272,
+            "captured_references": [
+              {
+                "path": "docs/DEPLOYMENT_CONTRACT.md",
+                "line_start": 3,
+                "line_end": 6,
+                "excerpt": "command_name=orbit-deploy\ndefault_region=ap-southeast-1\nconfig_env=ORBIT_CONFIG\nmax_parallel=6",
+                "file_sha256": "98c90b09225f63ac27fa0eea3a610981897501d1b25b8cbf09452b44d8d3cbaa",
+                "excerpt_sha256": "fd5f37f777e5a87eb1afe085ff8e0dca605002422975e46ab7afe079a7907e61"
+              }
+            ],
+            "working_memory_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_source-r3-20260802-131248-4d7a1664\\working_memory.json",
+            "working_memory_sha256": "b6771eb2ff6f2a720778daadd3c890fe629ed063075263c398f16f250cbaa8f2",
+            "commands": [
+              "cat docs/DEPLOYMENT_CONTRACT.md"
+            ]
+          },
+          "m0": {
+            "variant": "m0",
+            "run_id": "eval-M02_deploy_cli_follow_up_follow_up_m0-r3-20260802-131305-b67363a9",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_follow_up_m0-r3-20260802-131305-b67363a9",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 5356,
+            "repeated_source_file_reads": 1,
+            "commands": [
+              "ls -la",
+              "cat docs/DEPLOYMENT_CONTRACT.md",
+              "cat src/deploy_cli.py",
+              "cat > src/deploy_cli.py << 'EOF'\nCOMMAND_NAME = \"orbit-deploy\"\nDEFAULT_REGION = \"ap-southeast-1\"\nCONFIG_ENV = \"ORBIT_CONFIG\"\nMAX_PARALLEL = 6\n\n\ndef defaults() -> tuple[str, str, str, int]:\n    return COMMAND_NAME, DEFAULT_REGION, CONFIG_ENV, MAX_PARALLEL\nEOF\npython -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 0,
+            "memory_items_injected": 0,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "m1": {
+            "variant": "m1",
+            "run_id": "eval-M02_deploy_cli_follow_up_follow_up_m1-r3-20260802-131331-192e3ffd",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M02_deploy_cli_follow_up_follow_up_m1-r3-20260802-131331-192e3ffd",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 2952,
+            "repeated_source_file_reads": 0,
+            "commands": [
+              "cat src/deploy_cli.py",
+              "sed -i 's/COMMAND_NAME = \"legacy-deploy\"/COMMAND_NAME = \"orbit-deploy\"/; s/DEFAULT_REGION = \"us-east-1\"/DEFAULT_REGION = \"ap-southeast-1\"/; s/CONFIG_ENV = \"LEGACY_CONFIG\"/CONFIG_ENV = \"ORBIT_CONFIG\"/; s/MAX_PARALLEL = 1/MAX_PARALLEL = 6/' src/deploy_cli.py && python -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 1,
+            "memory_items_injected": 1,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "paired_read_reduction": 1,
+          "paired_read_decreased": true
+        }
+      ]
+    },
+    {
+      "case_name": "M03_validator_contract_follow_up",
+      "suite_id": "suite-20260802-131409-441c511f",
+      "source": {
+        "id": "suite-20260802-131409-441c511f",
+        "path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260802-131409-441c511f\\report.json",
+        "report_sha256": "6704f5a4b0699d04b72d116143a6a71b3559e5367ad87d6e3ec4fd74928f4fce",
+        "manifest_sha256": "81c6cbf528fcfa133fe173121682d4e3db57ea23f41361b1ba268f8d27f80db4"
+      },
+      "criteria": {
+        "source_runs_passed": true,
+        "follow_up_key_fact_accuracy_m0": 1.0,
+        "follow_up_key_fact_accuracy_m1": 1.0,
+        "memory_reduces_reads_every_pair": true,
+        "old_run_memory_leaks": 0,
+        "irrelevant_memory_injections": 0,
+        "integrity_invalid_memory_adoptions": 0
+      },
+      "aggregate": {
+        "m0_repeated_source_file_reads": 3,
+        "m1_repeated_source_file_reads": 0,
+        "m0_prompt_tokens": 11288,
+        "m1_prompt_tokens": 8967
+      },
+      "runtime": {
+        "run_count": 9,
+        "provider_errors": 0,
+        "provider_retried_requests": 0,
+        "protocol_errors": 0,
+        "waiting_approval_runs": 0,
+        "provider_response_models": [
+          "deepseek-ai/DeepSeek-V4-Flash"
+        ]
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "execution_order": [
+            "m0",
+            "m1"
+          ],
+          "source": {
+            "run_id": "eval-M03_validator_contract_follow_up_source-r1-20260802-131409-37f4327a",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_source-r1-20260802-131409-37f4327a",
+            "passed": true,
+            "prompt_tokens": 1272,
+            "captured_references": [
+              {
+                "path": "docs/VALIDATION_CONTRACT.md",
+                "line_start": 3,
+                "line_end": 6,
+                "excerpt": "schema_version=2026-08\nrequired_field=request_id\nerror_code_missing=E_REQUEST_ID_REQUIRED\nmax_payload_bytes=4096",
+                "file_sha256": "6303a76c039a138ed0a0491c059e9184b01d9a4a58207ffe4ba8bc251f37b96a",
+                "excerpt_sha256": "ba59e05af3b32f4fa13959ced41b04f1a71e348ba15c642c27a1ab1918b29182"
+              }
+            ],
+            "working_memory_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_source-r1-20260802-131409-37f4327a\\working_memory.json",
+            "working_memory_sha256": "123094422182829d61ed33e7bc4932c0f79e9897430b118810cd183a745cf7f2",
+            "commands": [
+              "cat docs/VALIDATION_CONTRACT.md"
+            ]
+          },
+          "m0": {
+            "variant": "m0",
+            "run_id": "eval-M03_validator_contract_follow_up_follow_up_m0-r1-20260802-131418-b5fb84e9",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_follow_up_m0-r1-20260802-131418-b5fb84e9",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 3764,
+            "repeated_source_file_reads": 1,
+            "commands": [
+              "cat docs/VALIDATION_CONTRACT.md",
+              "cat src/validator.py",
+              "sed -i 's/SCHEMA_VERSION = \"2025-legacy\"/SCHEMA_VERSION = \"2026-08\"/; s/REQUIRED_FIELD = \"id\"/REQUIRED_FIELD = \"request_id\"/; s/ERROR_CODE_MISSING = \"E_ID_MISSING\"/ERROR_CODE_MISSING = \"E_REQUEST_ID_REQUIRED\"/; s/MAX_PAYLOAD_BYTES = 1024/MAX_PAYLOAD_BYTES = 4096/' src/validator.py && python -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 0,
+            "memory_items_injected": 0,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "m1": {
+            "variant": "m1",
+            "run_id": "eval-M03_validator_contract_follow_up_follow_up_m1-r1-20260802-131441-be5097d8",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_follow_up_m1-r1-20260802-131441-be5097d8",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 2992,
+            "repeated_source_file_reads": 0,
+            "commands": [
+              "cat src/validator.py",
+              "sed -i 's/SCHEMA_VERSION = \"2025-legacy\"/SCHEMA_VERSION = \"2026-08\"/; s/REQUIRED_FIELD = \"id\"/REQUIRED_FIELD = \"request_id\"/; s/ERROR_CODE_MISSING = \"E_ID_MISSING\"/ERROR_CODE_MISSING = \"E_REQUEST_ID_REQUIRED\"/; s/MAX_PAYLOAD_BYTES = 1024/MAX_PAYLOAD_BYTES = 4096/' src/validator.py && python -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 1,
+            "memory_items_injected": 1,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "paired_read_reduction": 1,
+          "paired_read_decreased": true
+        },
+        {
+          "attempt": 2,
+          "execution_order": [
+            "m1",
+            "m0"
+          ],
+          "source": {
+            "run_id": "eval-M03_validator_contract_follow_up_source-r2-20260802-131500-f75f3519",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_source-r2-20260802-131500-f75f3519",
+            "passed": true,
+            "prompt_tokens": 1272,
+            "captured_references": [
+              {
+                "path": "docs/VALIDATION_CONTRACT.md",
+                "line_start": 3,
+                "line_end": 6,
+                "excerpt": "schema_version=2026-08\nrequired_field=request_id\nerror_code_missing=E_REQUEST_ID_REQUIRED\nmax_payload_bytes=4096",
+                "file_sha256": "6303a76c039a138ed0a0491c059e9184b01d9a4a58207ffe4ba8bc251f37b96a",
+                "excerpt_sha256": "ba59e05af3b32f4fa13959ced41b04f1a71e348ba15c642c27a1ab1918b29182"
+              }
+            ],
+            "working_memory_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_source-r2-20260802-131500-f75f3519\\working_memory.json",
+            "working_memory_sha256": "be51ae3a14bb72ce584fdd87f7d12e2916ed3577ed44a84f0fd5be881c2e9763",
+            "commands": [
+              "cat docs/VALIDATION_CONTRACT.md"
+            ]
+          },
+          "m0": {
+            "variant": "m0",
+            "run_id": "eval-M03_validator_contract_follow_up_follow_up_m0-r2-20260802-131532-2c8e8780",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_follow_up_m0-r2-20260802-131532-2c8e8780",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 3760,
+            "repeated_source_file_reads": 1,
+            "commands": [
+              "cat docs/VALIDATION_CONTRACT.md",
+              "cat src/validator.py",
+              "sed -i 's/SCHEMA_VERSION = \"2025-legacy\"/SCHEMA_VERSION = \"2026-08\"/; s/REQUIRED_FIELD = \"id\"/REQUIRED_FIELD = \"request_id\"/; s/ERROR_CODE_MISSING = \"E_ID_MISSING\"/ERROR_CODE_MISSING = \"E_REQUEST_ID_REQUIRED\"/; s/MAX_PAYLOAD_BYTES = 1024/MAX_PAYLOAD_BYTES = 4096/' src/validator.py && python -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 0,
+            "memory_items_injected": 0,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "m1": {
+            "variant": "m1",
+            "run_id": "eval-M03_validator_contract_follow_up_follow_up_m1-r2-20260802-131511-4a3d801a",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_follow_up_m1-r2-20260802-131511-4a3d801a",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 2984,
+            "repeated_source_file_reads": 0,
+            "commands": [
+              "cat src/validator.py",
+              "cat > src/validator.py << 'EOF'\nSCHEMA_VERSION = \"2026-08\"\nREQUIRED_FIELD = \"request_id\"\nERROR_CODE_MISSING = \"E_REQUEST_ID_REQUIRED\"\nMAX_PAYLOAD_BYTES = 4096\n\n\ndef validate(payload: dict[str, object]) -> str:\n    if REQUIRED_FIELD not in payload:\n        return ERROR_CODE_MISSING\n    return \"ok\"\nEOF\npython -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 1,
+            "memory_items_injected": 1,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "paired_read_reduction": 1,
+          "paired_read_decreased": true
+        },
+        {
+          "attempt": 3,
+          "execution_order": [
+            "m0",
+            "m1"
+          ],
+          "source": {
+            "run_id": "eval-M03_validator_contract_follow_up_source-r3-20260802-131556-cdb24178",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_source-r3-20260802-131556-cdb24178",
+            "passed": true,
+            "prompt_tokens": 1276,
+            "captured_references": [
+              {
+                "path": "docs/VALIDATION_CONTRACT.md",
+                "line_start": 3,
+                "line_end": 6,
+                "excerpt": "schema_version=2026-08\nrequired_field=request_id\nerror_code_missing=E_REQUEST_ID_REQUIRED\nmax_payload_bytes=4096",
+                "file_sha256": "6303a76c039a138ed0a0491c059e9184b01d9a4a58207ffe4ba8bc251f37b96a",
+                "excerpt_sha256": "ba59e05af3b32f4fa13959ced41b04f1a71e348ba15c642c27a1ab1918b29182"
+              }
+            ],
+            "working_memory_path": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_source-r3-20260802-131556-cdb24178\\working_memory.json",
+            "working_memory_sha256": "e08b83990b61dab2ff3088058d45f89256cf3f522f396073fdafc988304d7789",
+            "commands": [
+              "cat docs/VALIDATION_CONTRACT.md"
+            ]
+          },
+          "m0": {
+            "variant": "m0",
+            "run_id": "eval-M03_validator_contract_follow_up_follow_up_m0-r3-20260802-131609-f63acec6",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_follow_up_m0-r3-20260802-131609-f63acec6",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 3764,
+            "repeated_source_file_reads": 1,
+            "commands": [
+              "cat docs/VALIDATION_CONTRACT.md",
+              "cat src/validator.py",
+              "sed -i 's/SCHEMA_VERSION = \"2025-legacy\"/SCHEMA_VERSION = \"2026-08\"/; s/REQUIRED_FIELD = \"id\"/REQUIRED_FIELD = \"request_id\"/; s/ERROR_CODE_MISSING = \"E_ID_MISSING\"/ERROR_CODE_MISSING = \"E_REQUEST_ID_REQUIRED\"/; s/MAX_PAYLOAD_BYTES = 1024/MAX_PAYLOAD_BYTES = 4096/' src/validator.py && python -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 0,
+            "memory_items_injected": 0,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "m1": {
+            "variant": "m1",
+            "run_id": "eval-M03_validator_contract_follow_up_follow_up_m1-r3-20260802-131630-82842d5e",
+            "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-M03_validator_contract_follow_up_follow_up_m1-r3-20260802-131630-82842d5e",
+            "passed": true,
+            "key_facts_correct": true,
+            "prompt_tokens": 2991,
+            "repeated_source_file_reads": 0,
+            "commands": [
+              "cat src/validator.py",
+              "sed -i 's/SCHEMA_VERSION = \"2025-legacy\"/SCHEMA_VERSION = \"2026-08\"/; s/REQUIRED_FIELD = \"id\"/REQUIRED_FIELD = \"request_id\"/; s/ERROR_CODE_MISSING = \"E_ID_MISSING\"/ERROR_CODE_MISSING = \"E_REQUEST_ID_REQUIRED\"/; s/MAX_PAYLOAD_BYTES = 1024/MAX_PAYLOAD_BYTES = 4096/' src/validator.py && python -m unittest discover -s tests -v"
+            ],
+            "memory_injection_events": 1,
+            "memory_items_injected": 1,
+            "old_run_memory_leaks": 0,
+            "irrelevant_memory_injections": 0,
+            "integrity_invalid_memory_adoptions": 0
+          },
+          "paired_read_reduction": 1,
+          "paired_read_decreased": true
+        }
+      ]
+    }
+  ],
+  "verification_commit": "ba5ac0cdb5003dc9a029943f5469820f6a31a5e0",
+  "verification_note": "The verifier commit differs from the common source commit only by the formal-eligibility recomputation fix and its tests; evaluation runs were reused."
+}

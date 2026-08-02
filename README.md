@@ -23,7 +23,7 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V2.1.2
+## 当前稳定版本：Stable V2.2
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -49,13 +49,21 @@ Prompt Cache A/B；P0/P1 真实任务均为 3/3 PASS 且没有 Provider 重试�
 分别下降 14.08%/16.60%。默认消息布局已切换为 `append`，完整归档见
 `acceptance/stable-v2.1.1/`。
 
-当前发布版本为 `2.1.2`。Stable V2.1.2 在实现提交
+Stable V2.1.2 在实现提交
 `de3898ed54431f45cca9c83535bee2a5c5529b4e` 上完成 `formal-v212-round-81`（P1-first）与
 `formal-v212-round-82`（P2-first）两轮正式验收。P2 固定长序列 full-chain 命中率为
 87.65%/84.82%，steady-state 为 94.00%/91.53%；真实 C07 full-chain 为 75.89%/74.73%，
 steady-state 为 83.09%/81.84%，12 个 C07 run 全部保持精确 9 请求、8 Bash 动作链与 100%
 任务通过率。最终归档仅含四个文件，8 份入选输入自包含于 `evidence.json`，见
 `acceptance/stable-v2.1.2/`。
+
+当前发布版本为 `2.2.0`。Stable V2.2 在共同执行提交
+`15fadae08d7d424853ba24b4dca534501493a183` 上完成 M01/M02/M03 三组正式 source/M0/M1
+配对评测，共 27 个 run 全部 PASS。M0/M1 follow-up 关键事实正确率均为 9/9，重复来源文件读取
+由 `9` 降为 `0`，follow-up prompt token 由 `36878` 降为 `26617`（下降 27.82%）；旧 run
+串入、无关注入、完整性无效采纳、Provider error/retry、protocol error 和审批均为 0。验收读取器
+修复提交为 `ba5ac0cdb5003dc9a029943f5469820f6a31a5e0`，复用了未受影响的正式 run。最终归档只含
+四个文件，见 `acceptance/stable-v2.2/`。
 
 M1 已实现基础闭环：
 
@@ -564,7 +572,7 @@ uv run pytest -q
 uv run minicc traces
 ```
 
-版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/`、`acceptance/stable-v1.2/`、`acceptance/stable-v1.3/`、`acceptance/stable-v2.0/`、`acceptance/stable-v2.0.1/`、`acceptance/stable-v2.0.2/` 和 `acceptance/stable-v2.1/`。V2.1 的两轮 Context Compaction A/B 结论与证据入口见 `acceptance/stable-v2.1/README.md`。
+版本化验收结果保存在 `acceptance/stable-v1.0/`、`acceptance/stable-v1.1/`、`acceptance/stable-v1.2/`、`acceptance/stable-v1.3/`、`acceptance/stable-v2.0/`、`acceptance/stable-v2.0.1/`、`acceptance/stable-v2.0.2/`、`acceptance/stable-v2.1/`、`acceptance/stable-v2.1.1/`、`acceptance/stable-v2.1.2/` 和 `acceptance/stable-v2.2/`。V2.2 的 working-memory 正式结论与四文件证据入口见 `acceptance/stable-v2.2/report.md`。
 
 ```bash
 uv run minicc eval eval_cases \

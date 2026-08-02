@@ -1019,5 +1019,5 @@ def test_cleanup_command_defaults_to_dry_run_and_apply_uses_same_candidate(tmp_p
     assert not run_dir.exists()
 
 
-def test_cli_version_matches_v22_development_package() -> None:
-    assert __version__ == "2.2.0.dev0"
+def test_cli_version_matches_stable_v22_package() -> None:
+    assert __version__ == "2.2.0"
