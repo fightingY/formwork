@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
+from minicc.core.ledger import inspect_run
+
 
 REQUIRED_MEMORY_CASES = {
     "M01_service_contract_follow_up": (
@@ -415,6 +417,7 @@ def _verify_run_evidence(
         state = json.loads(snapshots["state"])
         metrics = json.loads(snapshots["metrics"])
         eval_result = json.loads(snapshots["run_report"])
+        inspection = inspect_run(run_dir)
         role, report_row, paired_source_id = report_rows[run_id]
         if (
             state.get("run_id") != run_id
@@ -424,7 +427,10 @@ def _verify_run_evidence(
             or state.get("status") != "completed"
             or metrics.get("status") != "completed"
             or eval_result.get("passed") is not True
-            or eval_result.get("formal_metric_eligible") is not True
+            or inspection.get("formal_metric_eligible") is not True
+            or inspection.get("run_id") != run_id
+            or inspection.get("suite_id") != report.get("suite_id")
+            or inspection.get("stage") != "formal_acceptance"
         ):
             raise ValueError(f"run terminal evidence is inconsistent: {run_id}")
         events = _trace_events(snapshots["trace"])

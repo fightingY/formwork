@@ -212,10 +212,14 @@ def _run_evidence(
         "metrics": run_dir / "metrics.json",
         "workspace_manifest": run_dir / "workspace_manifest.json",
         "diff": run_dir / "artifacts" / "diff.patch",
+        "agent_report": run_dir / "run_report.json",
         "run_report": run_dir / "eval_result.json",
     }
     files["diff"].parent.mkdir()
-    files["state"].write_text(json.dumps({"run_id": run_id, "status": "completed"}), encoding="utf-8")
+    files["state"].write_text(
+        json.dumps({"run_id": run_id, "suite_id": suite_id, "status": "completed"}),
+        encoding="utf-8",
+    )
     files["trace"].write_text(
         "".join(json.dumps(event) + "\n" for event in events),
         encoding="utf-8",
@@ -235,13 +239,32 @@ def _run_evidence(
     )
     files["workspace_manifest"].write_text("{}", encoding="utf-8")
     files["diff"].write_bytes(b"")
+    files["agent_report"].write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": run_id,
+                "status": "completed",
+                "task_success": True,
+                "agent_success": True,
+                "infrastructure_success": True,
+                "policy_outcome": "clear",
+            }
+        ),
+        encoding="utf-8",
+    )
     files["run_report"].write_text(
         json.dumps(
             {
+                "schema_version": 2,
                 "run_id": run_id,
                 "suite_id": suite_id,
+                "stage": "formal_acceptance",
                 "passed": True,
-                "formal_metric_eligible": True,
+                "task_success": True,
+                "agent_success": True,
+                "infrastructure_success": True,
+                "policy_outcome": "clear",
             }
         ),
         encoding="utf-8",
