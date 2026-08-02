@@ -538,6 +538,14 @@ working memory 只接受相对 workspace 文件的有限行区间，由 Harness 
 --execution-order alternating`；报告保存在不可覆盖的 `.minicc/suites/<suite-id>/`，不会直接写入正式
 `acceptance/`。只有 M01 连续配对通过并确认每次 M1 读取数均低于 M0 后，才扩到 3 个 case。
 
+首个门禁结果（2026-08-02）：`M01` 在 `d2fb860` 上完成 3 次 source/M0/M1 配对，9 个 run
+全部 PASS，M0/M1 follow-up 关键事实正确率均为 3/3；每一对合同重复读取均为 `1 -> 0`，
+聚合 prompt token 为 `12836 -> 8822`，旧 run 串入、无关注入和完整性无效记忆采纳均为 0，
+Provider error/retry/protocol error 也均为 0。开发证据位于
+`.minicc/suites/suite-20260802-110112-7f1c8d23/`，不计入正式 acceptance。满足首个门后，
+允许新增 `M02_deploy_cli_follow_up` 与 `M03_validator_contract_follow_up`，形成 3-case 开发集；
+在两个新增 case 各完成 3 次配对前，不进入 12-task 扩展。
+
 验收标准：
 
 - short-term、long-term、working memory 的所有权和生命周期有明确测试。

@@ -1,0 +1,52 @@
+name: M02_deploy_cli_follow_up
+capability: grounded_working_memory_capture
+proves: Deployment defaults discovered in one run can be reused by an explicitly linked implementation run.
+sandbox_mode: locked
+fixture: fixture
+prompt: |
+  Inspect only docs/DEPLOYMENT_CONTRACT.md and report command_name, default_region,
+  config_env, and max_parallel. Do not modify any file. Your final JSON action must
+  include exactly one memory reference with path docs/DEPLOYMENT_CONTRACT.md,
+  line_start 3, and line_end 6. Example shape: {"type":"final","answer":"...","memory":[{"path":"docs/DEPLOYMENT_CONTRACT.md","line_start":3,"line_end":6}]}
+budget:
+  max_turns: 5
+  max_bash_actions: 4
+assertions:
+  - type: run_status
+    value: completed
+  - type: metric_equals
+    name: memory_references_captured
+    value: 1
+  - type: metric_equals
+    name: memory_references_rejected
+    value: 0
+  - type: trace_contains_event
+    event_type: memory_reference_captured
+  - type: no_source_diff
+follow_up:
+  prompt: |
+    Update src/deploy_cli.py so its literal constants match the authoritative deployment
+    contract. If explicit follow-up working memory contains the exact contract excerpt,
+    use it and do not reread docs/DEPLOYMENT_CONTRACT.md. If no such memory is present,
+    inspect that document before editing; do not guess. Inspect current source as needed,
+    make the smallest change, and run python -m unittest discover -s tests -v.
+  proves: Explicit working memory avoids rereading deployment documentation without changing correctness.
+  expected_memory_paths:
+    - docs/DEPLOYMENT_CONTRACT.md
+  assertions:
+    - type: run_status
+      value: completed
+    - type: command
+      command: python -m unittest discover -s tests -v
+      expect_exit_code: 0
+    - type: file_contains
+      path: src/deploy_cli.py
+      patterns:
+        - 'COMMAND_NAME = "orbit-deploy"'
+        - 'DEFAULT_REGION = "ap-southeast-1"'
+        - 'CONFIG_ENV = "ORBIT_CONFIG"'
+        - 'MAX_PARALLEL = 6'
+    - type: diff_allowlist
+      paths:
+        - src/deploy_cli.py
+    - type: no_policy_violation

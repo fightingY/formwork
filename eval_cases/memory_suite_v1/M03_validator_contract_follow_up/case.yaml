@@ -1,0 +1,52 @@
+name: M03_validator_contract_follow_up
+capability: grounded_working_memory_capture
+proves: Validation protocol facts remain exact across an explicitly linked follow-up run.
+sandbox_mode: locked
+fixture: fixture
+prompt: |
+  Inspect only docs/VALIDATION_CONTRACT.md and report schema_version, required_field,
+  error_code_missing, and max_payload_bytes. Do not modify any file. Your final JSON
+  action must include exactly one memory reference with path docs/VALIDATION_CONTRACT.md,
+  line_start 3, and line_end 6. Example shape: {"type":"final","answer":"...","memory":[{"path":"docs/VALIDATION_CONTRACT.md","line_start":3,"line_end":6}]}
+budget:
+  max_turns: 5
+  max_bash_actions: 4
+assertions:
+  - type: run_status
+    value: completed
+  - type: metric_equals
+    name: memory_references_captured
+    value: 1
+  - type: metric_equals
+    name: memory_references_rejected
+    value: 0
+  - type: trace_contains_event
+    event_type: memory_reference_captured
+  - type: no_source_diff
+follow_up:
+  prompt: |
+    Update the literal protocol constants in src/validator.py to match the authoritative
+    validation contract. If explicit follow-up working memory contains the exact contract
+    excerpt, use it and do not reread docs/VALIDATION_CONTRACT.md. If no such memory is
+    present, inspect that document before editing; do not guess. Inspect current source as
+    needed, make the smallest change, and run python -m unittest discover -s tests -v.
+  proves: Explicit working memory avoids rereading protocol documentation while preserving validator behavior.
+  expected_memory_paths:
+    - docs/VALIDATION_CONTRACT.md
+  assertions:
+    - type: run_status
+      value: completed
+    - type: command
+      command: python -m unittest discover -s tests -v
+      expect_exit_code: 0
+    - type: file_contains
+      path: src/validator.py
+      patterns:
+        - 'SCHEMA_VERSION = "2026-08"'
+        - 'REQUIRED_FIELD = "request_id"'
+        - 'ERROR_CODE_MISSING = "E_REQUEST_ID_REQUIRED"'
+        - 'MAX_PAYLOAD_BYTES = 4096'
+    - type: diff_allowlist
+      paths:
+        - src/validator.py
+    - type: no_policy_violation
