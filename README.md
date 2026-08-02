@@ -284,6 +284,21 @@ uv run minicc cache-utilization-report \
   --output-dir acceptance/stable-v2.1.2
 ```
 
+V2.2 working memory 只接受显式 `source run` 中由模型声明的 workspace 文件行区间，不做环境式
+自动检索。开发评测使用 `memory-eval` 完成 source/M0/M1 配对；正式门固定为 canonical
+M01/M02/M03、Docker 摘要镜像、同一干净提交和每 case 3 次交替运行。三个 suite 完成后用
+`memory-report` 验证 27 个 run 的哈希证据并生成四文件归档：
+
+```bash
+uv run minicc memory-eval eval_cases/memory_suite_v1/M01_service_contract_follow_up --repeat 3 --execution-order alternating --milestone v2.2-acceptance --release-gate
+uv run minicc memory-eval eval_cases/memory_suite_v1/M02_deploy_cli_follow_up --repeat 3 --execution-order alternating --milestone v2.2-acceptance --release-gate
+uv run minicc memory-eval eval_cases/memory_suite_v1/M03_validator_contract_follow_up --repeat 3 --execution-order alternating --milestone v2.2-acceptance --release-gate
+uv run minicc memory-report --report <M01-report.json> --report <M02-report.json> --report <M03-report.json> --output-dir acceptance/stable-v2.2
+```
+
+正式目录只包含 `report.json`、`report.md`、`evidence.json`、`manifest.json`；原始运行保留在被
+Git 忽略的 `.minicc/`，不会复制成大量 acceptance 文件。
+
 ## 快速开始
 
 安装依赖并查看 CLI：

@@ -54,6 +54,12 @@ from minicc.evals.cache_utilization import (
 )
 from minicc.evals.runner import run_eval_suite, write_eval_report, write_suite_report
 from minicc.evals.memory_ab import load_follow_up_case, run_memory_ab, write_memory_ab_report
+from minicc.evals.memory_acceptance import (
+    REQUIRED_MEMORY_CASES,
+    build_memory_acceptance_report,
+    load_memory_suite_report,
+    write_memory_acceptance_report,
+)
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.working import WorkingMemoryError, attach_working_memory
 from minicc.memory.compaction import SemanticCompactor
@@ -224,7 +230,26 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run bash actions locally instead of in Docker.",
     )
+    memory_eval_parser.add_argument(
+        "--release-gate",
+        action="store_true",
+        help="Require the canonical V2.2 case, clean Git authority, Docker, and repeat=3.",
+    )
     memory_eval_parser.set_defaults(handler=memory_eval_command)
+
+    memory_report_parser = subparsers.add_parser(
+        "memory-report",
+        help="Verify and aggregate the three formal V2.2 memory suites.",
+    )
+    memory_report_parser.add_argument(
+        "--report",
+        action="append",
+        type=Path,
+        required=True,
+        help="Formal memory suite report.json; provide exactly one for each M01/M02/M03.",
+    )
+    memory_report_parser.add_argument("--output-dir", type=Path, required=True)
+    memory_report_parser.set_defaults(handler=memory_report_command)
 
     compaction_parser = subparsers.add_parser(
         "compaction-report",
@@ -1064,6 +1089,43 @@ def memory_eval_command(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    project_root = Path.cwd()
+    git_commit, worktree_dirty = _git_evidence(project_root)
+    release_gate = bool(getattr(args, "release_gate", False))
+    case_name = case.source.name.removesuffix("_source")
+    live_profiles = build_case_authority_profiles([case.source], project_root=project_root)
+    case_authority_profiles = live_profiles
+    git_preflight_verified = False
+    if release_gate:
+        gate_error = _memory_release_gate_error(
+            args,
+            git_commit,
+            worktree_dirty,
+            settings.sandbox.image,
+            milestone=milestone,
+            case_name=case_name,
+        )
+        if gate_error:
+            print(f"Release gate rejected: {gate_error}", file=sys.stderr)
+            return 2
+        formal_git_error = _git_formal_state_error(project_root)
+        if formal_git_error:
+            print(f"Release gate rejected: {formal_git_error}", file=sys.stderr)
+            return 2
+        try:
+            committed_profiles = _committed_case_authority_profiles(
+                live_profiles,
+                project_root=project_root,
+                git_commit=git_commit,
+            )
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            print(f"Release gate rejected: cannot bind memory case to Git commit: {exc}", file=sys.stderr)
+            return 2
+        if committed_profiles != live_profiles:
+            print("Release gate rejected: live memory case differs from Git commit", file=sys.stderr)
+            return 2
+        case_authority_profiles = committed_profiles
+        git_preflight_verified = True
     provider = _build_provider_or_print_error(settings)
     if provider is None:
         return 2
@@ -1071,7 +1133,6 @@ def memory_eval_command(args: argparse.Namespace) -> int:
     runs_root = Path.cwd() / ".minicc" / "runs"
     suites_root = Path.cwd() / ".minicc" / "suites"
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
-    git_commit, worktree_dirty = _git_evidence(Path.cwd())
 
     def agent_runner(eval_case: EvalCase, state: RunState, source_run_id: str | None) -> RunState:
         state.constraints.extend(_case_constraints(eval_case))
@@ -1130,6 +1191,7 @@ def memory_eval_command(args: argparse.Namespace) -> int:
             f"minicc memory-eval {Path(args.path).as_posix()} --repeat {args.repeat} "
             f"--execution-order {args.execution_order}"
             + (" --execute-local" if args.execute_local else "")
+            + (f" --milestone {milestone} --release-gate" if release_gate else "")
         ),
         "base_url": settings.base_url or "",
         "model": settings.model or "",
@@ -1140,12 +1202,20 @@ def memory_eval_command(args: argparse.Namespace) -> int:
         "docker_image": settings.sandbox.image,
         "git_commit": git_commit,
         "worktree_dirty": worktree_dirty,
+        "release_gate": release_gate,
+        "case_name": case_name,
+        "case_authority_profiles": case_authority_profiles,
+        "case_authority_bundle_sha256": case_authority_bundle_sha256(case_authority_profiles),
+        "git_preflight_verified": git_preflight_verified,
+        "git_postflight_verified": False,
         "feedback_memory_mode": "disabled",
         "working_memory_mode": "explicit_source_run",
         "prompt_layout": settings.context.prompt_layout,
         "compaction_strategy": settings.context.compaction_strategy,
         "expected_memory_paths": list(case.expected_memory_paths),
     }
+    result = None
+    bundle = None
     try:
         result = run_memory_ab(
             case,
@@ -1155,8 +1225,20 @@ def memory_eval_command(args: argparse.Namespace) -> int:
             execution_order=args.execution_order,
             configuration=configuration,
             milestone=milestone,
+            stage="formal_acceptance" if release_gate else "development_precheck",
             suite_id=suite_id,
         )
+        if release_gate:
+            postflight_error = _git_postflight_error(project_root, expected_commit=git_commit)
+            post_profiles = build_case_authority_profiles([case.source], project_root=project_root)
+            if postflight_error or post_profiles != case_authority_profiles:
+                detail = postflight_error or "memory case authority changed during execution"
+                print(f"Release gate rejected: {detail}", file=sys.stderr)
+                return 2
+            result.configuration["git_postflight_verified"] = True
+            for case_result in result.case_results:
+                if isinstance(case_result.configuration, dict):
+                    case_result.configuration["git_postflight_verified"] = True
         bundle = write_memory_ab_report(result, suites_root)
     except (FileNotFoundError, WorkingMemoryError, RuntimeError, ValueError) as exc:
         print(f"Memory A/B failed: {exc}", file=sys.stderr)
@@ -1166,6 +1248,8 @@ def memory_eval_command(args: argparse.Namespace) -> int:
         if callable(close_provider):
             close_provider()
 
+    if result is None or bundle is None:
+        return 1
     catalog_entries = [
         catalog.register_eval_result(
             milestone,
@@ -1185,6 +1269,37 @@ def memory_eval_command(args: argparse.Namespace) -> int:
     print(f"report_json: {bundle.report_json_path}")
     print(f"report_markdown: {bundle.report_markdown_path}")
     return 0 if result.passed and ledger_complete else 1
+
+
+def memory_report_command(args: argparse.Namespace) -> int:
+    if len(args.report) != 3:
+        print("memory-report requires exactly three --report inputs.", file=sys.stderr)
+        return 2
+    project_root = Path.cwd()
+    git_commit, worktree_dirty = _git_evidence(project_root)
+    if worktree_dirty:
+        print("Memory acceptance requires a clean Git worktree before writing.", file=sys.stderr)
+        return 2
+    expected_output = (project_root / "acceptance" / "stable-v2.2").resolve()
+    if args.output_dir.resolve() != expected_output:
+        print("Memory acceptance output must be acceptance/stable-v2.2.", file=sys.stderr)
+        return 2
+    try:
+        suites = [load_memory_suite_report(path, verify_manifest=True) for path in args.report]
+        report = build_memory_acceptance_report(suites)
+        source_commit = str((report.get("locked_configuration") or {}).get("git_commit") or "")
+        if source_commit != git_commit:
+            raise ValueError("formal memory suites are not bound to the current Git commit")
+        bundle = write_memory_acceptance_report(report, args.output_dir)
+    except (FileNotFoundError, FileExistsError, ValueError) as exc:
+        print(f"Cannot build V2.2 memory acceptance report: {exc}", file=sys.stderr)
+        return 1
+    print(f"memory_acceptance_status: {report['status']}")
+    print(f"report_json: {bundle.json_path}")
+    print(f"report_markdown: {bundle.markdown_path}")
+    print(f"evidence_json: {bundle.evidence_path}")
+    print(f"manifest_json: {bundle.manifest_path}")
+    return 0
 
 
 def compaction_report_command(args: argparse.Namespace) -> int:
@@ -1948,6 +2063,40 @@ def _cache_probe_release_gate_error(
         return f"formal cache probes require exactly --repeat {expected_repeat}"
     if not getattr(args, "execution_order", None):
         return "formal cache probes require --execution-order"
+    return ""
+
+
+def _memory_release_gate_error(
+    args: argparse.Namespace,
+    git_commit: str,
+    worktree_dirty: bool,
+    docker_image: str,
+    *,
+    milestone: str,
+    case_name: str,
+) -> str:
+    if not git_commit:
+        return "the workspace is not pinned to a Git commit"
+    if worktree_dirty:
+        return "the Git worktree has uncommitted changes"
+    if args.execute_local:
+        return "V2.2 acceptance must use Docker"
+    if "@sha256:" not in docker_image:
+        return "V2.2 acceptance requires a Docker image pinned by sha256 digest"
+    if args.repeat != 3:
+        return "V2.2 acceptance requires exactly --repeat 3"
+    if args.execution_order != "alternating":
+        return "V2.2 acceptance requires --execution-order alternating"
+    if milestone != "v2.2-acceptance":
+        return "V2.2 acceptance requires --milestone v2.2-acceptance"
+    expected = REQUIRED_MEMORY_CASES.get(case_name)
+    if expected is None:
+        return "V2.2 acceptance requires one of the canonical M01/M02/M03 cases"
+    case_path = Path(args.path).resolve()
+    if case_path.is_dir():
+        case_path = case_path / "case.yaml"
+    if case_path != (Path.cwd() / expected[0]).resolve():
+        return f"V2.2 acceptance requires canonical case path for {case_name}"
     return ""
 
 

@@ -556,6 +556,22 @@ policy deny 均为 0。M03 的 M0 第 2 轮有 1 个请求在两次 transport/pr
 因此只证明 3-case 开发门通过，不作为正式 V2.2 acceptance。进入正式归档前必须在同一个最终
 commit 上通过 release gate 并重跑，不能直接拼接这三份开发报告。
 
+正式验收协议：M01/M02/M03 必须在同一个干净 Git commit 上分别以 Docker、固定摘要镜像、
+`--repeat 3 --execution-order alternating --milestone v2.2-acceptance --release-gate` 运行。
+release gate 会在运行前后校验 Git 状态和 canonical case/fixture authority；聚合器再逐项校验
+3 份 suite manifest、27 个 run artifact manifest、state/trace/metrics/eval 结果、模型身份、
+来源 run 绑定与读取命令。正式归档固定为 `acceptance/stable-v2.2/`，且只允许包含
+`report.json`、`report.md`、`evidence.json`、`manifest.json` 四个文件；原始 run/suite 继续留在
+被忽略的 `.minicc/`，由 `evidence.json` 封装入选 suite 的报告和 manifest，避免把临时产物复制
+进 Git。
+
+```bash
+uv run minicc memory-eval eval_cases/memory_suite_v1/M01_service_contract_follow_up --repeat 3 --execution-order alternating --milestone v2.2-acceptance --release-gate
+uv run minicc memory-eval eval_cases/memory_suite_v1/M02_deploy_cli_follow_up --repeat 3 --execution-order alternating --milestone v2.2-acceptance --release-gate
+uv run minicc memory-eval eval_cases/memory_suite_v1/M03_validator_contract_follow_up --repeat 3 --execution-order alternating --milestone v2.2-acceptance --release-gate
+uv run minicc memory-report --report <M01-report.json> --report <M02-report.json> --report <M03-report.json> --output-dir acceptance/stable-v2.2
+```
+
 验收标准：
 
 - short-term、long-term、working memory 的所有权和生命周期有明确测试。

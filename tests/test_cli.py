@@ -539,6 +539,91 @@ def test_cache_probe_release_gate_requires_clean_commit_and_five_requests() -> N
     )
 
 
+def test_memory_release_gate_requires_canonical_formal_inputs(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    case_name = "M01_service_contract_follow_up"
+    relative_case, _ = cli.REQUIRED_MEMORY_CASES[case_name]
+    case_path = tmp_path / relative_case
+    case_path.parent.mkdir(parents=True)
+    case_path.write_text("name: source\n", encoding="utf-8")
+    args = argparse.Namespace(
+        path=case_path,
+        repeat=3,
+        execution_order="alternating",
+        execute_local=False,
+    )
+    image = "python:test@sha256:abc123"
+
+    assert (
+        cli._memory_release_gate_error(
+            args,
+            "abc123",
+            False,
+            image,
+            milestone="v2.2-acceptance",
+            case_name=case_name,
+        )
+        == ""
+    )
+    assert "uncommitted" in cli._memory_release_gate_error(
+        args,
+        "abc123",
+        True,
+        image,
+        milestone="v2.2-acceptance",
+        case_name=case_name,
+    )
+    assert "Docker" in cli._memory_release_gate_error(
+        argparse.Namespace(**{**vars(args), "execute_local": True}),
+        "abc123",
+        False,
+        image,
+        milestone="v2.2-acceptance",
+        case_name=case_name,
+    )
+    assert "--repeat 3" in cli._memory_release_gate_error(
+        argparse.Namespace(**{**vars(args), "repeat": 2}),
+        "abc123",
+        False,
+        image,
+        milestone="v2.2-acceptance",
+        case_name=case_name,
+    )
+    assert "alternating" in cli._memory_release_gate_error(
+        argparse.Namespace(**{**vars(args), "execution_order": "m0-first"}),
+        "abc123",
+        False,
+        image,
+        milestone="v2.2-acceptance",
+        case_name=case_name,
+    )
+    assert "v2.2-acceptance" in cli._memory_release_gate_error(
+        args,
+        "abc123",
+        False,
+        image,
+        milestone="development",
+        case_name=case_name,
+    )
+    assert "canonical case path" in cli._memory_release_gate_error(
+        argparse.Namespace(**{**vars(args), "path": tmp_path / "copy" / "case.yaml"}),
+        "abc123",
+        False,
+        image,
+        milestone="v2.2-acceptance",
+        case_name=case_name,
+    )
+
+
+def test_memory_report_requires_exactly_three_sources(tmp_path, capsys) -> None:
+    exit_code = cli.memory_report_command(
+        argparse.Namespace(report=[tmp_path / "one.json"], output_dir=tmp_path / "acceptance")
+    )
+
+    assert exit_code == 2
+    assert "exactly three" in capsys.readouterr().err
+
+
 def test_cache_report_does_not_write_failed_acceptance(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_cache_probe_report", lambda *args, **kwargs: {})
     monkeypatch.setattr(cli, "load_cache_suite_report", lambda *args, **kwargs: {})
