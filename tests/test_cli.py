@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from minicc import cli
+from minicc import __version__, cli
 from minicc.config import BudgetSettings, ContextSettings, PolicySettings, ProviderSettings, SandboxSettings, Settings
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
@@ -932,3 +932,7 @@ def test_cleanup_command_defaults_to_dry_run_and_apply_uses_same_candidate(tmp_p
     assert run_dir.exists()
     assert cli.cleanup_command(argparse.Namespace(older_than_hours=24, apply=True)) == 0
     assert not run_dir.exists()
+
+
+def test_cli_version_matches_v22_development_package() -> None:
+    assert __version__ == "2.2.0.dev0"

@@ -546,6 +546,16 @@ Provider error/retry/protocol error 也均为 0。开发证据位于
 允许新增 `M02_deploy_cli_follow_up` 与 `M03_validator_contract_follow_up`，形成 3-case 开发集；
 在两个新增 case 各完成 3 次配对前，不进入 12-task 扩展。
 
+三 case 开发门结果（2026-08-02）：M01/M02/M03 的三个独立 suite 共 27 个 run 全部为
+`completed/PASS`，M0/M1 follow-up 关键事实正确率均为 9/9，每一对来源文件重复读取均为
+`1 -> 0`，聚合为 `9 -> 0`；follow-up prompt token 聚合为 `38616 -> 26642`（下降约
+31.0%）。旧 run 串入、无关注入、完整性无效记忆采纳、provider error、protocol error、审批和
+policy deny 均为 0。M03 的 M0 第 2 轮有 1 个请求在两次 transport/protocol 异常后由既定重试
+机制成功完成，前序 run 未被废弃。开发 suite 为 `suite-20260802-110112-7f1c8d23`、
+`suite-20260802-110720-abc257ab`、`suite-20260802-111049-617b63a0`；它们绑定两个开发提交，
+因此只证明 3-case 开发门通过，不作为正式 V2.2 acceptance。进入正式归档前必须在同一个最终
+commit 上通过 release gate 并重跑，不能直接拼接这三份开发报告。
+
 验收标准：
 
 - short-term、long-term、working memory 的所有权和生命周期有明确测试。
