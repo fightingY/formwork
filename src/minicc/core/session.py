@@ -39,6 +39,7 @@ class SessionManager:
         state.status = "waiting_approval"
         state.open_questions.append(question)
         state.approval_question = question
+        state.metrics["approvals_requested"] = state.metrics.get("approvals_requested", 0) + 1
         self.save(state)
 
     def request_approval(

@@ -97,7 +97,8 @@ def test_loop_freezes_dynamic_guidance_on_append_trajectory_steps(tmp_path) -> N
 
     assert result.state.status == "completed"
     assert result.trajectory[0].state_snapshot == ""
-    assert "Converge now" in result.trajectory[1].state_snapshot
+    assert "final response slot" in result.trajectory[1].state_snapshot
+    assert "do not run another bash command" in result.trajectory[1].state_snapshot
 
 
 def test_loop_waits_on_ask_action(tmp_path) -> None:

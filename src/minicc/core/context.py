@@ -711,6 +711,12 @@ def _budget_guidance(state: RunState) -> str:
         return ""
     ratio = turns / max_turns
     remaining = max(max_turns - turns, 0)
+    if remaining <= 1:
+        return (
+            f"Budget status: {remaining} model turn(s) remain. This is the final response slot. "
+            "If the requested artifact or answer is already correct, return final now; do not run "
+            "another bash command or repeat verification."
+        )
     if ratio >= 0.8:
         return (
             f"Budget status: {remaining} model turn(s) remain. Stop exploring. "

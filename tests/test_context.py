@@ -470,9 +470,13 @@ def test_context_builder_adds_budget_pressure_after_thresholds() -> None:
     at_sixty = builder.build_messages(state, [])[1]["content"]
     state.metrics["turns"] = 8
     at_eighty = builder.build_messages(state, [])[1]["content"]
+    state.metrics["turns"] = 9
+    final_slot = builder.build_messages(state, [])[1]["content"]
 
     assert "Converge now" in at_sixty
     assert "Stop exploring" in at_eighty
+    assert "final response slot" in final_slot
+    assert "do not run another bash command" in final_slot
 
 
 def test_context_builder_adds_io_repetition_guard() -> None:

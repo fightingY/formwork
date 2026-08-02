@@ -52,6 +52,7 @@ def test_action_handler_ask_waits_and_saves_state(tmp_path) -> None:
     assert outcome.should_continue is False
     assert state.status == "waiting_approval"
     assert state.approval_question == "Which branch?"
+    assert state.metrics["approvals_requested"] == 1
     assert (tmp_path / "state.json").exists()
 
 
