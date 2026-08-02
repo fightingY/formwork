@@ -48,6 +48,12 @@ M6: Eval runner、Web trace viewer、文档与面试示例
 所有 claim 均携带配置、run ID、原始 artifact 和复跑命令。归档见 `acceptance/stable-v3.0/`，
 七层能力与诚实边界见 `docs/ETCLOVG_CAPABILITY_MATRIX.md`。
 
+当前开发分支为 `experimental/meta-review`，版本 `3.1.0.dev0`。V3.1 只研究显式触发的离线
+Meta Review：`minicc meta-review <run_id>` 读取已结束 run 的不可变证据，在独立
+`.minicc/meta-reviews/` 目录生成带来源哈希和模型调用指标的审查结果，不修改源 run，也不自动
+采纳建议。`minicc meta-review-report` 对固定真实 case 的关闭/开启各三轮结果执行门禁；该能力
+在独立验收完成前保持 `experimental`，不属于 Stable V3.0。
+
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
 Stable V2.0.1 已修复 workspace 可见文件、Git baseline 和最终 diff 的证据不一致：Git 项目从固定
@@ -596,6 +602,13 @@ uv run minicc traces
 ```
 
 版本化验收结果保存在 `acceptance/stable-v1.0/` 至 `acceptance/stable-v3.0/`。V3.0 的系统回归、Context、Memory、Resume 四维结论与逐 claim 证据入口见 `acceptance/stable-v3.0/report.md`。
+
+V3.1 Meta Review 实验命令：
+
+```bash
+uv run minicc meta-review <run_id>
+uv run minicc meta-review-report --disabled-suite <a0-report.json> --enabled-suite <a1-report.json> --review <review-1> --review <review-2> --review <review-3> --output-dir acceptance/experimental-v3.1-meta-review --release-gate
+```
 
 ```bash
 uv run minicc eval eval_cases \

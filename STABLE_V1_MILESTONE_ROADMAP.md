@@ -653,6 +653,14 @@ Provider error/retry 和 protocol error 均为 0，3 个 C09 run 均按预期进
 
 Runtime tool synthesis 和 meta review 不属于 V3.0 的必需项。每次只能选择其中一个方向，并使用独立的 `experimental/*` 分支。
 
+V3.1 开发入口（2026-08-02）：从 `stable-v3.0@908e8a3` 建立
+`experimental/meta-review`，只选择 Meta Review，不同时开发 runtime tools。审查必须由命令
+显式触发，只读 `state/metrics/trace/run_report/diff` 并在调用模型前后复核来源哈希；结果写入
+独立 `.minicc/meta-reviews/`，不追加源 trace、不改变原 run verdict、不自动采纳建议。正式 A/B
+固定使用同一提交、模型、case authority 和 Docker 摘要运行 C02：A0 与 A1 各 3 次，A1 的三个
+run 各生成一份 `used_model=true` 的审查。聚合门要求来源完整性、run-review 一一对应、实际
+模型调用、A1 通过率不低于 A0，并明确只证明可运行性与非回归，不宣称建议质量提升。
+
 进入 Stable 的最低条件：
 
 - 先有确定性单元和集成测试。

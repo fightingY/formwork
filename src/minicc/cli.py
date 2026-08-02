@@ -67,6 +67,7 @@ from minicc.evals.release_report import (
     load_json_evidence,
     write_release_report,
 )
+from minicc.evals.meta_review_ab import build_meta_review_ab_report, write_meta_review_ab_report
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.working import WorkingMemoryError, attach_working_memory
 from minicc.memory.compaction import SemanticCompactor
@@ -80,6 +81,7 @@ from minicc.sandbox.workspace import (
     write_workspace_diff,
 )
 from minicc.skills.registry import SkillRegistry
+from minicc.meta.reviewer import MetaReviewError, MetaReviewer, load_meta_review
 from minicc.trace.recorder import TraceRecorder, trace_path_for
 
 
@@ -441,6 +443,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Delete exactly the runs selected by the displayed cleanup plan.",
     )
     cleanup_parser.set_defaults(handler=cleanup_command)
+
+    meta_parser = subparsers.add_parser(
+        "meta-review",
+        help="Review immutable evidence from one completed run without changing that run.",
+    )
+    meta_parser.add_argument("run_id", help="Run id below .minicc/runs.")
+    meta_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use the deterministic diagnostic instead of a model (not formal evidence).",
+    )
+    meta_parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=None,
+        help="Review root (default: .minicc/meta-reviews).",
+    )
+    meta_parser.set_defaults(handler=meta_review_command)
+
+    meta_report_parser = subparsers.add_parser(
+        "meta-review-report",
+        help="Build the V3.1 disabled/enabled Meta Review acceptance report.",
+    )
+    meta_report_parser.add_argument("--disabled-suite", type=Path, required=True)
+    meta_report_parser.add_argument("--enabled-suite", type=Path, required=True)
+    meta_report_parser.add_argument(
+        "--review",
+        dest="reviews",
+        action="append",
+        type=Path,
+        required=True,
+        help="Meta review directory or report.json; repeat once per enabled run.",
+    )
+    meta_report_parser.add_argument("--output-dir", type=Path, required=True)
+    meta_report_parser.add_argument("--release-gate", action="store_true")
+    meta_report_parser.set_defaults(handler=meta_review_report_command)
 
     web_parser = subparsers.add_parser("web", help="Serve a read-only trace viewer.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
@@ -2436,6 +2474,69 @@ def cleanup_command(args: argparse.Namespace) -> int:
     result = apply_cleanup_plan(plan, apply=bool(args.apply))
     print(f"deleted: {len(result.deleted_run_ids)}")
     return 0
+
+
+def meta_review_command(args: argparse.Namespace) -> int:
+    run_dir = Path.cwd() / ".minicc" / "runs" / str(args.run_id)
+    output_root = args.output_root or Path.cwd() / ".minicc" / "meta-reviews"
+    provider = None
+    settings = load_settings()
+    if not args.offline:
+        provider = _build_provider_or_print_error(settings)
+        if provider is None:
+            return 2
+    try:
+        result = MetaReviewer(provider, model=settings.model or "").review_run(
+            run_dir,
+            output_root=output_root,
+            offline=bool(args.offline),
+        )
+    except (MetaReviewError, FileExistsError) as exc:
+        print(f"Meta review failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        close_provider = getattr(provider, "close", None)
+        if callable(close_provider):
+            close_provider()
+    print("meta_review_status: PASS")
+    print(f"review_id: {result.review_id}")
+    print(f"used_model: {str(result.used_model).lower()}")
+    print(f"review_dir: {result.output_dir}")
+    return 0
+
+
+def meta_review_report_command(args: argparse.Namespace) -> int:
+    git_commit, worktree_dirty = _git_evidence(Path.cwd())
+    if args.release_gate and worktree_dirty:
+        print("Release gate rejected: worktree must be clean", file=sys.stderr)
+        return 2
+    try:
+        disabled = load_cache_suite_report(args.disabled_suite, verify_manifest=True)
+        enabled = load_cache_suite_report(args.enabled_suite, verify_manifest=True)
+        reviews = [load_meta_review(path, verify_manifest=True) for path in args.reviews]
+        if args.release_gate:
+            suite_commits = {
+                str(suite.get("configuration", {}).get("git_commit") or "")
+                for suite in (disabled, enabled)
+            }
+            if suite_commits != {git_commit}:
+                raise ValueError("both suites must be bound to the clean current commit")
+            if any(review.get("invocation", {}).get("used_model") is not True for review in reviews):
+                raise ValueError("formal Meta Review evidence must use the model")
+        report = build_meta_review_ab_report(
+            disabled,
+            enabled,
+            reviews,
+            source_commit=git_commit,
+        )
+        bundle = write_meta_review_ab_report(report, args.output_dir)
+    except (OSError, ValueError, MetaReviewError, FileExistsError) as exc:
+        print(f"Meta Review report failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"meta_review_ab_status: {report['status']}")
+    print(f"json_report: {bundle['report.json']}")
+    print(f"markdown_report: {bundle['report.md']}")
+    return 0 if report["passed"] else 1
 
 
 def _effective_milestone(settings: Settings, args: argparse.Namespace) -> str:
