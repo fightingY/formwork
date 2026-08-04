@@ -2526,16 +2526,35 @@ def meta_review_report_command(args: argparse.Namespace) -> int:
         if len(suite_commits) != 1 or not next(iter(suite_commits)):
             raise ValueError("both suites must be bound to one execution commit")
         source_commit = next(iter(suite_commits))
-        changed_paths = _git_changed_paths(Path.cwd(), source_commit, git_commit)
+        review_commits = {
+            str(review.get("implementation_commit") or "") for review in reviews
+        }
+        if len(review_commits) != 1 or not next(iter(review_commits)):
+            raise ValueError("all reviews must be bound to one implementation commit")
+        review_commit = next(iter(review_commits))
+        execution_review_changed_paths = _git_changed_paths(
+            Path.cwd(), source_commit, review_commit
+        )
+        review_verification_changed_paths = _git_changed_paths(
+            Path.cwd(), review_commit, git_commit
+        )
         allowed_changed_paths = {
             "src/minicc/cli.py",
+            "src/minicc/evals/cache_ab.py",
             "src/minicc/evals/meta_review_ab.py",
             "src/minicc/meta/reviewer.py",
+            "tests/test_cache_ab.py",
             "tests/test_meta_review.py",
             "tests/test_meta_review_ab.py",
         }
         if args.release_gate:
-            unexpected = sorted(set(changed_paths) - allowed_changed_paths)
+            unexpected = sorted(
+                (
+                    set(execution_review_changed_paths)
+                    | set(review_verification_changed_paths)
+                )
+                - allowed_changed_paths
+            )
             if unexpected:
                 raise ValueError(
                     "execution/review commit delta contains disallowed paths: "
@@ -2548,8 +2567,10 @@ def meta_review_report_command(args: argparse.Namespace) -> int:
             enabled,
             reviews,
             source_commit=source_commit,
+            review_commit=review_commit,
             verification_commit=git_commit,
-            verification_changed_paths=changed_paths,
+            execution_review_changed_paths=execution_review_changed_paths,
+            review_verification_changed_paths=review_verification_changed_paths,
             allowed_verification_paths=sorted(allowed_changed_paths),
         )
         bundle = write_meta_review_ab_report(report, args.output_dir)

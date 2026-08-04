@@ -4,6 +4,7 @@ import pytest
 
 from minicc.evals.cache_ab import (
     _cache_improved,
+    _prompt_namespace_matches,
     build_cache_ab_report,
     format_cache_ab_markdown,
     write_cache_ab_report,
@@ -13,6 +14,17 @@ from minicc.evals.cache_probe_runner import (
     fixed_probe_request_sha256s,
     fixed_probe_sequence_sha256,
 )
+
+
+def test_prompt_namespace_is_required_only_for_cache_sequence() -> None:
+    assert _prompt_namespace_matches({"cache_sequence_id": None}, {"prompt_namespace": ""})
+    assert _prompt_namespace_matches(
+        {"cache_sequence_id": "round-1"},
+        {"prompt_namespace": "cache-experiment/round-1"},
+    )
+    assert not _prompt_namespace_matches(
+        {"cache_sequence_id": "round-1"}, {"prompt_namespace": ""}
+    )
 
 
 def test_cache_ab_requires_two_passing_independent_rounds() -> None:

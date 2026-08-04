@@ -605,8 +605,7 @@ def _verify_run_artifact_index(
         or metrics.get("stage") != case.get("stage")
         or metrics.get("status") != case.get("run_status")
         or metrics.get("prompt_layout") != configuration.get("prompt_layout")
-        or state.get("prompt_namespace")
-        != f"cache-experiment/{configuration.get('cache_sequence_id')}"
+        or not _prompt_namespace_matches(configuration, state)
     ):
         raise ValueError(f"run report does not match suite report: {run_report_path}")
     expected_formal_eligibility = (
@@ -616,6 +615,15 @@ def _verify_run_artifact_index(
     if case.get("formal_metric_eligible") is not expected_formal_eligibility:
         raise ValueError(f"run formal metric eligibility is inconsistent: {run_id}")
     return trace_request_rows
+
+
+def _prompt_namespace_matches(
+    configuration: Mapping[str, Any], state: Mapping[str, Any]
+) -> bool:
+    sequence_id = configuration.get("cache_sequence_id")
+    if sequence_id is None:
+        return True
+    return state.get("prompt_namespace") == f"cache-experiment/{sequence_id}"
 
 
 def _verify_case_authority_bundle(
