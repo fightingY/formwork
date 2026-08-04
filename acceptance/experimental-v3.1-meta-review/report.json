@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "entity_type": "meta_review_ab_report",
+  "milestone": "v3.1-meta-review-experimental",
+  "created_at": "2026-08-04T08:11:34.893333+00:00",
+  "source_commit": "263785855e6fa0bd845b9143cd84b338193f00fd",
+  "review_commit": "29eaad9be1aa1e30705cf1e806ec8ef94e801fea",
+  "verification_commit": "734f413d24b0aed500a020d74a5248310406eba7",
+  "execution_review_changed_paths": [
+    "src/minicc/cli.py",
+    "src/minicc/evals/meta_review_ab.py",
+    "src/minicc/meta/reviewer.py",
+    "tests/test_meta_review.py",
+    "tests/test_meta_review_ab.py"
+  ],
+  "review_verification_changed_paths": [
+    "src/minicc/cli.py",
+    "src/minicc/evals/cache_ab.py",
+    "src/minicc/evals/meta_review_ab.py",
+    "tests/test_cache_ab.py",
+    "tests/test_meta_review_ab.py"
+  ],
+  "status": "PASS",
+  "passed": true,
+  "claim_scope": "Model-backed offline meta review is invoked for every enabled run, preserves immutable source evidence, and does not reduce fixed-case pass rate. Review quality uplift is not claimed.",
+  "criteria": {
+    "source_commit_present": true,
+    "source_commit_matches_suites": true,
+    "verification_commit_present": true,
+    "review_commit_present": true,
+    "verification_delta_allowed": true,
+    "suite_integrity_verified": true,
+    "one_identical_real_case": true,
+    "minimum_attempts_each": true,
+    "independent_runs": true,
+    "comparable_configuration": true,
+    "enabled_pass_rate_not_lower": true,
+    "review_for_every_enabled_run": true,
+    "reviews_use_model": true,
+    "review_implementation_commit_consistent": true,
+    "model_invocation_metrics_present": true,
+    "review_bundle_integrity_verified": true,
+    "review_sources_verified": true,
+    "review_ids_unique": true
+  },
+  "disabled": {
+    "suite_id": "suite-20260802-171416-ad22a9cc",
+    "attempts": 3,
+    "passed_runs": 3,
+    "pass_rate": 1.0,
+    "run_ids": [
+      "eval-C02_fix_failing_test-r1-20260802-171416-3eca2a0d",
+      "eval-C02_fix_failing_test-r2-20260802-171503-965bc2e3",
+      "eval-C02_fix_failing_test-r3-20260802-171541-f644ddae"
+    ]
+  },
+  "enabled": {
+    "suite_id": "suite-20260802-171631-8353bcda",
+    "attempts": 3,
+    "passed_runs": 3,
+    "pass_rate": 1.0,
+    "run_ids": [
+      "eval-C02_fix_failing_test-r1-20260802-171631-a1b5d7e8",
+      "eval-C02_fix_failing_test-r2-20260802-171705-02d3bf43",
+      "eval-C02_fix_failing_test-r3-20260802-171727-24eee602"
+    ]
+  },
+  "reviews": [
+    {
+      "review_id": "meta-eval-C02_fix_failing_test-r1-20260802-171631-a1b5d7e8-20260804-075137-26a988a6",
+      "source_run_id": "eval-C02_fix_failing_test-r1-20260802-171631-a1b5d7e8",
+      "source_bundle_sha256": "f415f18036fe6bb97fd0c6a1bbfd47dbf70995609c373ed80e6987cd2c1d7b5d",
+      "used_model": true,
+      "model": "deepseek-ai/DeepSeek-V4-Flash",
+      "implementation_commit": "29eaad9be1aa1e30705cf1e806ec8ef94e801fea",
+      "model_call_count": 1,
+      "schema_retry_count": 0,
+      "attempt_count": 2,
+      "total_tokens": 21595,
+      "finding_count": 6,
+      "report_sha256": "3f77d9dbee3eb733b931f870f1472aaf923523725e4c99eca20ea4b1bbd6f82b",
+      "manifest_sha256": "8ed2ea874d333aeca3474daa4fe66f904f55b1ff1320ee17c6922451b9991c1c"
+    },
+    {
+      "review_id": "meta-eval-C02_fix_failing_test-r2-20260802-171705-02d3bf43-20260804-075223-da465fd0",
+      "source_run_id": "eval-C02_fix_failing_test-r2-20260802-171705-02d3bf43",
+      "source_bundle_sha256": "43316529e843221fc4e45ff8d0a0ef046d66fb8ab638084dd70c6e930aeba769",
+      "used_model": true,
+      "model": "deepseek-ai/DeepSeek-V4-Flash",
+      "implementation_commit": "29eaad9be1aa1e30705cf1e806ec8ef94e801fea",
+      "model_call_count": 1,
+      "schema_retry_count": 0,
+      "attempt_count": 1,
+      "total_tokens": 19706,
+      "finding_count": 4,
+      "report_sha256": "43f4b4799c373a73f99ebabf0d8911dc406127ed77cb9f7b80d0d14b8444fec2",
+      "manifest_sha256": "c9a9ec57b16414a0ef29a17233c77b44190a5e0cb9a9cbb97efcda8befa131d2"
+    },
+    {
+      "review_id": "meta-eval-C02_fix_failing_test-r3-20260802-171727-24eee602-20260804-080509-31f8ba17",
+      "source_run_id": "eval-C02_fix_failing_test-r3-20260802-171727-24eee602",
+      "source_bundle_sha256": "61af05f8087a58b3bc7f95775a74ed5f3736124fabe727fc9a11d60c95647267",
+      "used_model": true,
+      "model": "deepseek-ai/DeepSeek-V4-Flash",
+      "implementation_commit": "29eaad9be1aa1e30705cf1e806ec8ef94e801fea",
+      "model_call_count": 1,
+      "schema_retry_count": 0,
+      "attempt_count": 3,
+      "total_tokens": 19472,
+      "finding_count": 3,
+      "report_sha256": "a49c3ec904d927aef70d6405df6279ccc8304efe0fe33118ff0470e64d5eaa48",
+      "manifest_sha256": "8d82a76354a21c591c5ccc36f47d7da2c2997f1c388ab9d3c3fb8e6e1ab10942"
+    }
+  ]
+}

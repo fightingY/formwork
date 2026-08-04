@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "entity_type": "meta_review_ab_manifest",
+  "milestone": "v3.1-meta-review-experimental",
+  "source_commit": "263785855e6fa0bd845b9143cd84b338193f00fd",
+  "review_commit": "29eaad9be1aa1e30705cf1e806ec8ef94e801fea",
+  "verification_commit": "734f413d24b0aed500a020d74a5248310406eba7",
+  "status": "PASS",
+  "artifacts": {
+    "report_json": {
+      "path": "report.json",
+      "bytes": 4883,
+      "sha256": "ba147e981daec06e390434bb941ca069b34dfdc35fa44873469036bfe9cfa075"
+    },
+    "report_markdown": {
+      "path": "report.md",
+      "bytes": 1855,
+      "sha256": "1d38ed7ab77b9f3dc964433f0e8d8c493181770a2b6436e273c79643c72d0f80"
+    },
+    "report_csv": {
+      "path": "report.csv",
+      "bytes": 159,
+      "sha256": "843604d1d4cd9acb20662e8a1dcd3ad7d5f6ce918ebc650073af95598c98a3ae"
+    }
+  }
+}

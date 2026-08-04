@@ -59,7 +59,7 @@ git switch -c stable-v1 8f19cd3
   archive ref 与 `acceptance/` 正式证据未删除。
 - `.minicc/runs` 与 `.minicc/suites` 保留正式验收引用的原始 run/suite；失败和中断尝试不复制进
   acceptance 归档，也不混入最终通过口径。
-- 当前代码回归为 `288 passed`；V2.2 的 M01/M02/M03 共 27 个正式 run 全部 PASS，M0/M1
+- Stable V3.0 基线回归为 `296 passed`，V3.1 Meta Review 实验分支为 `305 passed`；V2.2 的 M01/M02/M03 共 27 个正式 run 全部 PASS，M0/M1
   关键事实正确率均为 9/9，重复来源读取为 `9 -> 0`。
 - Stable V2.1 已完成 context compaction 两轮独立 A/B；Stable V2.1.1 已完成 Prompt Cache
   两轮独立 A/B，semantic compaction 与追加式稳定前缀布局均升格为稳定能力。V2.1.1 只证明
@@ -660,6 +660,19 @@ V3.1 开发入口（2026-08-02）：从 `stable-v3.0@908e8a3` 建立
 固定使用同一提交、模型、case authority 和 Docker 摘要运行 C02：A0 与 A1 各 3 次，A1 的三个
 run 各生成一份 `used_model=true` 的审查。聚合门要求来源完整性、run-review 一一对应、实际
 模型调用、A1 通过率不低于 A0，并明确只证明可运行性与非回归，不宣称建议质量提升。
+
+正式实验验收结果（2026-08-04）：执行提交
+`263785855e6fa0bd845b9143cd84b338193f00fd` 上，A0
+`suite-20260802-171416-ad22a9cc` 与 A1 `suite-20260802-171631-8353bcda`
+均为 C02 3/3 PASS，六个 run 全部 `completed`，A1 通过率未低于 A0。审查提交
+`29eaad9be1aa1e30705cf1e806ec8ef94e801fea` 对 A1 三个 run 各生成一份
+`used_model=true` 的独立 review，模型调用次数均为 1、schema 重试均为 0、总 token 分别为
+21595/19706/19472；Provider timeout 重试分别为 1/0/2，最终全部成功。聚合首次暴露通用 suite
+读取器错误地对非缓存实验要求 `cache-experiment/None` namespace；验证提交
+`734f413d24b0aed500a020d74a5248310406eba7` 只在存在 `cache_sequence_id` 时复核该字段，并复用
+既有六个 run 和三份 review。最终 18 项门禁全部通过，全量回归为 305 passed，四文件归档位于
+`acceptance/experimental-v3.1-meta-review/`。当前结论保持 experimental：只证明显式离线审查
+可运行、源证据哈希不变及固定 case 非回归，不证明建议被采纳后的质量收益。
 
 进入 Stable 的最低条件：
 
