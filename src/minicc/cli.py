@@ -2486,7 +2486,12 @@ def meta_review_command(args: argparse.Namespace) -> int:
         if provider is None:
             return 2
     try:
-        result = MetaReviewer(provider, model=settings.model or "").review_run(
+        implementation_commit, _ = _git_evidence(Path.cwd())
+        result = MetaReviewer(
+            provider,
+            model=settings.model or "",
+            implementation_commit=implementation_commit,
+        ).review_run(
             run_dir,
             output_root=output_root,
             offline=bool(args.offline),
@@ -2514,20 +2519,38 @@ def meta_review_report_command(args: argparse.Namespace) -> int:
         disabled = load_cache_suite_report(args.disabled_suite, verify_manifest=True)
         enabled = load_cache_suite_report(args.enabled_suite, verify_manifest=True)
         reviews = [load_meta_review(path, verify_manifest=True) for path in args.reviews]
+        suite_commits = {
+            str(suite.get("configuration", {}).get("git_commit") or "")
+            for suite in (disabled, enabled)
+        }
+        if len(suite_commits) != 1 or not next(iter(suite_commits)):
+            raise ValueError("both suites must be bound to one execution commit")
+        source_commit = next(iter(suite_commits))
+        changed_paths = _git_changed_paths(Path.cwd(), source_commit, git_commit)
+        allowed_changed_paths = {
+            "src/minicc/cli.py",
+            "src/minicc/evals/meta_review_ab.py",
+            "src/minicc/meta/reviewer.py",
+            "tests/test_meta_review.py",
+            "tests/test_meta_review_ab.py",
+        }
         if args.release_gate:
-            suite_commits = {
-                str(suite.get("configuration", {}).get("git_commit") or "")
-                for suite in (disabled, enabled)
-            }
-            if suite_commits != {git_commit}:
-                raise ValueError("both suites must be bound to the clean current commit")
+            unexpected = sorted(set(changed_paths) - allowed_changed_paths)
+            if unexpected:
+                raise ValueError(
+                    "execution/review commit delta contains disallowed paths: "
+                    + ", ".join(unexpected)
+                )
             if any(review.get("invocation", {}).get("used_model") is not True for review in reviews):
                 raise ValueError("formal Meta Review evidence must use the model")
         report = build_meta_review_ab_report(
             disabled,
             enabled,
             reviews,
-            source_commit=git_commit,
+            source_commit=source_commit,
+            verification_commit=git_commit,
+            verification_changed_paths=changed_paths,
+            allowed_verification_paths=sorted(allowed_changed_paths),
         )
         bundle = write_meta_review_ab_report(report, args.output_dir)
     except (OSError, ValueError, MetaReviewError, FileExistsError) as exc:

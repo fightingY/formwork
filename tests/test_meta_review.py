@@ -10,17 +10,19 @@ from minicc.meta.reviewer import MetaReviewError, MetaReviewer, load_meta_review
 
 
 class FakeProvider:
-    def __init__(self, text: str, *, mutate=None) -> None:
-        self.text = text
+    def __init__(self, text: str | list[str], *, mutate=None) -> None:
+        self.texts = [text] if isinstance(text, str) else list(text)
         self.mutate = mutate
         self.options = None
+        self.messages = []
 
     def complete(self, messages, *, options=None) -> ModelResponse:
         self.options = options
+        self.messages.append(messages)
         if self.mutate is not None:
             self.mutate()
         return ModelResponse(
-            text=self.text,
+            text=self.texts.pop(0) if len(self.texts) > 1 else self.texts[0],
             raw={},
             usage=ModelUsage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
             latency_ms=9,
@@ -66,7 +68,9 @@ def test_model_review_is_separate_and_source_verified(tmp_path) -> None:
     before = hashlib.sha256((run_dir / "trace.jsonl").read_bytes()).hexdigest()
     provider = FakeProvider(_model_json())
 
-    result = MetaReviewer(provider, model="test-model").review_run(
+    result = MetaReviewer(
+        provider, model="test-model", implementation_commit="commit-1"
+    ).review_run(
         run_dir, output_root=tmp_path / "reviews"
     )
 
@@ -80,6 +84,7 @@ def test_model_review_is_separate_and_source_verified(tmp_path) -> None:
     assert hashlib.sha256((run_dir / "trace.jsonl").read_bytes()).hexdigest() == before
     assert verify_review_source(result.report) is True
     assert result.report["invocation"]["attempt_count"] == 2
+    assert result.report["implementation_commit"] == "commit-1"
     assert provider.options.json_mode is True
     assert load_meta_review(result.output_dir)["review_id"] == result.review_id
 
@@ -100,6 +105,23 @@ def test_invalid_model_output_writes_no_bundle(tmp_path) -> None:
             _make_run(tmp_path), output_root=output_root
         )
     assert not output_root.exists()
+
+
+def test_schema_validation_retries_with_correction_prompt(tmp_path) -> None:
+    invalid = json.loads(_model_json())
+    invalid["findings"][0]["evidence_refs"] = ["trace_tail.event"]
+    provider = FakeProvider([json.dumps(invalid), _model_json()])
+
+    result = MetaReviewer(provider, max_schema_retries=2).review_run(
+        _make_run(tmp_path), output_root=tmp_path / "reviews"
+    )
+
+    invocation = result.report["invocation"]
+    assert invocation["model_call_count"] == 2
+    assert invocation["schema_retry_count"] == 1
+    assert invocation["attempt_count"] == 4
+    assert invocation["usage"]["total_tokens"] == 240
+    assert "failed validation" in provider.messages[1][-1]["content"]
 
 
 def test_review_fails_closed_if_source_changes_during_call(tmp_path) -> None:

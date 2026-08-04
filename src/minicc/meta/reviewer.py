@@ -7,7 +7,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 from minicc.core.provider import CompletionOptions, ModelProvider, ModelResponse
@@ -35,9 +35,18 @@ class MetaReviewResult:
 class MetaReviewer:
     """Review a completed run without modifying any source-run artifact."""
 
-    def __init__(self, provider: ModelProvider | None = None, *, model: str = "") -> None:
+    def __init__(
+        self,
+        provider: ModelProvider | None = None,
+        *,
+        model: str = "",
+        implementation_commit: str = "",
+        max_schema_retries: int = 2,
+    ) -> None:
         self.provider = provider
         self.model = model
+        self.implementation_commit = implementation_commit
+        self.max_schema_retries = max(0, max_schema_retries)
 
     def review_run(
         self,
@@ -53,32 +62,48 @@ class MetaReviewer:
         if output_root == run_dir or output_root.is_relative_to(run_dir):
             raise MetaReviewError("meta review output must be outside the source run directory")
         snapshot, before = _load_snapshot(run_dir)
-        response: ModelResponse | None = None
+        responses: list[ModelResponse] = []
+        schema_retry_reasons: list[str] = []
         if offline:
             content = _offline_review(snapshot)
         else:
             if self.provider is None:
                 raise MetaReviewError("a provider is required unless --offline is used")
-            response = self.provider.complete(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are miniCC's offline meta reviewer. Diagnose reusable harness-level "
-                            "improvements from immutable run evidence. Return exactly one JSON object."
-                        ),
-                    },
-                    {"role": "user", "content": _review_prompt(snapshot)},
-                ],
-                options=CompletionOptions(
-                    temperature=0.0,
-                    stream=False,
-                    include_usage=True,
-                    json_mode=True,
-                    max_tokens=2_048,
-                ),
-            )
-            content = _parse_model_review(response.text)
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are miniCC's offline meta reviewer. Diagnose reusable harness-level "
+                        "improvements from immutable run evidence. Return exactly one JSON object."
+                    ),
+                },
+                {"role": "user", "content": _review_prompt(snapshot)},
+            ]
+            for schema_attempt in range(self.max_schema_retries + 1):
+                response = self.provider.complete(
+                    messages,
+                    options=CompletionOptions(
+                        temperature=0.0,
+                        stream=False,
+                        include_usage=True,
+                        json_mode=True,
+                        max_tokens=2_048,
+                    ),
+                )
+                responses.append(response)
+                try:
+                    content = _parse_model_review(response.text)
+                    break
+                except MetaReviewError as exc:
+                    if schema_attempt >= self.max_schema_retries:
+                        raise
+                    schema_retry_reasons.append(str(exc))
+                    messages.extend(
+                        [
+                            {"role": "assistant", "content": response.text[:8_000]},
+                            {"role": "user", "content": _schema_correction_prompt(str(exc))},
+                        ]
+                    )
         _, after = _load_snapshot(run_dir)
         if before != after:
             raise MetaReviewError("source run evidence changed during review")
@@ -89,9 +114,11 @@ class MetaReviewer:
             run_dir=run_dir,
             source=before,
             content=content,
-            response=response,
+            responses=responses,
             model=self.model,
             offline=offline,
+            implementation_commit=self.implementation_commit,
+            schema_retry_reasons=schema_retry_reasons,
         )
         output_dir = _write_bundle(report, output_root / review_id)
         return MetaReviewResult(review_id=review_id, output_dir=output_dir, report=report)
@@ -229,6 +256,15 @@ def _parse_model_review(text: str) -> dict[str, Any]:
     return _validate_review_content(payload)
 
 
+def _schema_correction_prompt(reason: str) -> str:
+    return (
+        "Your previous JSON failed validation: "
+        + reason
+        + ". Return the complete corrected JSON object only. Evidence references must start with "
+        "state., metrics., run_report., trace_tail[<non-negative index>], or equal diff_preview."
+    )
+
+
 def _validate_review_content(payload: Mapping[str, Any]) -> dict[str, Any]:
     summary = str(payload.get("summary") or "").strip()
     if not summary:
@@ -302,30 +338,41 @@ def _build_report(
     run_dir: Path,
     source: Mapping[str, Any],
     content: Mapping[str, Any],
-    response: ModelResponse | None,
+    responses: Sequence[ModelResponse],
     model: str,
     offline: bool,
+    implementation_commit: str,
+    schema_retry_reasons: Sequence[str],
 ) -> dict[str, Any]:
-    usage = response.usage if response is not None else None
+    used_model = bool(responses)
+    prompt_tokens = _sum_usage(responses, "prompt_tokens")
+    completion_tokens = _sum_usage(responses, "completion_tokens")
+    total_tokens = _sum_usage(responses, "total_tokens")
     return {
         "schema_version": 1,
         "entity_type": "meta_review",
         "review_id": review_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "implementation_commit": implementation_commit,
         "source": dict(source),
         "invocation": {
             "mode": "offline" if offline else "model",
-            "used_model": response is not None,
-            "model": model if response is not None else None,
-            "latency_ms": response.latency_ms if response is not None else 0,
-            "attempt_count": response.attempt_count if response is not None else 0,
-            "retry_reasons": list(response.retry_reasons) if response is not None else [],
+            "used_model": used_model,
+            "model": model if used_model else None,
+            "model_call_count": len(responses),
+            "schema_retry_count": len(schema_retry_reasons),
+            "schema_retry_reasons": list(schema_retry_reasons),
+            "latency_ms": sum(response.latency_ms for response in responses),
+            "attempt_count": sum(response.attempt_count for response in responses),
+            "retry_reasons": [
+                reason for response in responses for reason in response.retry_reasons
+            ],
             "usage": {
-                "prompt_tokens": usage.prompt_tokens,
-                "completion_tokens": usage.completion_tokens,
-                "total_tokens": usage.total_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
             }
-            if usage is not None
+            if used_model
             else None,
         },
         "summary": content["summary"],
@@ -439,8 +486,14 @@ def _int_value(value: Any) -> int:
 def _valid_evidence_ref(value: str) -> bool:
     return bool(
         re.fullmatch(
-            r"(?:state|metrics|run_report)(?:\.[A-Za-z0-9_-]+)+|"
-            r"trace_tail\[\d+\](?:\.[A-Za-z0-9_-]+)*|diff_preview",
+            r"(?:state|metrics|run_report)(?:[.\[].*)?|"
+            r"trace_tail\[\d+\](?:[.\[].*)?|diff_preview",
             value,
         )
     )
+
+
+def _sum_usage(responses: Sequence[ModelResponse], field: str) -> int | None:
+    values = [getattr(response.usage, field) for response in responses]
+    present = [int(value) for value in values if value is not None]
+    return sum(present) if present else None

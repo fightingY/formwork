@@ -19,8 +19,12 @@ def build_meta_review_ab_report(
     reviews: Sequence[Mapping[str, Any]],
     *,
     source_commit: str,
+    verification_commit: str | None = None,
+    verification_changed_paths: Sequence[str] = (),
+    allowed_verification_paths: Sequence[str] = (),
     minimum_attempts: int = 3,
 ) -> dict[str, Any]:
+    verification_commit = verification_commit or source_commit
     disabled_cases = _case_rows(disabled_suite)
     enabled_cases = _case_rows(enabled_suite)
     disabled_names = {str(row.get("name") or "") for row in disabled_cases}
@@ -37,6 +41,10 @@ def build_meta_review_ab_report(
     criteria = {
         "source_commit_present": bool(source_commit),
         "source_commit_matches_suites": suite_commits == {source_commit},
+        "verification_commit_present": bool(verification_commit),
+        "verification_delta_allowed": set(verification_changed_paths).issubset(
+            set(allowed_verification_paths)
+        ),
         "suite_integrity_verified": bool(disabled_suite.get("_evidence_integrity_verified"))
         and bool(enabled_suite.get("_evidence_integrity_verified")),
         "one_identical_real_case": len(disabled_names) == 1
@@ -51,6 +59,8 @@ def build_meta_review_ab_report(
         "review_for_every_enabled_run": sorted(review_run_ids) == sorted(enabled_run_ids),
         "reviews_use_model": bool(reviews)
         and all(review.get("invocation", {}).get("used_model") is True for review in reviews),
+        "review_implementation_commit_consistent": bool(reviews)
+        and all(review.get("implementation_commit") == verification_commit for review in reviews),
         "model_invocation_metrics_present": bool(reviews)
         and all(
             int(review.get("invocation", {}).get("attempt_count") or 0) >= 1
@@ -75,6 +85,8 @@ def build_meta_review_ab_report(
         "milestone": "v3.1-meta-review-experimental",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_commit": source_commit,
+        "verification_commit": verification_commit,
+        "verification_changed_paths": list(verification_changed_paths),
         "status": "PASS" if passed else "FAIL",
         "passed": passed,
         "claim_scope": (
@@ -91,6 +103,9 @@ def build_meta_review_ab_report(
                 "source_bundle_sha256": review.get("source", {}).get("bundle_sha256"),
                 "used_model": review.get("invocation", {}).get("used_model"),
                 "model": review.get("invocation", {}).get("model"),
+                "implementation_commit": review.get("implementation_commit"),
+                "model_call_count": review.get("invocation", {}).get("model_call_count"),
+                "schema_retry_count": review.get("invocation", {}).get("schema_retry_count"),
                 "attempt_count": review.get("invocation", {}).get("attempt_count"),
                 "total_tokens": _review_usage(review).get("total_tokens"),
                 "finding_count": len(review.get("findings", [])),
@@ -124,6 +139,7 @@ def write_meta_review_ab_report(report: Mapping[str, Any], output_dir: Path) -> 
                     "entity_type": "meta_review_ab_manifest",
                     "milestone": report.get("milestone"),
                     "source_commit": report.get("source_commit"),
+                    "verification_commit": report.get("verification_commit"),
                     "status": report.get("status"),
                     "artifacts": {
                         "report_json": _artifact_record(json_path),
@@ -198,7 +214,8 @@ def _format_markdown(report: Mapping[str, Any]) -> str:
         "# V3.1 Meta Review A/B",
         "",
         f"Overall: **{report['status']}**",
-        f"Source commit: `{report['source_commit']}`",
+        f"Execution commit: `{report['source_commit']}`",
+        f"Review/verification commit: `{report['verification_commit']}`",
         "",
         str(report["claim_scope"]),
         "",

@@ -55,6 +55,7 @@ def test_meta_review_ab_requires_actual_review_for_each_enabled_run(tmp_path) ->
         report["invocation"]["model"] = "m"
         report["invocation"]["attempt_count"] = 1
         report["invocation"]["usage"] = {"total_tokens": 10}
+        report["implementation_commit"] = "def"
         report["_evidence_integrity_verified"] = True
         reviews.append(report)
 
@@ -63,6 +64,9 @@ def test_meta_review_ab_requires_actual_review_for_each_enabled_run(tmp_path) ->
         _suite("enabled", ["e1", "e2", "e3"]),
         reviews,
         source_commit="abc",
+        verification_commit="def",
+        verification_changed_paths=["src/minicc/meta/reviewer.py"],
+        allowed_verification_paths=["src/minicc/meta/reviewer.py"],
     )
 
     assert result["passed"] is True
@@ -81,6 +85,7 @@ def test_meta_review_ab_fails_when_one_enabled_run_was_not_reviewed(tmp_path) ->
     review["invocation"]["used_model"] = True
     review["invocation"]["attempt_count"] = 1
     review["invocation"]["usage"] = {"total_tokens": 10}
+    review["implementation_commit"] = "def"
     review["_evidence_integrity_verified"] = True
 
     result = build_meta_review_ab_report(
@@ -88,6 +93,9 @@ def test_meta_review_ab_fails_when_one_enabled_run_was_not_reviewed(tmp_path) ->
         _suite("enabled", ["e1", "e2", "e3"]),
         [review],
         source_commit="abc",
+        verification_commit="def",
+        verification_changed_paths=["src/minicc/meta/reviewer.py"],
+        allowed_verification_paths=["src/minicc/meta/reviewer.py"],
     )
 
     assert result["passed"] is False
