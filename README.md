@@ -39,22 +39,22 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V3.0
+## 当前稳定版本：Stable V3.1
 
-当前发布版本为 `3.0.0`。Stable V3.0 的固定 C01/C02/C03/C04/C09 系统矩阵在执行提交
+当前发布版本为 `3.1.0`。底层 Harness 继续继承 Stable V3.0：固定 C01/C02/C03/C04/C09 系统矩阵在执行提交
 `7d346fb77a191f0a5dbbb3157419cd0c0079c0cf` 上达到 15/15 PASS；正式聚合器在验证提交
 `cc150b0ae815e2add2f4ac036b3e0371205ddda4` 上逐 run 复核资格，二者之间仅包含报告验证器及其
 测试。最终四维报告覆盖系统回归 15 runs、Context 24 runs、Memory 27 runs、Resume 1 run，
 所有 claim 均携带配置、run ID、原始 artifact 和复跑命令。归档见 `acceptance/stable-v3.0/`，
 七层能力与诚实边界见 `docs/ETCLOVG_CAPABILITY_MATRIX.md`。
 
-当前开发分支为 `experimental/meta-review`，版本 `3.1.0.dev0`。V3.1 只研究显式触发的离线
+Stable V3.1 新增显式触发的离线
 Meta Review：`minicc meta-review <run_id>` 读取已结束 run 的不可变证据，在独立
 `.minicc/meta-reviews/` 目录生成带来源哈希和模型调用指标的审查结果，不修改源 run，也不自动
-采纳建议。V3.1 实验验收中，C02 A0/A1 分别为 3/3 与 3/3 PASS，A1 三个 run 均产生真实
-模型审查及非零 token 证据；18 项聚合门全部通过。四文件归档见
-`acceptance/experimental-v3.1-meta-review/`。该能力仍保持 `experimental`：验收只证明可运行、
-源证据不变和固定 case 非回归，不声明审查建议带来质量收益，也不属于 Stable V3.0。
+采纳建议。C02 A0/A1 分别为 3/3 与 3/3 PASS；A1 三个 run 均产生 schema-v2 真实模型审查，
+合计 11 条 finding、11 条关联建议和 21 个可重新解析的证据引用，20 项聚合门全部通过。
+四文件归档见 `acceptance/stable-v3.1/`。Stable 声明限于审查链路、证据真实性、建议可追踪性和
+固定 case 非回归；尚未声明实际采纳建议能提高后续任务质量。
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -603,14 +603,13 @@ uv run pytest -q
 uv run minicc traces
 ```
 
-版本化验收结果保存在 `acceptance/stable-v1.0/` 至 `acceptance/stable-v3.0/`。V3.0 的系统回归、Context、Memory、Resume 四维结论与逐 claim 证据入口见 `acceptance/stable-v3.0/report.md`。
-V3.1 Meta Review 的独立实验归档见 `acceptance/experimental-v3.1-meta-review/report.md`。
+版本化验收结果保存在 `acceptance/stable-v1.0/` 至 `acceptance/stable-v3.1/`。V3.0 的系统回归、Context、Memory、Resume 四维结论与逐 claim 证据入口见 `acceptance/stable-v3.0/report.md`；V3.1 Meta Review 的正式证据见 `acceptance/stable-v3.1/report.md`。
 
-V3.1 Meta Review 实验命令：
+V3.1 Meta Review 验收命令：
 
 ```bash
 uv run minicc meta-review <run_id>
-uv run minicc meta-review-report --disabled-suite <a0-report.json> --enabled-suite <a1-report.json> --review <review-1> --review <review-2> --review <review-3> --output-dir acceptance/experimental-v3.1-meta-review --release-gate
+uv run minicc meta-review-report --disabled-suite <a0-report.json> --enabled-suite <a1-report.json> --review <review-1> --review <review-2> --review <review-3> --output-dir acceptance/stable-v3.1 --release-gate
 ```
 
 ```bash

@@ -59,7 +59,7 @@ git switch -c stable-v1 8f19cd3
   archive ref 与 `acceptance/` 正式证据未删除。
 - `.minicc/runs` 与 `.minicc/suites` 保留正式验收引用的原始 run/suite；失败和中断尝试不复制进
   acceptance 归档，也不混入最终通过口径。
-- Stable V3.0 基线回归为 `296 passed`，V3.1 Meta Review 实验分支为 `305 passed`；V2.2 的 M01/M02/M03 共 27 个正式 run 全部 PASS，M0/M1
+- Stable V3.0 基线回归为 `296 passed`，Stable V3.1 Meta Review 为 `307 passed`；V2.2 的 M01/M02/M03 共 27 个正式 run 全部 PASS，M0/M1
   关键事实正确率均为 9/9，重复来源读取为 `9 -> 0`。
 - Stable V2.1 已完成 context compaction 两轮独立 A/B；Stable V2.1.1 已完成 Prompt Cache
   两轮独立 A/B，semantic compaction 与追加式稳定前缀布局均升格为稳定能力。V2.1.1 只证明
@@ -670,9 +670,21 @@ run 各生成一份 `used_model=true` 的审查。聚合门要求来源完整性
 21595/19706/19472；Provider timeout 重试分别为 1/0/2，最终全部成功。聚合首次暴露通用 suite
 读取器错误地对非缓存实验要求 `cache-experiment/None` namespace；验证提交
 `734f413d24b0aed500a020d74a5248310406eba7` 只在存在 `cache_sequence_id` 时复核该字段，并复用
-既有六个 run 和三份 review。最终 18 项门禁全部通过，全量回归为 305 passed，四文件归档位于
-`acceptance/experimental-v3.1-meta-review/`。当前结论保持 experimental：只证明显式离线审查
-可运行、源证据哈希不变及固定 case 非回归，不证明建议被采纳后的质量收益。
+既有六个 run 和三份 review。首轮 18 项门禁全部通过，全量回归为 305 passed，当时结论保持
+experimental：只证明显式离线审查可运行、源证据哈希不变及固定 case 非回归，不证明建议质量。
+该阶段四文件归档已在后续 Stable V3.1 归档形成后删除，避免 acceptance 同时保留两套重叠口径；
+历史仍可由提交 `2729f39d993be474baa872d42afcfb770694eb4b` 恢复。
+
+Stable 升格补充验收（2026-08-12）：为消除“模型输出了建议但无法证明建议有依据”的缺口，
+提交 `cf58d5c23ec03db71a0920dff06a3d73ab2d047d` 引入 Meta Review schema v2，强制 finding 与
+suggestion 使用唯一 ID、每个证据路径能从不可变 snapshot 重新解析、每个 finding 至少关联一个
+带预期效果和确定性验证方法的建议；提交 `b7a541d2a924ddd3d0da0f010c07c1469cb32731`
+补齐合法嵌套 trace 路径的逐层验证。复用原 A1 三个 run 重新生成三份 review，得到 11 条 finding、
+11 条关联建议和 21 个可解析证据引用；前两份一次通过，第三份经 1 次 schema 纠错通过，三份均无
+Provider transport retry。最终 A0/A1 仍为 3/3 与 3/3 PASS，20 项聚合门全部通过，全量回归为
+307 passed，正式四文件归档位于 `acceptance/stable-v3.1/`。因此离线 Meta Review 升格 stable；
+声明边界仍不包含“采纳这些建议一定提高下游任务质量”，且建议不会被自动写入 prompt、memory
+或代码。
 
 进入 Stable 的最低条件：
 

@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
   "entity_type": "meta_review_ab_manifest",
-  "milestone": "v3.1-meta-review-experimental",
+  "milestone": "stable-v3.1",
   "source_commit": "263785855e6fa0bd845b9143cd84b338193f00fd",
-  "review_commit": "29eaad9be1aa1e30705cf1e806ec8ef94e801fea",
-  "verification_commit": "734f413d24b0aed500a020d74a5248310406eba7",
+  "review_commit": "b7a541d2a924ddd3d0da0f010c07c1469cb32731",
+  "verification_commit": "b7a541d2a924ddd3d0da0f010c07c1469cb32731",
   "status": "PASS",
   "artifacts": {
     "report_json": {
       "path": "report.json",
-      "bytes": 4883,
-      "sha256": "ba147e981daec06e390434bb941ca069b34dfdc35fa44873469036bfe9cfa075"
+      "bytes": 5609,
+      "sha256": "dc183daec283eee122b7e012845223890320c46a0a122e277efbb47c776bd33b"
     },
     "report_markdown": {
       "path": "report.md",
-      "bytes": 1855,
-      "sha256": "1d38ed7ab77b9f3dc964433f0e8d8c493181770a2b6436e273c79643c72d0f80"
+      "bytes": 2064,
+      "sha256": "509f8cf12e0a825a5128a61b5ac134852dc547d01c0b1eeb3bbb4f76365d5002"
     },
     "report_csv": {
       "path": "report.csv",
