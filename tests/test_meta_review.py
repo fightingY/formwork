@@ -52,13 +52,22 @@ def _model_json() -> str:
             "summary": "The run converged with one reusable verification opportunity.",
             "findings": [
                 {
+                    "id": "F1",
                     "severity": "low",
                     "area": "verification",
                     "message": "Retain the successful final verification pattern.",
                     "evidence_refs": ["run_report.result", "metrics.turns"],
                 }
             ],
-            "suggested_changes": ["Measure repeated verification commands before changing prompts."],
+            "suggested_changes": [
+                {
+                    "id": "S1",
+                    "finding_ids": ["F1"],
+                    "change": "Measure repeated verification commands before changing prompts.",
+                    "expected_effect": "Preserve successful verification behavior.",
+                    "validation": "Compare fixed-case verification traces before and after the change.",
+                }
+            ],
         }
     )
 
@@ -85,6 +94,8 @@ def test_model_review_is_separate_and_source_verified(tmp_path) -> None:
     assert verify_review_source(result.report) is True
     assert result.report["invocation"]["attempt_count"] == 2
     assert result.report["implementation_commit"] == "commit-1"
+    assert result.report["schema_version"] == 2
+    assert result.report["quality_audit"]["quality_gate_passed"] is True
     assert provider.options.json_mode is True
     assert load_meta_review(result.output_dir)["review_id"] == result.review_id
 
@@ -109,7 +120,7 @@ def test_invalid_model_output_writes_no_bundle(tmp_path) -> None:
 
 def test_schema_validation_retries_with_correction_prompt(tmp_path) -> None:
     invalid = json.loads(_model_json())
-    invalid["findings"][0]["evidence_refs"] = ["trace_tail.event"]
+    invalid["findings"][0]["evidence_refs"] = ["run_report.missing"]
     provider = FakeProvider([json.dumps(invalid), _model_json()])
 
     result = MetaReviewer(provider, max_schema_retries=2).review_run(
@@ -122,6 +133,22 @@ def test_schema_validation_retries_with_correction_prompt(tmp_path) -> None:
     assert invocation["attempt_count"] == 4
     assert invocation["usage"]["total_tokens"] == 240
     assert "failed validation" in provider.messages[1][-1]["content"]
+
+
+def test_missing_evidence_and_unlinked_finding_are_rejected(tmp_path) -> None:
+    missing = json.loads(_model_json())
+    missing["findings"][0]["evidence_refs"] = ["run_report.missing"]
+    with pytest.raises(MetaReviewError, match="does not exist"):
+        MetaReviewer(FakeProvider(json.dumps(missing)), max_schema_retries=0).review_run(
+            _make_run(tmp_path / "missing"), output_root=tmp_path / "reviews-a"
+        )
+
+    unlinked = json.loads(_model_json())
+    unlinked["suggested_changes"][0]["finding_ids"] = ["F99"]
+    with pytest.raises(MetaReviewError, match="unknown finding"):
+        MetaReviewer(FakeProvider(json.dumps(unlinked)), max_schema_retries=0).review_run(
+            _make_run(tmp_path / "unlinked"), output_root=tmp_path / "reviews-b"
+        )
 
 
 def test_review_fails_closed_if_source_changes_during_call(tmp_path) -> None:

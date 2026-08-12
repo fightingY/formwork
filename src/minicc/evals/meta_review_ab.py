@@ -63,6 +63,15 @@ def build_meta_review_ab_report(
         "review_for_every_enabled_run": sorted(review_run_ids) == sorted(enabled_run_ids),
         "reviews_use_model": bool(reviews)
         and all(review.get("invocation", {}).get("used_model") is True for review in reviews),
+        "review_schema_v2": bool(reviews)
+        and all(review.get("schema_version") == 2 for review in reviews),
+        "review_quality_gates_passed": bool(reviews)
+        and all(
+            review.get("quality_audit", {}).get("quality_gate_passed") is True
+            and review.get("quality_audit", {}).get("evidence_refs_resolved") is True
+            and review.get("quality_audit", {}).get("all_findings_actionable") is True
+            for review in reviews
+        ),
         "review_implementation_commit_consistent": bool(reviews)
         and all(review.get("implementation_commit") == review_commit for review in reviews),
         "model_invocation_metrics_present": bool(reviews)
@@ -84,9 +93,9 @@ def build_meta_review_ab_report(
     }
     passed = all(criteria.values())
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "entity_type": "meta_review_ab_report",
-        "milestone": "v3.1-meta-review-experimental",
+        "milestone": "stable-v3.1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_commit": source_commit,
         "review_commit": review_commit,
@@ -97,7 +106,9 @@ def build_meta_review_ab_report(
         "passed": passed,
         "claim_scope": (
             "Model-backed offline meta review is invoked for every enabled run, preserves immutable "
-            "source evidence, and does not reduce fixed-case pass rate. Review quality uplift is not claimed."
+            "source evidence, does not reduce fixed-case pass rate, resolves every evidence reference, "
+            "and links every finding to an explicit expected effect and validation method. Downstream "
+            "task-quality uplift from applying suggestions is not claimed."
         ),
         "criteria": criteria,
         "disabled": _arm_summary(disabled_suite, disabled_cases, disabled_rate),
@@ -115,6 +126,9 @@ def build_meta_review_ab_report(
                 "attempt_count": review.get("invocation", {}).get("attempt_count"),
                 "total_tokens": _review_usage(review).get("total_tokens"),
                 "finding_count": len(review.get("findings", [])),
+                "suggestion_count": len(review.get("suggested_changes", [])),
+                "evidence_ref_count": review.get("quality_audit", {}).get("evidence_ref_count"),
+                "quality_gate_passed": review.get("quality_audit", {}).get("quality_gate_passed"),
                 "report_sha256": review.get("_evidence_report_sha256"),
                 "manifest_sha256": review.get("_evidence_manifest_sha256"),
             }

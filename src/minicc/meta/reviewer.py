@@ -15,6 +15,7 @@ from minicc.core.provider import CompletionOptions, ModelProvider, ModelResponse
 
 REVIEW_SEVERITIES = {"low", "medium", "high"}
 REVIEW_AREAS = {"context", "memory", "policy", "tools", "loop", "verification", "other"}
+META_REVIEW_SCHEMA_VERSION = 2
 
 
 class MetaReviewError(RuntimeError):
@@ -92,7 +93,7 @@ class MetaReviewer:
                 )
                 responses.append(response)
                 try:
-                    content = _parse_model_review(response.text)
+                    content = _parse_model_review(response.text, snapshot=snapshot)
                     break
                 except MetaReviewError as exc:
                     if schema_attempt >= self.max_schema_retries:
@@ -230,18 +231,27 @@ Return ONLY this JSON shape:
   "summary": "one concise paragraph",
   "findings": [
     {{
+      "id": "F1",
       "severity": "low|medium|high",
       "area": "context|memory|policy|tools|loop|verification|other",
       "message": "reusable diagnosis",
       "evidence_refs": ["metrics.turns"]
     }}
   ],
-  "suggested_changes": ["bounded harness-level experiment"]
+  "suggested_changes": [
+    {{
+      "id": "S1",
+      "finding_ids": ["F1"],
+      "change": "bounded harness-level experiment",
+      "expected_effect": "measurable expected outcome",
+      "validation": "deterministic test or fixed A/B that would validate it"
+    }}
+  ]
 }}
 """
 
 
-def _parse_model_review(text: str) -> dict[str, Any]:
+def _parse_model_review(text: str, *, snapshot: Mapping[str, Any]) -> dict[str, Any]:
     payload_text = text.strip()
     if not payload_text.startswith("{"):
         match = re.search(r"\{.*\}", payload_text, re.DOTALL)
@@ -253,19 +263,24 @@ def _parse_model_review(text: str) -> dict[str, Any]:
         raise MetaReviewError("model meta review was not valid JSON") from exc
     if not isinstance(payload, dict):
         raise MetaReviewError("model meta review must be a JSON object")
-    return _validate_review_content(payload)
+    return _validate_review_content(payload, snapshot=snapshot)
 
 
 def _schema_correction_prompt(reason: str) -> str:
     return (
         "Your previous JSON failed validation: "
         + reason
-        + ". Return the complete corrected JSON object only. Evidence references must start with "
-        "state., metrics., run_report., trace_tail[<non-negative index>], or equal diff_preview."
+        + ". Return the complete corrected JSON object only. Use canonical evidence paths without "
+        "embedding values: state.<field>, metrics.<field>, run_report.<field>, "
+        "trace_tail[<non-negative index>].<field>, or diff_preview. Every finding needs a unique F<n> "
+        "id. Every suggested change needs a unique S<n> id, finding_ids, change, expected_effect, "
+        "and validation. Every finding must be linked by at least one suggested change."
     )
 
 
-def _validate_review_content(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_review_content(
+    payload: Mapping[str, Any], *, snapshot: Mapping[str, Any]
+) -> dict[str, Any]:
     summary = str(payload.get("summary") or "").strip()
     if not summary:
         raise MetaReviewError("meta review summary is required")
@@ -273,22 +288,37 @@ def _validate_review_content(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(raw_findings, list) or not raw_findings:
         raise MetaReviewError("meta review requires at least one finding")
     findings: list[dict[str, Any]] = []
+    finding_ids: set[str] = set()
+    normalized_messages: set[str] = set()
     for item in raw_findings:
         if not isinstance(item, Mapping):
             raise MetaReviewError("each meta review finding must be an object")
+        finding_id = str(item.get("id") or "").strip()
         severity = str(item.get("severity") or "")
         area = str(item.get("area") or "")
         message = str(item.get("message") or "").strip()
         refs = item.get("evidence_refs")
-        if severity not in REVIEW_SEVERITIES or area not in REVIEW_AREAS or not message:
+        if (
+            re.fullmatch(r"F[1-9]\d*", finding_id) is None
+            or finding_id in finding_ids
+            or severity not in REVIEW_SEVERITIES
+            or area not in REVIEW_AREAS
+            or not message
+        ):
             raise MetaReviewError("meta review finding has invalid severity, area, or message")
+        message_key = re.sub(r"\W+", " ", message.casefold()).strip()
+        if message_key in normalized_messages:
+            raise MetaReviewError("meta review findings must not duplicate a diagnosis")
         if not isinstance(refs, list) or not any(str(ref).strip() for ref in refs):
             raise MetaReviewError("each meta review finding requires evidence_refs")
         normalized_refs = [str(ref).strip()[:200] for ref in refs if str(ref).strip()]
-        if not all(_valid_evidence_ref(ref) for ref in normalized_refs):
-            raise MetaReviewError("meta review finding contains an unsupported evidence reference")
+        for ref in normalized_refs:
+            resolve_evidence_ref(snapshot, ref)
+        finding_ids.add(finding_id)
+        normalized_messages.add(message_key)
         findings.append(
             {
+                "id": finding_id,
                 "severity": severity,
                 "area": area,
                 "message": message[:1_000],
@@ -296,12 +326,63 @@ def _validate_review_content(payload: Mapping[str, Any]) -> dict[str, Any]:
             }
         )
     changes = payload.get("suggested_changes")
-    if not isinstance(changes, list):
+    if not isinstance(changes, list) or not changes:
         raise MetaReviewError("suggested_changes must be a list")
+    suggestions: list[dict[str, Any]] = []
+    suggestion_ids: set[str] = set()
+    linked_findings: set[str] = set()
+    for item in changes:
+        if not isinstance(item, Mapping):
+            raise MetaReviewError("each suggested change must be an object")
+        suggestion_id = str(item.get("id") or "").strip()
+        links = item.get("finding_ids")
+        change = str(item.get("change") or "").strip()
+        expected_effect = str(item.get("expected_effect") or "").strip()
+        validation = str(item.get("validation") or "").strip()
+        if (
+            re.fullmatch(r"S[1-9]\d*", suggestion_id) is None
+            or suggestion_id in suggestion_ids
+            or not isinstance(links, list)
+            or not links
+            or not change
+            or not expected_effect
+            or not validation
+        ):
+            raise MetaReviewError("suggested change has invalid id, links, or required text")
+        normalized_links = [str(link).strip() for link in links if str(link).strip()]
+        if not normalized_links or any(link not in finding_ids for link in normalized_links):
+            raise MetaReviewError("suggested change references an unknown finding id")
+        suggestion_ids.add(suggestion_id)
+        linked_findings.update(normalized_links)
+        suggestions.append(
+            {
+                "id": suggestion_id,
+                "finding_ids": normalized_links,
+                "change": change[:1_000],
+                "expected_effect": expected_effect[:1_000],
+                "validation": validation[:1_000],
+            }
+        )
+    if linked_findings != finding_ids:
+        missing = ", ".join(sorted(finding_ids - linked_findings))
+        raise MetaReviewError(f"every finding must be linked to a suggested change: {missing}")
     return {
         "summary": summary[:2_000],
         "findings": findings,
-        "suggested_changes": [str(change).strip()[:1_000] for change in changes if str(change).strip()],
+        "suggested_changes": suggestions,
+        "quality_audit": {
+            "schema_version": META_REVIEW_SCHEMA_VERSION,
+            "finding_count": len(findings),
+            "suggestion_count": len(suggestions),
+            "evidence_ref_count": sum(len(item["evidence_refs"]) for item in findings),
+            "evidence_refs_resolved": True,
+            "finding_ids_unique": True,
+            "finding_messages_unique": True,
+            "suggestion_ids_unique": True,
+            "suggestion_links_valid": True,
+            "all_findings_actionable": True,
+            "quality_gate_passed": True,
+        },
     }
 
 
@@ -317,6 +398,7 @@ def _offline_review(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             "summary": f"Deterministic review: status={status}, turns={turns}, command_failures={failures}.",
             "findings": [
                 {
+                    "id": "F1",
                     "severity": severity,
                     "area": "loop" if severity == "high" else "other",
                     "message": (
@@ -327,8 +409,17 @@ def _offline_review(snapshot: Mapping[str, Any]) -> dict[str, Any]:
                     "evidence_refs": ["metrics.status", "metrics.turns"],
                 }
             ],
-            "suggested_changes": [],
-        }
+            "suggested_changes": [
+                {
+                    "id": "S1",
+                    "finding_ids": ["F1"],
+                    "change": "Inspect the terminal trace before changing harness behavior.",
+                    "expected_effect": "Avoid changing strategy without run-level evidence.",
+                    "validation": "Re-run the deterministic review against the same immutable bundle.",
+                }
+            ],
+        },
+        snapshot=snapshot,
     )
 
 
@@ -349,7 +440,7 @@ def _build_report(
     completion_tokens = _sum_usage(responses, "completion_tokens")
     total_tokens = _sum_usage(responses, "total_tokens")
     return {
-        "schema_version": 1,
+        "schema_version": META_REVIEW_SCHEMA_VERSION,
         "entity_type": "meta_review",
         "review_id": review_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -378,6 +469,7 @@ def _build_report(
         "summary": content["summary"],
         "findings": content["findings"],
         "suggested_changes": content["suggested_changes"],
+        "quality_audit": content["quality_audit"],
         "source_verified_after_review": True,
     }
 
@@ -433,10 +525,14 @@ def _format_markdown(report: Mapping[str, Any]) -> str:
     ]
     for finding in report["findings"]:
         refs = ", ".join(finding["evidence_refs"])
-        lines.append(f"- {finding['severity']} / {finding['area']}: {finding['message']} (evidence: {refs})")
+        lines.append(f"- {finding['id']} / {finding['severity']} / {finding['area']}: {finding['message']} (evidence: {refs})")
     lines.extend(["", "## Suggested Changes", ""])
     if report["suggested_changes"]:
-        lines.extend(f"- {change}" for change in report["suggested_changes"])
+        for change in report["suggested_changes"]:
+            links = ", ".join(change["finding_ids"])
+            lines.append(f"- {change['id']} ({links}): {change['change']}")
+            lines.append(f"  expected: {change['expected_effect']}")
+            lines.append(f"  validation: {change['validation']}")
     else:
         lines.append("(none)")
     return "\n".join(lines) + "\n"
@@ -483,14 +579,35 @@ def _int_value(value: Any) -> int:
         return 0
 
 
-def _valid_evidence_ref(value: str) -> bool:
-    return bool(
-        re.fullmatch(
-            r"(?:state|metrics|run_report)(?:[.\[].*)?|"
-            r"trace_tail\[\d+\](?:[.\[].*)?|diff_preview",
-            value,
-        )
+def resolve_evidence_ref(snapshot: Mapping[str, Any], value: str) -> Any:
+    if value == "diff_preview":
+        if "diff_preview" not in snapshot:
+            raise MetaReviewError("evidence reference does not exist: diff_preview")
+        return snapshot["diff_preview"]
+    trace_match = re.fullmatch(r"trace_tail\[(\d+)\](?:\.([A-Za-z0-9_-]+))?", value)
+    if trace_match:
+        trace = snapshot.get("trace_tail")
+        index = int(trace_match.group(1))
+        if not isinstance(trace, list) or index >= len(trace):
+            raise MetaReviewError(f"evidence reference does not exist: {value}")
+        current: Any = trace[index]
+        field = trace_match.group(2)
+        if field:
+            if not isinstance(current, Mapping) or field not in current:
+                raise MetaReviewError(f"evidence reference does not exist: {value}")
+            current = current[field]
+        return current
+    object_match = re.fullmatch(
+        r"(state|metrics|run_report)\.([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)", value
     )
+    if not object_match:
+        raise MetaReviewError(f"unsupported evidence reference: {value}")
+    current = snapshot.get(object_match.group(1))
+    for field in object_match.group(2).split("."):
+        if not isinstance(current, Mapping) or field not in current:
+            raise MetaReviewError(f"evidence reference does not exist: {value}")
+        current = current[field]
+    return current
 
 
 def _sum_usage(responses: Sequence[ModelResponse], field: str) -> int | None:

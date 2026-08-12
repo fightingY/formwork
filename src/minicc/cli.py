@@ -2539,6 +2539,13 @@ def meta_review_report_command(args: argparse.Namespace) -> int:
             Path.cwd(), review_commit, git_commit
         )
         allowed_changed_paths = {
+            "README.md",
+            "STABLE_V1_MILESTONE_ROADMAP.md",
+            "acceptance/experimental-v3.1-meta-review/manifest.json",
+            "acceptance/experimental-v3.1-meta-review/report.csv",
+            "acceptance/experimental-v3.1-meta-review/report.json",
+            "acceptance/experimental-v3.1-meta-review/report.md",
+            "docs/ETCLOVG_CAPABILITY_MATRIX.md",
             "src/minicc/cli.py",
             "src/minicc/evals/cache_ab.py",
             "src/minicc/evals/meta_review_ab.py",

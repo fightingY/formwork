@@ -56,6 +56,12 @@ def test_meta_review_ab_requires_actual_review_for_each_enabled_run(tmp_path) ->
         report["invocation"]["attempt_count"] = 1
         report["invocation"]["usage"] = {"total_tokens": 10}
         report["implementation_commit"] = "def"
+        report["schema_version"] = 2
+        report["quality_audit"] = {
+            "quality_gate_passed": True,
+            "evidence_refs_resolved": True,
+            "all_findings_actionable": True,
+        }
         report["_evidence_integrity_verified"] = True
         reviews.append(report)
 
@@ -74,6 +80,7 @@ def test_meta_review_ab_requires_actual_review_for_each_enabled_run(tmp_path) ->
     assert result["disabled"]["pass_rate"] == 1.0
     assert result["enabled"]["pass_rate"] == 1.0
     assert result["criteria"]["review_for_every_enabled_run"] is True
+    assert result["criteria"]["review_quality_gates_passed"] is True
     bundle = write_meta_review_ab_report(result, tmp_path / "acceptance")
     assert set(bundle) == {"report.json", "report.md", "report.csv", "manifest.json"}
     assert {path.name for path in (tmp_path / "acceptance").iterdir()} == set(bundle)
@@ -87,6 +94,12 @@ def test_meta_review_ab_fails_when_one_enabled_run_was_not_reviewed(tmp_path) ->
     review["invocation"]["attempt_count"] = 1
     review["invocation"]["usage"] = {"total_tokens": 10}
     review["implementation_commit"] = "def"
+    review["schema_version"] = 2
+    review["quality_audit"] = {
+        "quality_gate_passed": True,
+        "evidence_refs_resolved": True,
+        "all_findings_actionable": True,
+    }
     review["_evidence_integrity_verified"] = True
 
     result = build_meta_review_ab_report(
