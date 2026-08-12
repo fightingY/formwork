@@ -151,6 +151,24 @@ def test_missing_evidence_and_unlinked_finding_are_rejected(tmp_path) -> None:
         )
 
 
+def test_nested_trace_evidence_reference_is_resolved(tmp_path) -> None:
+    run_dir = _make_run(tmp_path)
+    (run_dir / "trace.jsonl").write_text(
+        '{"event":"action_parsed","action":{"type":"bash","command":"pytest"}}\n',
+        encoding="utf-8",
+    )
+    payload = json.loads(_model_json())
+    payload["findings"][0]["evidence_refs"] = ["trace_tail[0].action.command"]
+
+    result = MetaReviewer(FakeProvider(json.dumps(payload))).review_run(
+        run_dir, output_root=tmp_path / "reviews"
+    )
+
+    assert result.report["findings"][0]["evidence_refs"] == [
+        "trace_tail[0].action.command"
+    ]
+
+
 def test_review_fails_closed_if_source_changes_during_call(tmp_path) -> None:
     run_dir = _make_run(tmp_path)
 

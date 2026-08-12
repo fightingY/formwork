@@ -584,15 +584,18 @@ def resolve_evidence_ref(snapshot: Mapping[str, Any], value: str) -> Any:
         if "diff_preview" not in snapshot:
             raise MetaReviewError("evidence reference does not exist: diff_preview")
         return snapshot["diff_preview"]
-    trace_match = re.fullmatch(r"trace_tail\[(\d+)\](?:\.([A-Za-z0-9_-]+))?", value)
+    trace_match = re.fullmatch(
+        r"trace_tail\[(\d+)\](?:\.([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*))?",
+        value,
+    )
     if trace_match:
         trace = snapshot.get("trace_tail")
         index = int(trace_match.group(1))
         if not isinstance(trace, list) or index >= len(trace):
             raise MetaReviewError(f"evidence reference does not exist: {value}")
         current: Any = trace[index]
-        field = trace_match.group(2)
-        if field:
+        fields = trace_match.group(2)
+        for field in fields.split(".") if fields else ():
             if not isinstance(current, Mapping) or field not in current:
                 raise MetaReviewError(f"evidence reference does not exist: {value}")
             current = current[field]
