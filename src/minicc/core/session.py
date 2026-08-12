@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
 from minicc.core.protocol import BashAction
-from minicc.core.state import Observation, RunState, load_run_state, save_run_state, state_path_for_run
+from minicc.core.state import (
+    Observation,
+    RunState,
+    load_run_state,
+    save_run_state,
+    state_path_for_run,
+)
 from minicc.policy.base import PolicyDecision
 from minicc.trace.recorder import TraceRecorder
 
@@ -174,7 +180,7 @@ def begin_execution(state: RunState, action: BashAction, session: SessionManager
             "execution_id": execution_id,
             "status": "started",
             "command": action.command,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": datetime.now(UTC).isoformat(),
         }
     )
     _save_if_bound(state, session)
@@ -192,7 +198,7 @@ def complete_execution(
             entry.update(
                 {
                     "status": "completed",
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "completed_at": datetime.now(UTC).isoformat(),
                     "observation_kind": observation.kind,
                     "exit_code": observation.exit_code,
                 }

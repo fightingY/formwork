@@ -4,17 +4,17 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from math import gcd
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 from uuid import uuid4
 
 from minicc.evals.assertions import assertion_spec_sha256
-from minicc.evals.case import case_authority_bundle_sha256
 from minicc.evals.cache_probe_runner import fixed_probe_profile_sha256
-
+from minicc.evals.case import case_authority_bundle_sha256
 
 SHORT_CASE = "C02_fix_failing_test"
 LONG_CASE = "C07_large_log_debugging"
@@ -951,10 +951,10 @@ def _aggregate_cases(
     *,
     max_retries: int,
 ) -> dict[str, Any]:
-    metrics_list = [
-        case.get("metrics") if isinstance(case.get("metrics"), Mapping) else {}
-        for case in cases
-    ]
+    metrics_list: list[Mapping[str, Any]] = []
+    for case in cases:
+        metrics = case.get("metrics")
+        metrics_list.append(metrics if isinstance(metrics, Mapping) else {})
     raw_prompt = sum(
         _integer(metrics.get("cache_observed_prompt_tokens"))
         for metrics in metrics_list
@@ -2275,6 +2275,8 @@ def _rate(value: object) -> str:
 def _integer(value: object) -> int:
     if value is None or isinstance(value, bool):
         return 0
+    if not isinstance(value, (str, int, float, bytes, bytearray)):
+        return 0
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -2284,6 +2286,8 @@ def _integer(value: object) -> int:
 def _optional_float(value: object) -> float | None:
     if value is None or isinstance(value, bool):
         return None
+    if not isinstance(value, (str, int, float, bytes, bytearray)):
+        return None
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -2292,6 +2296,8 @@ def _optional_float(value: object) -> float | None:
 
 def _optional_int(value: object) -> int | None:
     if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (str, int, float, bytes, bytearray)):
         return None
     try:
         return int(value)

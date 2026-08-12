@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-
 
 LEDGER_SCHEMA_VERSION = 2
 TERMINAL_RUN_STATUSES = {
@@ -176,7 +175,7 @@ def inspect_run(
     now: datetime | None = None,
     orphan_after: timedelta = timedelta(hours=1),
 ) -> dict[str, Any]:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     state = _read_json(run_dir / "state.json")
     metrics = _read_json(run_dir / "metrics.json")
     eval_result = _read_json(run_dir / "eval_result.json")
@@ -243,7 +242,7 @@ def build_cleanup_plan(
     now: datetime | None = None,
 ) -> CleanupPlan:
     runs_root = runs_root.resolve()
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     protected = set()
     if versions_root is not None:
         protected.update(_referenced_run_ids(versions_root, pattern="*/manifest.json"))
@@ -329,15 +328,16 @@ def _is_stale(
     now: datetime,
     orphan_after: timedelta,
 ) -> bool:
-    state_metrics = state.get("metrics") if isinstance(state.get("metrics"), dict) else {}
+    raw_state_metrics = state.get("metrics")
+    state_metrics = raw_state_metrics if isinstance(raw_state_metrics, dict) else {}
     started = metrics.get("started_at") or state_metrics.get("started_at")
     parsed = _parse_datetime(started)
     if parsed is None:
         try:
-            parsed = datetime.fromtimestamp(run_dir.stat().st_mtime, tz=timezone.utc)
+            parsed = datetime.fromtimestamp(run_dir.stat().st_mtime, tz=UTC)
         except OSError:
             return False
-    return now.astimezone(timezone.utc) - parsed.astimezone(timezone.utc) >= orphan_after
+    return now.astimezone(UTC) - parsed.astimezone(UTC) >= orphan_after
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -348,7 +348,7 @@ def _parse_datetime(value: Any) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 

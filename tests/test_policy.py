@@ -1,5 +1,3 @@
-from minicc.core.protocol import BashAction
-from minicc.core.state import RunState
 from minicc.config import (
     BudgetSettings,
     ContextSettings,
@@ -8,6 +6,8 @@ from minicc.config import (
     SandboxSettings,
     Settings,
 )
+from minicc.core.protocol import BashAction
+from minicc.core.state import RunState
 from minicc.policy.approval import ApprovalPolicy
 from minicc.policy.base import PolicyChain
 from minicc.policy.budget import BudgetPolicy

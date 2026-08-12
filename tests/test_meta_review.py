@@ -6,7 +6,12 @@ import json
 import pytest
 
 from minicc.core.provider import ModelResponse, ModelUsage
-from minicc.meta.reviewer import MetaReviewError, MetaReviewer, load_meta_review, verify_review_source
+from minicc.meta.reviewer import (
+    MetaReviewer,
+    MetaReviewError,
+    load_meta_review,
+    verify_review_source,
+)
 
 
 class FakeProvider:

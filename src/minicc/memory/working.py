@@ -3,12 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any
 
 from minicc.core.protocol import MemoryReference
 from minicc.core.state import RunState
-
 
 WORKING_MEMORY_SCHEMA_VERSION = 1
 MAX_EXCERPT_CHARS = 4_000
@@ -26,15 +26,15 @@ def ground_memory_references(
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     for reference in references:
+        if workspace is None:
+            rejected.append({"path": reference.path, "reason": "run_has_no_workspace"})
+            continue
+        target = (workspace / reference.path).resolve()
         reason = ""
-        target = (workspace / reference.path).resolve() if workspace else None
-        if workspace is None or target is None:
-            reason = "run_has_no_workspace"
-        else:
-            try:
-                target.relative_to(workspace)
-            except ValueError:
-                reason = "path_escapes_workspace"
+        try:
+            target.relative_to(workspace)
+        except ValueError:
+            reason = "path_escapes_workspace"
         if not reason and (not target.is_file() or target.is_symlink()):
             reason = "source_is_not_a_regular_file"
         if reason:

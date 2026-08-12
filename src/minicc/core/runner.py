@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import gcd
-from typing import Any, Mapping
+from typing import Any
 
 from minicc.core.protocol import Action, ProtocolError, parse_action
 from minicc.core.provider import CompletionOptions, ModelProvider, ModelUsage
@@ -264,6 +265,8 @@ def _accumulate_cacheability(
 
 def _optional_int(value: object) -> int | None:
     if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (str, int, float, bytes, bytearray)):
         return None
     try:
         return int(value)

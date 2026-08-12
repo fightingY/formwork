@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from minicc.core.ledger import LEDGER_SCHEMA_VERSION, run_evidence_complete
 from minicc.core.state import RunState
-
 
 SCHEMA_VERSION = LEDGER_SCHEMA_VERSION
 STAGE_LABELS = {
@@ -329,7 +328,8 @@ def index_acceptance_history(project_root: Path, catalog: RunCatalog | None = No
             if run_dir.name >= formal_checkpoint_id:
                 continue
             state = _read_json(run_dir / "state.json")
-            metrics = state.get("metrics") if isinstance(state.get("metrics"), dict) else {}
+            raw_metrics = state.get("metrics")
+            metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
             if int(metrics.get("checkpoints_created", 0) or 0) <= 0:
                 continue
             if _index_checkpoint_run(
@@ -349,7 +349,8 @@ def _index_eval_report(catalog: RunCatalog, report_path: Path, milestone: str, s
     if not report_path.exists():
         return 0
     report = _read_json(report_path)
-    configuration = report.get("configuration") if isinstance(report.get("configuration"), dict) else {}
+    raw_configuration = report.get("configuration")
+    configuration = raw_configuration if isinstance(raw_configuration, dict) else {}
     imported = 0
     for case in report.get("cases", []):
         if not isinstance(case, dict):
@@ -358,7 +359,8 @@ def _index_eval_report(catalog: RunCatalog, report_path: Path, milestone: str, s
         run_dir = str(case.get("run_dir") or "")
         if not run_id or not run_dir:
             continue
-        metrics = case.get("metrics") if isinstance(case.get("metrics"), dict) else {}
+        raw_metrics = case.get("metrics")
+        metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
         entry = catalog.upsert(
             milestone,
             {
@@ -394,7 +396,8 @@ def _index_checkpoint_run(
     state = _read_json(run_dir / "state.json")
     if not run_id or not run_dir.exists() or not state:
         return False
-    metrics = state.get("metrics") if isinstance(state.get("metrics"), dict) else {}
+    raw_metrics = state.get("metrics")
+    metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
     return (
         catalog.upsert(
             "stable-v2.0",
@@ -492,7 +495,7 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _schema_version(payload: dict[str, Any], *, default: int) -> int:

@@ -3,15 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from minicc.evals import cache_probe_runner
 from minicc.core.context import STABLE_PREFIX
+from minicc.evals import cache_probe_runner
 from minicc.evals.assertions import assertion_spec_sha256
-from minicc.evals.case import case_authority_bundle_sha256, load_case
+from minicc.evals.cache_probe_runner import (
+    fixed_long_evidence_profile,
+    fixed_probe_profile_sha256,
+    fixed_probe_request_sha256s,
+    fixed_probe_sequence_sha256,
+)
 from minicc.evals.cache_utilization import (
     LONG_ACTION_SHAPE_SHA256,
     LONG_CASE,
@@ -21,12 +26,7 @@ from minicc.evals.cache_utilization import (
     failed_criteria,
     write_cache_utilization_report,
 )
-from minicc.evals.cache_probe_runner import (
-    fixed_long_evidence_profile,
-    fixed_probe_profile_sha256,
-    fixed_probe_request_sha256s,
-    fixed_probe_sequence_sha256,
-)
+from minicc.evals.case import case_authority_bundle_sha256, load_case
 
 
 def test_long_case_uses_the_action_shape_locked_by_formal_gate() -> None:
@@ -642,10 +642,10 @@ def _case(index: int, variant: str, name: str, attempt: int, *, requests: int) -
             f"eval_cases/capability_suite_v1/{name}/fixture"
         ),
         "case_definition_sha256": hashlib.sha256(
-            f"{name}:case".encode("utf-8")
+            f"{name}:case".encode()
         ).hexdigest(),
         "fixture_content_sha256": hashlib.sha256(
-            f"{name}:fixture".encode("utf-8")
+            f"{name}:fixture".encode()
         ).hexdigest(),
         "run_id": f"run-{variant}-{index}-{name}-{attempt}",
         "attempt": attempt,
@@ -701,10 +701,10 @@ def _authority_profiles() -> dict[str, dict[str, str]]:
                 f"eval_cases/capability_suite_v1/{name}/fixture"
             ),
             "case_definition_sha256": hashlib.sha256(
-                f"{name}:case".encode("utf-8")
+                f"{name}:case".encode()
             ).hexdigest(),
             "fixture_content_sha256": hashlib.sha256(
-                f"{name}:fixture".encode("utf-8")
+                f"{name}:fixture".encode()
             ).hexdigest(),
         }
         for name in REQUIRED_CASES
@@ -810,7 +810,7 @@ def _set_probe_non_cold_hit(probe: dict, hit_tokens: int) -> None:
 
 
 def _interval(index: int, order: str, variant: str, kind: str) -> tuple[str, str]:
-    base = datetime(2026, 7, index, tzinfo=timezone.utc)
+    base = datetime(2026, 7, index, tzinfo=UTC)
     first = "p1" if order == "p1-first" else "p2"
     variant_offset = 0 if variant == first else 4
     kind_offset = 0 if kind == "probe" else 2

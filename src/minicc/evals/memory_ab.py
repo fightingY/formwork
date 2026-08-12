@@ -5,18 +5,23 @@ import hashlib
 import io
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import yaml
 
-from minicc.core.ledger import LEDGER_SCHEMA_VERSION, SuiteBundle, new_suite_id, write_immutable_suite
+from minicc.core.ledger import (
+    LEDGER_SCHEMA_VERSION,
+    SuiteBundle,
+    new_suite_id,
+    write_immutable_suite,
+)
 from minicc.core.state import RunState
 from minicc.evals.case import EvalCase, load_case
 from minicc.evals.runner import EvalCaseResult, run_eval_case
-
 
 MemoryVariant = Literal["m0", "m1"]
 MemoryAgentRunner = Callable[[EvalCase, RunState, str | None], RunState]
@@ -93,14 +98,17 @@ def run_memory_ab(
     if repeat < 1:
         raise ValueError("repeat must be at least 1")
     suite_id = suite_id or new_suite_id()
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(UTC).isoformat()
     attempts: list[dict[str, Any]] = []
     all_results: list[EvalCaseResult] = []
     for attempt in range(1, repeat + 1):
+        def run_source(eval_case: EvalCase, state: RunState) -> RunState:
+            return agent_runner(eval_case, state, None)
+
         source_result = run_eval_case(
             case.source,
             runs_root=runs_root,
-            agent_runner=lambda eval_case, state: agent_runner(eval_case, state, None),
+            agent_runner=run_source,
             attempt=attempt,
             suite_id=suite_id,
             milestone=milestone,
@@ -114,14 +122,18 @@ def run_memory_ab(
             for variant in order:
                 source_run_id = source_result.run_id if variant == "m1" else None
                 variant_case = replace(case.follow_up, name=f"{case.follow_up.name}_{variant}")
+
+                def run_variant(
+                    eval_case: EvalCase,
+                    state: RunState,
+                    bound_source_run_id: str | None = source_run_id,
+                ) -> RunState:
+                    return agent_runner(eval_case, state, bound_source_run_id)
+
                 result = run_eval_case(
                     variant_case,
                     runs_root=runs_root,
-                    agent_runner=lambda eval_case, state, source_run_id=source_run_id: agent_runner(
-                        eval_case,
-                        state,
-                        source_run_id,
-                    ),
+                    agent_runner=run_variant,
                     attempt=attempt,
                     suite_id=suite_id,
                     milestone=milestone,
@@ -153,7 +165,7 @@ def run_memory_ab(
                 ),
             }
         )
-    completed_at = datetime.now(timezone.utc).isoformat()
+    completed_at = datetime.now(UTC).isoformat()
     passed = _overall_passed(attempts, repeat)
     return MemoryABResult(
         suite_id=suite_id,
@@ -313,11 +325,11 @@ def format_memory_ab_csv(report: dict[str, Any]) -> str:
 
 def _source_evidence(result: EvalCaseResult, expected_paths: tuple[str, ...]) -> dict[str, Any]:
     events = _read_trace(Path(result.run_dir) / "trace.jsonl")
-    captured = [
-        event.get("reference")
-        for event in events
-        if event.get("event") == "memory_reference_captured" and isinstance(event.get("reference"), dict)
-    ]
+    captured: list[dict[str, Any]] = []
+    for event in events:
+        reference = event.get("reference")
+        if event.get("event") == "memory_reference_captured" and isinstance(reference, dict):
+            captured.append(reference)
     memory_path = Path(result.run_dir) / "working_memory.json"
     return {
         "run_id": result.run_id,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from minicc.config import Settings
 from minicc.policy.approval import ApprovalPolicy
-from minicc.policy.base import PolicyChain
+from minicc.policy.base import Policy, PolicyChain
 from minicc.policy.budget import BudgetPolicy
 from minicc.policy.command import CommandPolicy
 from minicc.policy.network import NetworkPolicy
@@ -10,7 +10,7 @@ from minicc.policy.path import PathPolicy
 
 
 def build_policy_chain(settings: Settings) -> PolicyChain:
-    policies = [
+    policies: list[Policy] = [
         CommandPolicy(deny_sudo=settings.policy.deny_sudo),
         PathPolicy(),
         NetworkPolicy(

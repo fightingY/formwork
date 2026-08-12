@@ -3,13 +3,20 @@ import hashlib
 import json
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from minicc import __version__, cli
-from minicc.config import BudgetSettings, ContextSettings, PolicySettings, ProviderSettings, SandboxSettings, Settings
+from minicc.config import (
+    BudgetSettings,
+    ContextSettings,
+    PolicySettings,
+    ProviderSettings,
+    SandboxSettings,
+    Settings,
+)
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
 from minicc.core.state import Observation, RunState, save_run_state
@@ -1119,7 +1126,7 @@ def test_cleanup_command_defaults_to_dry_run_and_apply_uses_same_candidate(tmp_p
         '{"run_id":"old-run","goal":"old","status":"failed"}',
         encoding="utf-8",
     )
-    old = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()
+    old = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
     os.utime(run_dir, (old, old))
 
     assert cli.cleanup_command(argparse.Namespace(older_than_hours=24, apply=False)) == 0
@@ -1128,5 +1135,5 @@ def test_cleanup_command_defaults_to_dry_run_and_apply_uses_same_candidate(tmp_p
     assert not run_dir.exists()
 
 
-def test_cli_version_matches_stable_v31_package() -> None:
-    assert __version__ == "3.1.0"
+def test_cli_version_matches_stable_v311_package() -> None:
+    assert __version__ == "3.1.1"

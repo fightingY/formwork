@@ -13,9 +13,9 @@ from minicc.core.session import (
     record_execution_metrics,
 )
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.memory.working import ground_memory_references
 from minicc.policy.base import PolicyChain, PolicyDecision
 from minicc.trace.recorder import TraceRecorder
-from minicc.memory.working import ground_memory_references
 
 
 class BashExecutor(Protocol):

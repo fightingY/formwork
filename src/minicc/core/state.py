@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
 from minicc.core.ledger import LEDGER_SCHEMA_VERSION
 from minicc.core.protocol import Action, BashAction, action_to_dict, parse_action
-
 
 RunStatus = Literal[
     "running",
@@ -98,7 +97,7 @@ class RunState:
         milestone: str = "",
         stage: str = "daily_development",
         prompt_namespace: str = "",
-    ) -> "RunState":
+    ) -> RunState:
         return cls(
             run_id=new_run_id(),
             goal=goal,
@@ -122,7 +121,7 @@ class RunState:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RunState":
+    def from_dict(cls, data: dict[str, Any]) -> RunState:
         pending_action = data.get("pending_action")
         if pending_action is not None:
             pending_action = parse_action(json.dumps(pending_action))

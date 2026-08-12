@@ -5,10 +5,10 @@ import io
 import json
 import shlex
 import subprocess
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Mapping
 
 from minicc.core.ledger import (
     LEDGER_SCHEMA_VERSION,
@@ -30,7 +30,6 @@ from minicc.evals.case import (
     fixture_source_path,
 )
 from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
-
 
 AgentRunCallable = Callable[[EvalCase, RunState], RunState]
 EvalCaseCompletedCallable = Callable[["EvalCaseResult"], None]
@@ -97,7 +96,7 @@ def run_eval_suite(
     if repeat < 1:
         raise ValueError("repeat must be at least 1")
     suite_id = suite_id or new_suite_id()
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(UTC).isoformat()
     configuration_snapshot = dict(configuration or {})
     cases = discover_cases(path)
     if case_names:

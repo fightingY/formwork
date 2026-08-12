@@ -6,7 +6,6 @@ from typing import Literal, Protocol
 from minicc.core.protocol import BashAction
 from minicc.core.state import RunState
 
-
 DecisionType = Literal["allow", "deny", "require_approval", "rewrite"]
 
 

@@ -122,9 +122,10 @@ class AgentLoop:
             trajectory.extend(outcome.steps)
             self.session.save(state)
             reason = "action_completed"
-            if state.status == "waiting_approval":
+            current_status = str(state.status)
+            if current_status == "waiting_approval":
                 reason = "waiting_approval"
-            elif state.status == "completed":
+            elif current_status == "completed":
                 reason = "run_completed"
             self._checkpoint(state, trajectory, reason)
 

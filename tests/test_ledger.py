@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -76,7 +76,7 @@ def test_resumable_artifact_index_stays_idempotent_when_evidence_changes(tmp_pat
 def test_inspect_run_marks_stale_running_as_orphaned_without_failing_task(tmp_path) -> None:
     run_dir = tmp_path / "runs" / "run-stale"
     run_dir.mkdir(parents=True)
-    started_at = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    started_at = datetime(2026, 7, 19, tzinfo=UTC)
     (run_dir / "state.json").write_text(
         json.dumps(
             {
@@ -92,7 +92,7 @@ def test_inspect_run_marks_stale_running_as_orphaned_without_failing_task(tmp_pa
 
     record = inspect_run(
         run_dir,
-        now=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        now=datetime(2026, 7, 20, tzinfo=UTC),
         orphan_after=timedelta(hours=1),
     )
 
@@ -163,7 +163,7 @@ def test_cleanup_plan_and_apply_share_selection_and_protect_indexed_acceptance(t
     runs_root = tmp_path / ".minicc" / "runs"
     versions_root = tmp_path / ".minicc" / "versions"
     acceptance_root = tmp_path / "acceptance"
-    old_timestamp = datetime(2026, 7, 1, tzinfo=timezone.utc).timestamp()
+    old_timestamp = datetime(2026, 7, 1, tzinfo=UTC).timestamp()
     for run_id in ["delete-me", "indexed-run", "accepted-run"]:
         run_dir = runs_root / run_id
         run_dir.mkdir(parents=True)
@@ -190,7 +190,7 @@ def test_cleanup_plan_and_apply_share_selection_and_protect_indexed_acceptance(t
         versions_root=versions_root,
         acceptance_root=acceptance_root,
         older_than=timedelta(days=1),
-        now=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        now=datetime(2026, 7, 20, tzinfo=UTC),
     )
     dry_run_ids = [candidate.run_id for candidate in plan.candidates]
     applied = apply_cleanup_plan(plan, apply=True)

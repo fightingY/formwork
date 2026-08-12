@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-
 FeedbackType = Literal["never", "prefer", "caution"]
 
 

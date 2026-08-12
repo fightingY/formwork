@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from minicc.core.state import RunState
+from minicc.memory.working import write_working_memory_snapshot
 from minicc.trace.metrics import write_metrics
 from minicc.trace.recorder import TraceRecorder
 from minicc.trace.report import write_run_report
-from minicc.memory.working import write_working_memory_snapshot
 
 
 @dataclass
@@ -20,7 +20,7 @@ class RunLifecycle:
     def start(self, state: RunState) -> None:
         self._started_at = time.perf_counter()
         self._base_duration_ms = 0
-        state.metrics["started_at"] = datetime.now(timezone.utc).isoformat()
+        state.metrics["started_at"] = datetime.now(UTC).isoformat()
         self.trace.run_started(state)
 
     def resume(self, state: RunState, trajectory_steps: int) -> None:
@@ -29,7 +29,7 @@ class RunLifecycle:
         self.trace.run_resumed(state, trajectory_steps)
 
     def finish(self, state: RunState) -> None:
-        state.metrics["completed_at"] = datetime.now(timezone.utc).isoformat()
+        state.metrics["completed_at"] = datetime.now(UTC).isoformat()
         if self._started_at is not None:
             state.metrics["total_duration_ms"] = self._base_duration_ms + int(
                 (time.perf_counter() - self._started_at) * 1000

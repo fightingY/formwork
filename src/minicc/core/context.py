@@ -14,7 +14,6 @@ from minicc.memory.working import working_memory_context
 from minicc.skills.registry import SkillRegistry
 from minicc.trace.recorder import TraceRecorder
 
-
 STABLE_PREFIX = """You are miniCC, a Bash-first CodeAct coding agent.
 
 You must output exactly one JSON object per turn. Do not output Markdown.
@@ -51,6 +50,8 @@ Observation contract:
 """
 
 EPOCH_COMPACTION_TARGET_RATIO = 0.65
+CompactionStrategy = Literal["disabled", "deterministic", "semantic"]
+PromptLayout = Literal["rebuild", "append", "epoch"]
 
 
 @dataclass(frozen=True)
@@ -60,9 +61,9 @@ class ContextConfig:
     artifact_preview_chars: int = 12_000
     summary_max_chars: int = 12_000
     field_preview_chars: int = 4_000
-    compaction_strategy: Literal["disabled", "deterministic", "semantic"] = "deterministic"
+    compaction_strategy: CompactionStrategy = "deterministic"
     retention_markers: tuple[str, ...] = ()
-    prompt_layout: Literal["rebuild", "append", "epoch"] = "rebuild"
+    prompt_layout: PromptLayout = "rebuild"
 
 
 class ContextBuilder:
@@ -807,7 +808,7 @@ def _message_lcp_count(
     current: list[dict[str, str]],
 ) -> int:
     count = 0
-    for before, after in zip(previous, current):
+    for before, after in zip(previous, current, strict=False):
         if before != after:
             break
         count += 1

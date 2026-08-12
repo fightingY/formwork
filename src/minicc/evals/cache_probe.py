@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from math import gcd
 import re
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from math import gcd
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 from uuid import uuid4
-
 
 CACHE_PROBE_SCHEMA_VERSION = 2
 LEGACY_CACHE_SUMMARY_KEYS = (
@@ -89,7 +89,7 @@ def build_cache_probe_report(
         or configuration.get("variant")
         or ""
     )
-    created_at_value = created_at or datetime.now(timezone.utc).isoformat()
+    created_at_value = created_at or datetime.now(UTC).isoformat()
     return {
         "schema_version": CACHE_PROBE_SCHEMA_VERSION,
         "entity_type": "prompt_cache_probe_report",

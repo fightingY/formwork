@@ -1,4 +1,3 @@
-import hashlib
 import json
 from pathlib import Path
 
@@ -13,7 +12,6 @@ from minicc.evals.memory_acceptance import (
     write_memory_acceptance_report,
 )
 from minicc.evals.runner import EvalCaseResult
-
 
 MODEL = "provider/model"
 

@@ -1,7 +1,13 @@
 import httpx
 import pytest
 
-from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider, ProviderError, extract_chat_text, parse_model_usage
+from minicc.core.provider import (
+    CompletionOptions,
+    OpenAICompatibleProvider,
+    ProviderError,
+    extract_chat_text,
+    parse_model_usage,
+)
 
 
 def test_parse_deepseek_style_cache_usage() -> None:

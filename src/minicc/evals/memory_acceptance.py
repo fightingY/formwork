@@ -4,13 +4,13 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 from uuid import uuid4
 
 from minicc.core.ledger import inspect_run
-
 
 REQUIRED_MEMORY_CASES = {
     "M01_service_contract_follow_up": (
@@ -377,7 +377,7 @@ def _verify_run_evidence(
     report_run_ids = set(report_rows)
     if report_run_ids != {str(run.get("run_id") or "") for run in runs if isinstance(run, Mapping)}:
         raise ValueError("working-memory suite run ids do not match report attempts")
-    totals = {
+    totals: dict[str, Any] = {
         "run_count": 0,
         "provider_errors": 0,
         "provider_retried_requests": 0,

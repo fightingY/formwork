@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
-import re
-from typing import Any, Literal, Union
-
+from typing import Any, Literal
 
 ActionType = Literal["bash", "ask", "final"]
 
@@ -38,7 +37,7 @@ class FinalAction:
     type: Literal["final"] = "final"
 
 
-Action = Union[BashAction, AskAction, FinalAction]
+Action = BashAction | AskAction | FinalAction
 
 
 class ProtocolError(ValueError):

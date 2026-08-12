@@ -5,12 +5,12 @@ import hashlib
 import io
 import json
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 from uuid import uuid4
-
 
 DIMENSION_STATES = {"stable", "experimental", "not implemented"}
 
@@ -94,7 +94,7 @@ def build_release_report(
         "schema_version": 1,
         "entity_type": "release_evidence_report",
         "milestone": "stable-v3.0-development",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source_commit": source_commit,
         "status": "PASS" if passed else "FAIL",
         "passed": passed,

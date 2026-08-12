@@ -686,6 +686,28 @@ Provider transport retry。最终 A0/A1 仍为 3/3 与 3/3 PASS，20 项聚合�
 声明边界仍不包含“采纳这些建议一定提高下游任务质量”，且建议不会被自动写入 prompt、memory
 或代码。
 
+### V3.1.1：工程质量与发布治理补丁
+
+目标：不改变 Stable V3.1 的能力声明和正式 Provider 实验口径，为当前稳定基线增加可自动执行的
+工程质量门，并消除版本文档漂移。
+
+工作范围：
+
+- GitHub Actions 在 Python 3.11/3.12 上执行锁文件安装、Ruff、mypy、pytest coverage 和 package build。
+- 全包分支覆盖率低于 78% 时失败；lint、类型检查、测试或构建任一失败时不得发布。建门实测
+  基线为 78.60%，后续 80% 目标只能通过补测试达到，禁止排除低覆盖模块美化数字。
+- 补齐 changelog、贡献指南和安全报告流程；README 只保留一个当前版本口径。
+- 不修改 `acceptance/stable-v3.0/`、`acceptance/stable-v3.1/` 或任何既有 run/suite 原始证据。
+
+验收标准：
+
+- `uv sync --locked --all-groups`、`uv run ruff check src tests`、`uv run mypy src/minicc` 全部通过。
+- `uv run pytest --cov=minicc --cov-report=term-missing --cov-report=xml` 全部通过且全包分支覆盖率不低于 78%。
+- `uv build`、`git diff --check` 通过，工作区仅包含解释过的工程治理变更。
+- 完成后只生成一个正式提交；验收通过后创建 annotated `stable-v3.1.1` tag。
+
+本补丁不需要重新调用 Provider；Stable V3.1 Meta Review 与 V3.0 四维能力结论继续引用原正式归档。
+
 进入 Stable 的最低条件：
 
 - 先有确定性单元和集成测试。

@@ -4,14 +4,14 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 from uuid import uuid4
 
 from minicc.core.provider import CompletionOptions, ModelProvider, ModelResponse
-
 
 REVIEW_SEVERITIES = {"low", "medium", "high"}
 REVIEW_AREAS = {"context", "memory", "policy", "tools", "loop", "verification", "other"}
@@ -109,7 +109,7 @@ class MetaReviewer:
         if before != after:
             raise MetaReviewError("source run evidence changed during review")
 
-        review_id = f"meta-{run_dir.name}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid4().hex[:8]}"
+        review_id = f"meta-{run_dir.name}-{datetime.now(UTC):%Y%m%d-%H%M%S}-{uuid4().hex[:8]}"
         report = _build_report(
             review_id=review_id,
             run_dir=run_dir,
@@ -387,8 +387,10 @@ def _validate_review_content(
 
 
 def _offline_review(snapshot: Mapping[str, Any]) -> dict[str, Any]:
-    state = snapshot.get("state") if isinstance(snapshot.get("state"), Mapping) else {}
-    metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), Mapping) else {}
+    raw_state = snapshot.get("state")
+    raw_metrics = snapshot.get("metrics")
+    state = raw_state if isinstance(raw_state, Mapping) else {}
+    metrics = raw_metrics if isinstance(raw_metrics, Mapping) else {}
     status = str(metrics.get("status") or state.get("status") or "unknown")
     turns = _int_value(metrics.get("turns"))
     failures = _int_value(metrics.get("command_failures"))
@@ -443,7 +445,7 @@ def _build_report(
         "schema_version": META_REVIEW_SCHEMA_VERSION,
         "entity_type": "meta_review",
         "review_id": review_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "implementation_commit": implementation_commit,
         "source": dict(source),
         "invocation": {

@@ -4,23 +4,23 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, cast
 from uuid import uuid4
 
+from minicc.core.context import CompactionStrategy
 from minicc.evals.assertions import (
     assert_trace_action_shape_events,
     trace_action_shape_evidence_events,
 )
-from minicc.evals.case import case_authority_bundle_sha256
-from minicc.evals.cache_probe import load_cache_probe_report
 from minicc.evals.cache_probe_runner import (
     fixed_probe_request_sha256s,
     fixed_probe_sequence_sha256,
 )
-
+from minicc.evals.case import case_authority_bundle_sha256
 
 REQUIRED_REAL_CASE = "C02_fix_failing_test"
 REQUIRED_INPUT_MILESTONE = "v2.1.1-development"
@@ -256,8 +256,8 @@ def _verify_suite_manifest(
         or suite_completed_at is None
         or any(value is None for value in case_started_at)
         or any(value is None for value in case_completed_at)
-        or suite_created_at > min(case_started_at)
-        or suite_completed_at != max(case_completed_at)
+        or suite_created_at > min(value for value in case_started_at if value is not None)
+        or suite_completed_at != max(value for value in case_completed_at if value is not None)
     ):
         raise ValueError(f"suite timestamps do not match run evidence: {path}")
     report_run_ids = [str(case.get("run_id") or "") for case in cases]
@@ -912,8 +912,8 @@ def _build_round(
             cache_sequence_id,
             recent_turns=_integer(configurations[0].get("recent_turns")),
             max_prompt_chars=_integer(configurations[0].get("max_prompt_chars")),
-            compaction_strategy=str(
-                configurations[0].get("compaction_strategy") or ""
+            compaction_strategy=cast(
+                CompactionStrategy, str(configurations[0].get("compaction_strategy") or "")
             ),
         )
         expected_p1_request_hashes = fixed_probe_request_sha256s(
@@ -922,8 +922,8 @@ def _build_round(
             cache_sequence_id,
             recent_turns=_integer(configurations[1].get("recent_turns")),
             max_prompt_chars=_integer(configurations[1].get("max_prompt_chars")),
-            compaction_strategy=str(
-                configurations[1].get("compaction_strategy") or ""
+            compaction_strategy=cast(
+                CompactionStrategy, str(configurations[1].get("compaction_strategy") or "")
             ),
         )
     except ValueError:
@@ -1674,7 +1674,14 @@ def _execution_order_verified(
     )
     if any(timestamp is None for timestamp in timestamps):
         return False
-    assert all(timestamp is not None for timestamp in timestamps)
+    assert p0_probe_time is not None
+    assert p1_probe_time is not None
+    assert p0_probe_completed is not None
+    assert p1_probe_completed is not None
+    assert p0_suite_time is not None
+    assert p1_suite_time is not None
+    assert p0_suite_completed is not None
+    assert p1_suite_completed is not None
     probes_before_real = max(p0_probe_completed, p1_probe_completed) <= min(
         p0_suite_time,
         p1_suite_time,

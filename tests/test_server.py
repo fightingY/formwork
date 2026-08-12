@@ -1,5 +1,12 @@
 from minicc.core.run_catalog import RunCatalog
-from minicc.server.app import list_runs, list_versions, read_run_metrics, read_trace, render_index, summarize_trace
+from minicc.server.app import (
+    list_runs,
+    list_versions,
+    read_run_metrics,
+    read_trace,
+    render_index,
+    summarize_trace,
+)
 
 
 def test_trace_viewer_reads_runs_and_trace(tmp_path) -> None:

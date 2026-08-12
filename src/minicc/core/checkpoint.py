@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,6 @@ from minicc.core.state import (
     trajectory_step_to_dict,
 )
 from minicc.trace.recorder import TraceRecorder
-
 
 CHECKPOINT_SCHEMA_VERSION = 1
 _IGNORED_WORKSPACE_PARTS = {
@@ -73,7 +72,7 @@ class CheckpointManager:
             "schema_version": CHECKPOINT_SCHEMA_VERSION,
             "checkpoint_id": checkpoint_id,
             "sequence": sequence,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
             "reason": reason,
             "run_id": state.run_id,
             "run_dir": str(self.run_dir),

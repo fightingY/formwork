@@ -3,17 +3,23 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Literal
 
-from minicc.core.context import STABLE_PREFIX, ContextBuilder, ContextConfig, state_snapshot_text
+from minicc.core.context import (
+    STABLE_PREFIX,
+    ContextBuilder,
+    ContextConfig,
+    PromptLayout,
+    state_snapshot_text,
+)
 from minicc.core.protocol import BashAction, ProtocolError, parse_action
 from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.evals.cache_probe import CacheProbeBundle, write_cache_probe
-
 
 FIXED_PROBE_GOAL = (
     "Inspect the supplied repository evidence and choose the next minimal verification action. "
@@ -65,7 +71,7 @@ def run_fixed_cache_probe(
     probes_root: Path,
     config: CacheProbeRunConfig,
 ) -> CacheProbeBundle:
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     if config.variant not in {"p0", "p1", "p2"}:
         raise ValueError("cache probe variant must be p0, p1, or p2")
     if config.repeat < 1:
@@ -119,6 +125,7 @@ def run_fixed_cache_probe(
                 }
             )
         else:
+            protocol_error: str | None
             try:
                 action = parse_action(response.text)
             except ProtocolError as exc:
@@ -244,7 +251,7 @@ def run_fixed_cache_probe(
         stage=config.stage,
         warmup_requests=config.warmup_requests,
         created_at=started_at,
-        completed_at=datetime.now(timezone.utc).isoformat(),
+        completed_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -261,6 +268,8 @@ def fixed_probe_sequence_sha256(repeat: int, cache_sequence_id: str = "developme
     steps = []
     for index in range(1, repeat):
         step = _fixed_step(index)
+        if not isinstance(step.action, BashAction):
+            raise AssertionError("fixed probe steps must contain BashAction")
         state.metrics["turns"] = index
         state.last_observation = step.observation
         steps.append(
@@ -303,7 +312,7 @@ def fixed_probe_request_sha256s(
     *,
     recent_turns: int = 6,
     max_prompt_chars: int = 120_000,
-    compaction_strategy: str = "deterministic",
+    compaction_strategy: Literal["disabled", "deterministic", "semantic"] = "deterministic",
 ) -> list[str]:
     if variant not in {"p0", "p1", "p2"}:
         raise ValueError("cache probe variant must be p0, p1, or p2")
@@ -315,12 +324,19 @@ def fixed_probe_request_sha256s(
         prompt_namespace=f"cache-experiment/{cache_sequence_id}",
     )
     state.constraints.extend(_fixed_probe_constraints(repeat))
+    prompt_layout: PromptLayout
+    if variant == "p0":
+        prompt_layout = "rebuild"
+    elif variant == "p1":
+        prompt_layout = "append"
+    else:
+        prompt_layout = "epoch"
     builder = ContextBuilder(
         ContextConfig(
             max_prompt_chars=max_prompt_chars,
             recent_turns=recent_turns,
             compaction_strategy=compaction_strategy,
-            prompt_layout={"p0": "rebuild", "p1": "append", "p2": "epoch"}[variant],
+            prompt_layout=prompt_layout,
         )
     )
     trajectory: list[TrajectoryStep] = []

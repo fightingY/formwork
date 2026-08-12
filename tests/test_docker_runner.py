@@ -1,10 +1,13 @@
 import subprocess
-from pathlib import Path
 
 from minicc.core.protocol import BashAction
 from minicc.core.state import RunState
 from minicc.sandbox.artifact_store import ArtifactStore
-from minicc.sandbox.docker_runner import DockerCommandExecutor, DockerSandboxConfig, DockerSandboxRunner
+from minicc.sandbox.docker_runner import (
+    DockerCommandExecutor,
+    DockerSandboxConfig,
+    DockerSandboxRunner,
+)
 from minicc.sandbox.observation import CommandResult
 
 

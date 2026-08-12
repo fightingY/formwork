@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import yaml
+
+CompactionStrategy = Literal["disabled", "deterministic", "semantic"]
+PromptLayout = Literal["rebuild", "append", "epoch"]
 
 
 @dataclass(frozen=True)
@@ -47,11 +50,11 @@ class ContextSettings:
     artifact_preview_chars: int = 12_000
     summary_max_chars: int = 12_000
     field_preview_chars: int = 4_000
-    compaction_strategy: str = "deterministic"
+    compaction_strategy: CompactionStrategy = "deterministic"
     semantic_max_input_chars: int = 60_000
     semantic_max_completion_tokens: int = 2_048
     retention_markers: tuple[str, ...] = ()
-    prompt_layout: str = "rebuild"
+    prompt_layout: PromptLayout = "rebuild"
 
 
 @dataclass(frozen=True)
@@ -274,18 +277,18 @@ def _str_tuple_config(config: dict[str, Any], key: str) -> tuple[str, ...]:
     return tuple(str(item) for item in value if str(item).strip())
 
 
-def _compaction_strategy(config: dict[str, Any]) -> str:
+def _compaction_strategy(config: dict[str, Any]) -> CompactionStrategy:
     value = str(config.get("compaction_strategy", "deterministic")).strip().lower()
     if value not in {"disabled", "deterministic", "semantic"}:
         raise ValueError("context.compaction_strategy must be disabled, deterministic, or semantic")
-    return value
+    return cast(CompactionStrategy, value)
 
 
-def _prompt_layout(config: dict[str, Any]) -> str:
+def _prompt_layout(config: dict[str, Any]) -> PromptLayout:
     value = str(config.get("prompt_layout", "rebuild")).strip().lower()
     if value not in {"rebuild", "append", "epoch"}:
         raise ValueError("context.prompt_layout must be rebuild, append, or epoch")
-    return value
+    return cast(PromptLayout, value)
 
 
 def _float_env_or_config(

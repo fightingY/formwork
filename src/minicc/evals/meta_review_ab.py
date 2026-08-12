@@ -5,9 +5,10 @@ import hashlib
 import io
 import json
 import shutil
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 from uuid import uuid4
 
 from minicc.meta.reviewer import verify_review_source
@@ -96,7 +97,7 @@ def build_meta_review_ab_report(
         "schema_version": 2,
         "entity_type": "meta_review_ab_report",
         "milestone": "stable-v3.1",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source_commit": source_commit,
         "review_commit": review_commit,
         "verification_commit": verification_commit,
@@ -210,8 +211,10 @@ def _arm_summary(
 
 
 def _comparable_configuration(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
-    config_a = a.get("configuration") if isinstance(a.get("configuration"), Mapping) else {}
-    config_b = b.get("configuration") if isinstance(b.get("configuration"), Mapping) else {}
+    raw_config_a = a.get("configuration")
+    raw_config_b = b.get("configuration")
+    config_a = raw_config_a if isinstance(raw_config_a, Mapping) else {}
+    config_b = raw_config_b if isinstance(raw_config_b, Mapping) else {}
     keys = (
         "model",
         "temperature",

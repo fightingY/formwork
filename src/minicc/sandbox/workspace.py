@@ -6,11 +6,10 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Sequence
-
 
 HARD_DENY_NAMES = {
     ".git",
@@ -183,7 +182,7 @@ def prepare_run_workspace(
     manifest = {
         "schema_version": 1,
         "run_id": run_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "source_root": str(source_dir),
         "source_commit": source_commit,
         "source_dirty": source_dirty,

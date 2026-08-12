@@ -6,12 +6,22 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 from minicc import __version__
-from minicc.config import BudgetSettings, PolicySettings, SandboxSettings, Settings, load_settings
+from minicc.config import (
+    BudgetSettings,
+    CompactionStrategy,
+    PolicySettings,
+    PromptLayout,
+    SandboxSettings,
+    Settings,
+    load_settings,
+)
 from minicc.core.checkpoint import CheckpointError, CheckpointManager
 from minicc.core.context import STABLE_PREFIX, ContextBuilder, ContextConfig
 from minicc.core.ledger import (
@@ -26,21 +36,12 @@ from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
-from minicc.evals.case import (
-    EvalCase,
-    build_case_authority_profiles,
-    case_authority_bundle_sha256,
-    discover_cases,
-)
-from minicc.evals.compaction_ab import (
-    build_compaction_ab_report,
-    load_suite_report as load_compaction_suite_report,
-    write_compaction_ab_report,
-)
 from minicc.evals.cache_ab import (
     build_cache_ab_report,
-    load_suite_report as load_cache_suite_report,
     write_cache_ab_report,
+)
+from minicc.evals.cache_ab import (
+    load_suite_report as load_cache_suite_report,
 )
 from minicc.evals.cache_probe import load_cache_probe_report
 from minicc.evals.cache_probe_runner import (
@@ -50,10 +51,24 @@ from minicc.evals.cache_probe_runner import (
 )
 from minicc.evals.cache_utilization import (
     build_cache_utilization_report,
-    failed_criteria as failed_cache_utilization_criteria,
     write_cache_utilization_report,
 )
-from minicc.evals.runner import run_eval_suite, write_eval_report, write_suite_report
+from minicc.evals.cache_utilization import (
+    failed_criteria as failed_cache_utilization_criteria,
+)
+from minicc.evals.case import (
+    EvalCase,
+    build_case_authority_profiles,
+    case_authority_bundle_sha256,
+    discover_cases,
+)
+from minicc.evals.compaction_ab import (
+    build_compaction_ab_report,
+    write_compaction_ab_report,
+)
+from minicc.evals.compaction_ab import (
+    load_suite_report as load_compaction_suite_report,
+)
 from minicc.evals.memory_ab import load_follow_up_case, run_memory_ab, write_memory_ab_report
 from minicc.evals.memory_acceptance import (
     REQUIRED_MEMORY_CASES,
@@ -61,19 +76,25 @@ from minicc.evals.memory_acceptance import (
     load_memory_suite_report,
     write_memory_acceptance_report,
 )
+from minicc.evals.meta_review_ab import build_meta_review_ab_report, write_meta_review_ab_report
 from minicc.evals.release_report import (
     build_release_report,
     load_context_suite_evidence,
     load_json_evidence,
     write_release_report,
 )
-from minicc.evals.meta_review_ab import build_meta_review_ab_report, write_meta_review_ab_report
+from minicc.evals.runner import run_eval_suite, write_eval_report, write_suite_report
+from minicc.memory.compaction import SemanticCompactor
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.working import WorkingMemoryError, attach_working_memory
-from minicc.memory.compaction import SemanticCompactor
+from minicc.meta.reviewer import MetaReviewer, MetaReviewError, load_meta_review
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
-from minicc.sandbox.docker_runner import DockerCommandExecutor, DockerSandboxConfig, DockerSandboxRunner
+from minicc.sandbox.docker_runner import (
+    DockerCommandExecutor,
+    DockerSandboxConfig,
+    DockerSandboxRunner,
+)
 from minicc.sandbox.local_runner import LocalCommandExecutor
 from minicc.sandbox.workspace import (
     prepare_run_workspace,
@@ -81,7 +102,6 @@ from minicc.sandbox.workspace import (
     write_workspace_diff,
 )
 from minicc.skills.registry import SkillRegistry
-from minicc.meta.reviewer import MetaReviewError, MetaReviewer, load_meta_review
 from minicc.trace.recorder import TraceRecorder, trace_path_for
 
 
@@ -509,7 +529,7 @@ def run_command(args: argparse.Namespace) -> int:
                 print("--no-workspace-copy requires --execute-local.", file=sys.stderr)
                 return 2
             state.workspace_host_path = Path.cwd()
-            executor = LocalCommandExecutor()
+            executor: BashExecutor = LocalCommandExecutor()
         else:
             workspace = prepare_run_workspace(
                 Path.cwd(),
@@ -638,7 +658,7 @@ def resume_command(args: argparse.Namespace) -> int:
             preview_chars=settings.context.artifact_preview_chars,
         )
         if args.execute_local:
-            executor = LocalCommandExecutor(
+            executor: BashExecutor = LocalCommandExecutor(
                 artifacts=artifacts,
                 preview_chars=settings.context.artifact_preview_chars,
             )
@@ -868,7 +888,7 @@ def eval_command(args: argparse.Namespace) -> int:
     settings = load_settings()
     context_variant = getattr(args, "context_variant", None)
     if context_variant is not None:
-        strategy = "semantic" if context_variant == "a1" else "disabled"
+        strategy: CompactionStrategy = "semantic" if context_variant == "a1" else "disabled"
         settings = replace(settings, context=replace(settings.context, compaction_strategy=strategy))
     cache_variant = getattr(args, "cache_variant", None)
     cache_sequence_id = str(getattr(args, "cache_sequence_id", "") or "").strip()
@@ -893,7 +913,10 @@ def eval_command(args: argparse.Namespace) -> int:
             print(str(exc), file=sys.stderr)
             return 2
     if cache_variant is not None:
-        prompt_layout = {"p0": "rebuild", "p1": "append", "p2": "epoch"}[cache_variant]
+        prompt_layout = cast(
+            PromptLayout,
+            {"p0": "rebuild", "p1": "append", "p2": "epoch"}[cache_variant],
+        )
         settings = replace(settings, context=replace(settings.context, prompt_layout=prompt_layout))
     milestone = _effective_milestone(settings, args)
     v212_formal = bool(args.release_gate and "2.1.2" in milestone)
@@ -1003,15 +1026,17 @@ def eval_command(args: argparse.Namespace) -> int:
         state.constraints.extend(_case_constraints(case))
         if cache_namespace:
             state.prompt_namespace = cache_namespace
+        if state.run_dir is None or state.artifacts_dir is None or state.workspace_host_path is None:
+            raise RuntimeError("eval runner did not initialize run workspace paths")
         artifacts = ArtifactStore(
-            state.artifacts_dir or state.run_dir / "artifacts",
+            state.artifacts_dir,
             display_path_prefix=".minicc_artifacts",
             preview_chars=settings.context.artifact_preview_chars,
         )
         runner = None
         try:
             if args.execute_local or case.sandbox_mode == "local":
-                executor = LocalCommandExecutor(
+                executor: BashExecutor = LocalCommandExecutor(
                     artifacts=artifacts,
                     preview_chars=settings.context.artifact_preview_chars,
                 )
@@ -1235,15 +1260,17 @@ def memory_eval_command(args: argparse.Namespace) -> int:
         state.prompt_namespace = f"memory-experiment/{suite_id}"
         if source_run_id is not None:
             attach_working_memory(state, source_run_id, runs_root=runs_root)
+        if state.run_dir is None or state.artifacts_dir is None or state.workspace_host_path is None:
+            raise RuntimeError("memory eval runner did not initialize run workspace paths")
         artifacts = ArtifactStore(
-            state.artifacts_dir or state.run_dir / "artifacts",
+            state.artifacts_dir,
             display_path_prefix=".minicc_artifacts",
             preview_chars=settings.context.artifact_preview_chars,
         )
         runner = None
         try:
             if args.execute_local or eval_case.sandbox_mode == "local":
-                executor = LocalCommandExecutor(
+                executor: BashExecutor = LocalCommandExecutor(
                     artifacts=artifacts,
                     preview_chars=settings.context.artifact_preview_chars,
                 )
@@ -1532,7 +1559,10 @@ def cache_probe_command(args: argparse.Namespace) -> int:
     provider = _build_provider_or_print_error(settings)
     if provider is None:
         return 2
-    prompt_layout = {"p0": "rebuild", "p1": "append", "p2": "epoch"}[args.cache_variant]
+    prompt_layout = cast(
+        PromptLayout,
+        {"p0": "rebuild", "p1": "append", "p2": "epoch"}[args.cache_variant],
+    )
     context = ContextConfig(
         max_prompt_chars=settings.context.max_prompt_chars,
         recent_turns=settings.context.recent_turns,
@@ -1566,12 +1596,15 @@ def cache_probe_command(args: argparse.Namespace) -> int:
         "git_preflight_verified": git_preflight_verified,
         "git_postflight_verified": False,
     }
-    postflight_check = None
+    postflight_check: Callable[[], str | None] | None = None
     if git_preflight_verified:
-        postflight_check = lambda: _git_postflight_error(
-            Path.cwd(),
-            expected_commit=git_commit,
-        )
+        def check_git_postflight() -> str | None:
+            return _git_postflight_error(
+                Path.cwd(),
+                expected_commit=git_commit,
+            )
+
+        postflight_check = check_git_postflight
     try:
         bundle = run_fixed_cache_probe(
             provider,
@@ -1791,6 +1824,10 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
 
 def _case_int(case: EvalCase, name: str, default: int) -> int:
     value = case.budget.get(name)
+    if value is None or isinstance(value, bool):
+        return default
+    if not isinstance(value, (str, int, float, bytes, bytearray)):
+        return default
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -1799,6 +1836,10 @@ def _case_int(case: EvalCase, name: str, default: int) -> int:
 
 def _context_int(case: EvalCase, name: str, default: int) -> int:
     value = case.context.get(name)
+    if value is None or isinstance(value, bool):
+        return default
+    if not isinstance(value, (str, int, float, bytes, bytearray)):
+        return default
     try:
         return int(value)
     except (TypeError, ValueError):

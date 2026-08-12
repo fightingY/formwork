@@ -39,9 +39,11 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V3.1
+## 当前稳定版本：Stable V3.1.1
 
-当前发布版本为 `3.1.0`。底层 Harness 继续继承 Stable V3.0：固定 C01/C02/C03/C04/C09 系统矩阵在执行提交
+当前发布版本为 `3.1.1`。V3.1.1 不改变 Agent 能力与既有正式实验结论，只为 Stable V3.1
+增加可在干净环境复跑的 CI、覆盖率、lint、类型检查、构建检查和发布治理文档。底层 Harness
+继续继承 Stable V3.0：固定 C01/C02/C03/C04/C09 系统矩阵在执行提交
 `7d346fb77a191f0a5dbbb3157419cd0c0079c0cf` 上达到 15/15 PASS；正式聚合器在验证提交
 `cc150b0ae815e2add2f4ac036b3e0371205ddda4` 上逐 run 复核资格，二者之间仅包含报告验证器及其
 测试。最终四维报告覆盖系统回归 15 runs、Context 24 runs、Memory 27 runs、Resume 1 run，
@@ -88,7 +90,7 @@ steady-state 为 83.09%/81.84%，12 个 C07 run 全部保持精确 9 请求、8 
 任务通过率。最终归档仅含四个文件，8 份入选输入自包含于 `evidence.json`，见
 `acceptance/stable-v2.1.2/`。
 
-当前发布版本为 `2.2.0`。Stable V2.2 在共同执行提交
+Stable V2.2 在共同执行提交
 `15fadae08d7d424853ba24b4dca534501493a183` 上完成 M01/M02/M03 三组正式 source/M0/M1
 配对评测，共 27 个 run 全部 PASS。M0/M1 follow-up 关键事实正确率均为 9/9，重复来源文件读取
 由 `9` 降为 `0`，follow-up prompt token 由 `36878` 降为 `26617`（下降 27.82%）；旧 run
@@ -591,6 +593,22 @@ docs/
 ```
 
 ## 验收
+
+V3.1.1 工程质量门禁：
+
+```bash
+uv sync --locked --all-groups
+uv run ruff check src tests
+uv run mypy src/minicc
+uv run pytest --cov=minicc --cov-report=term-missing --cov-report=xml
+uv build
+```
+
+上述命令与 `.github/workflows/ci.yml` 使用同一套锁文件和配置；全包分支覆盖率低于 78% 时测试
+命令失败。V3.1.1 建门时的实测基线为 78.60%，没有排除 CLI 或低覆盖模块；80% 是后续只能通过
+补测试提高的目标，不能通过缩小统计范围达成。
+V3.1.1 只验证工程质量门，不替换 `acceptance/stable-v3.0/` 与 `acceptance/stable-v3.1/` 中的
+Provider-backed 正式能力证据。
 
 Stable V1.0 验收命令：
 
