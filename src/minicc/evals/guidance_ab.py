@@ -21,8 +21,12 @@ def build_guidance_ab_report(
     enabled_suite: Mapping[str, Any],
     *,
     source_commit: str,
+    verification_commit: str | None = None,
+    execution_verification_changed_paths: tuple[str, ...] | list[str] = (),
+    allowed_verification_paths: tuple[str, ...] | list[str] = (),
     minimum_attempts: int = 3,
 ) -> dict[str, Any]:
+    verification_commit = verification_commit or source_commit
     disabled_cases = _case_rows(disabled_suite)
     enabled_cases = _case_rows(enabled_suite)
     disabled_config = _configuration(disabled_suite)
@@ -40,6 +44,10 @@ def build_guidance_ab_report(
             str(enabled_config.get("git_commit") or ""),
         }
         == {source_commit},
+        "verification_commit_present": bool(verification_commit),
+        "verification_delta_allowed": set(execution_verification_changed_paths).issubset(
+            set(allowed_verification_paths)
+        ),
         "suite_integrity_verified": bool(disabled_suite.get("_evidence_integrity_verified"))
         and bool(enabled_suite.get("_evidence_integrity_verified")),
         "canonical_identical_case": _case_names(disabled_cases)
@@ -80,11 +88,13 @@ def build_guidance_ab_report(
     }
     passed = all(criteria.values())
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "entity_type": "guidance_ab_report",
-        "milestone": "experimental-v3.2-guidance",
+        "milestone": "stable-v3.2",
         "created_at": datetime.now(UTC).isoformat(),
         "source_commit": source_commit,
+        "verification_commit": verification_commit,
+        "execution_verification_changed_paths": list(execution_verification_changed_paths),
         "status": "PASS" if passed else "FAIL",
         "passed": passed,
         "claim_scope": (
@@ -116,10 +126,11 @@ def write_guidance_ab_report(report: Mapping[str, Any], output_dir: Path) -> dic
         manifest_path.write_text(
             json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "entity_type": "guidance_ab_manifest",
                     "milestone": report.get("milestone"),
                     "source_commit": report.get("source_commit"),
+                    "verification_commit": report.get("verification_commit"),
                     "status": report.get("status"),
                     "artifacts": {
                         "report_json": _artifact_record(json_path),
@@ -217,6 +228,7 @@ def _format_markdown(report: Mapping[str, Any]) -> str:
         "",
         f"Overall: **{report['status']}**",
         f"Execution commit: `{report['source_commit']}`",
+        f"Verification commit: `{report['verification_commit']}`",
         "",
         str(report["claim_scope"]),
         "",

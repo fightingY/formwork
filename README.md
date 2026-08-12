@@ -39,10 +39,11 @@ M5: Experimental Skill/Feedback Memory、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V3.1.1
+## 当前稳定版本：Stable V3.2
 
-当前发布版本为 `3.1.1`。V3.1.1 不改变 Agent 能力与既有正式实验结论，只为 Stable V3.1
-增加可在干净环境复跑的 CI、覆盖率、lint、类型检查、构建检查和发布治理文档。底层 Harness
+当前发布版本为 `3.2.0`。V3.2 将目标相关 Skill catalog 与 commit-bound Feedback rules 的
+确定性选择升格为 stable。Stable V3.1.1 的 CI、覆盖率、lint、类型检查、构建检查和发布治理继续
+生效。底层 Harness
 继续继承 Stable V3.0：固定 C01/C02/C03/C04/C09 系统矩阵在执行提交
 `7d346fb77a191f0a5dbbb3157419cd0c0079c0cf` 上达到 15/15 PASS；正式聚合器在验证提交
 `cc150b0ae815e2add2f4ac036b3e0371205ddda4` 上逐 run 复核资格，二者之间仅包含报告验证器及其
@@ -58,12 +59,12 @@ Meta Review：`minicc meta-review <run_id>` 读取已结束 run 的不可变证�
 四文件归档见 `acceptance/stable-v3.1/`。Stable 声明限于审查链路、证据真实性、建议可追踪性和
 固定 case 非回归；尚未声明实际采纳建议能提高后续任务质量。
 
-当前开发分支为 `3.2.0.dev0`，只研究目标相关 Skill/Feedback 指引选择。A0 显式禁用两者，A1
-从固定 case workspace 中选择与目标相关的 Skill catalog 和 commit-bound Feedback rules，并把
-选择结果写入 metrics/trace。正式口径要求同一 G01 case、同一提交和 Provider 配置下 A0/A1
-各 3 次，A1 精确选择并直接注入有哈希的相关 skill 正文、不得选择干扰项、任务通过率不得下降，
-且至少减少每个 A1 run 一个 Bash 动作并降低总 prompt tokens。该阶段不声明自动经验
-提取、环境式检索、RAG 或跨任务质量提升。
+Stable V3.2 在执行提交 `178d3ed142b1d492c741539685cb13b51aa075f0` 上完成固定 G01 的
+A0/A1 各 3 次真实模型验收，两侧均为 3/3 PASS 且无 Provider/protocol failure。A0 不选择任何
+指引；A1 三次均且只选择 `release-manifest` 与 `release-legacy-id`。直接注入带哈希的相关 skill
+正文后，Bash 动作总数从 13 降至 6（-53.85%），prompt tokens 从 16,683 降至 8,162
+（-51.08%）。完整四文件归档见 `acceptance/stable-v3.2/`。该结论只覆盖固定 case，不声明自动
+经验提取、环境式检索、RAG 或跨任务质量提升。
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -628,7 +629,7 @@ uv run pytest -q
 uv run minicc traces
 ```
 
-版本化验收结果保存在 `acceptance/stable-v1.0/` 至 `acceptance/stable-v3.1/`。V3.0 的系统回归、Context、Memory、Resume 四维结论与逐 claim 证据入口见 `acceptance/stable-v3.0/report.md`；V3.1 Meta Review 的正式证据见 `acceptance/stable-v3.1/report.md`。
+版本化验收结果保存在 `acceptance/stable-v1.0/` 至 `acceptance/stable-v3.2/`。V3.0 的系统回归、Context、Memory、Resume 四维结论与逐 claim 证据入口见 `acceptance/stable-v3.0/report.md`；V3.1 Meta Review 的正式证据见 `acceptance/stable-v3.1/report.md`；V3.2 Skill/Feedback 指引 A/B 见 `acceptance/stable-v3.2/report.md`。
 
 V3.1 Meta Review 验收命令：
 

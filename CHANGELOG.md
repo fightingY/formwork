@@ -4,14 +4,20 @@
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-08-12
+
 ### Added
 
-- V3.2 实验分支增加目标相关 Skill/Feedback 确定性选择、选择 trace/metrics 和正式 A/B 报告门。
+- 增加目标相关 Skill/Feedback 确定性选择、带哈希的 Skill 正文注入、选择 trace/metrics 和正式 A/B 报告门。
 - A1 的反馈来源绑定到 eval workspace 中的固定提交，A0 显式禁用两类指引。
+
+### Validated
+
+- 固定 G01 上 A0/A1 各 3/3 PASS；A1 精确选择相关 Skill/Feedback，Bash 动作由 13 降至 6，prompt tokens 由 16,683 降至 8,162。
 
 ### Boundaries
 
-- 当前不声明自动反馈提取、环境式检索、RAG 或跨任务质量提升；只有正式 A/B 通过后才评估升格。
+- 不声明自动反馈提取、环境式检索、RAG 或跨任务质量提升。
 
 ## [3.1.1] - 2026-08-12
 

@@ -49,9 +49,14 @@ def test_guidance_ab_requires_exact_selection_and_non_regression(tmp_path) -> No
         _suite("a0", suite_id="suite-a0", run_prefix="a0"),
         _suite("a1", suite_id="suite-a1", run_prefix="a1"),
         source_commit="abc123",
+        verification_commit="def456",
+        execution_verification_changed_paths=["README.md"],
+        allowed_verification_paths=["README.md"],
     )
 
     assert report["passed"] is True
+    assert report["milestone"] == "stable-v3.2"
+    assert report["verification_commit"] == "def456"
     assert report["criteria"]["enabled_selects_exact_relevant_guidance"] is True
     bundle = write_guidance_ab_report(report, tmp_path / "acceptance")
     assert set(bundle) == {"report.json", "report.md", "report.csv", "manifest.json"}
@@ -69,3 +74,17 @@ def test_guidance_ab_rejects_distractor_selection() -> None:
 
     assert report["passed"] is False
     assert report["criteria"]["enabled_selects_exact_relevant_guidance"] is False
+
+
+def test_guidance_ab_rejects_unexpected_verification_delta() -> None:
+    report = build_guidance_ab_report(
+        _suite("a0", suite_id="suite-a0", run_prefix="a0"),
+        _suite("a1", suite_id="suite-a1", run_prefix="a1"),
+        source_commit="abc123",
+        verification_commit="def456",
+        execution_verification_changed_paths=["src/minicc/core/loop.py"],
+        allowed_verification_paths=["README.md"],
+    )
+
+    assert report["passed"] is False
+    assert report["criteria"]["verification_delta_allowed"] is False

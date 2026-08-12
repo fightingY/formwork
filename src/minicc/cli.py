@@ -2765,12 +2765,39 @@ def guidance_report_command(args: argparse.Namespace) -> int:
         if len(suite_commits) != 1 or not next(iter(suite_commits)):
             raise ValueError("both suites must be bound to one execution commit")
         source_commit = next(iter(suite_commits))
-        if args.release_gate and git_commit != source_commit:
-            raise ValueError("release verification must run on the execution commit")
+        execution_verification_changed_paths = _git_changed_paths(
+            Path.cwd(), source_commit, git_commit
+        )
+        allowed_changed_paths = {
+            "CHANGELOG.md",
+            "README.md",
+            "STABLE_V1_MILESTONE_ROADMAP.md",
+            "docs/ETCLOVG_CAPABILITY_MATRIX.md",
+            "minicc.yaml",
+            "pyproject.toml",
+            "src/minicc/__init__.py",
+            "src/minicc/cli.py",
+            "src/minicc/evals/guidance_ab.py",
+            "tests/test_cli.py",
+            "tests/test_guidance_ab.py",
+            "uv.lock",
+        }
+        if args.release_gate:
+            unexpected = sorted(
+                set(execution_verification_changed_paths) - allowed_changed_paths
+            )
+            if unexpected:
+                raise ValueError(
+                    "execution/verification commit delta contains disallowed paths: "
+                    + ", ".join(unexpected)
+                )
         report = build_guidance_ab_report(
             disabled,
             enabled,
             source_commit=source_commit,
+            verification_commit=git_commit,
+            execution_verification_changed_paths=execution_verification_changed_paths,
+            allowed_verification_paths=sorted(allowed_changed_paths),
         )
         bundle = write_guidance_ab_report(report, args.output_dir)
     except (OSError, ValueError, FileExistsError) as exc:

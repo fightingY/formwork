@@ -729,7 +729,7 @@ Provider transport retry。最终 A0/A1 仍为 3/3 与 3/3 PASS，20 项聚合�
 ```powershell
 uv run minicc eval eval_cases/guidance_suite_v1 --case G01_release_manifest_guidance --repeat 3 --guidance-variant a0 --guidance-sequence-id <round> --guidance-execution-order <a0-first|a1-first> --milestone v3.2-guidance-acceptance --release-gate
 uv run minicc eval eval_cases/guidance_suite_v1 --case G01_release_manifest_guidance --repeat 3 --guidance-variant a1 --guidance-sequence-id <same-round> --guidance-execution-order <same-order> --milestone v3.2-guidance-acceptance --release-gate
-uv run minicc guidance-report --disabled-suite <a0-report.json> --enabled-suite <a1-report.json> --output-dir acceptance/experimental-v3.2-guidance --release-gate
+uv run minicc guidance-report --disabled-suite <a0-report.json> --enabled-suite <a1-report.json> --output-dir acceptance/stable-v3.2 --release-gate
 ```
 
 验收标准：
@@ -743,6 +743,14 @@ uv run minicc guidance-report --disabled-suite <a0-report.json> --enabled-suite 
 
 通过只允许声明“canonical case 上的相关指引精确选择与任务非回归”。自动规则提取、长期记忆、
 跨 case 泛化或任务质量提升必须另开后续版本验证，不能由本结果外推。
+
+Stable 升格验收（2026-08-12）：执行提交
+`178d3ed142b1d492c741539685cb13b51aa075f0` 上的 A0 suite
+`suite-20260812-145957-8735fe6b` 与 A1 suite `suite-20260812-150155-3b650c49` 均为
+3/3 PASS，无 Provider/protocol failure。A0 三次选择均为空；A1 三次精确选择
+`release-manifest` 与 `release-legacy-id`，无干扰项。A1 Bash 动作总数从 13 降至 6，prompt
+tokens 从 16,683 降至 8,162，全部收益门通过。最终归档只保留
+`acceptance/stable-v3.2/` 下四个报告文件，声明边界维持不变。
 
 进入 Stable 的最低条件：
 
