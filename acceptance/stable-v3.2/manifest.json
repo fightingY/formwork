@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "entity_type": "guidance_ab_manifest",
+  "milestone": "stable-v3.2",
+  "source_commit": "178d3ed142b1d492c741539685cb13b51aa075f0",
+  "verification_commit": "c3ed297d9d66630fb4f726ecfb74f39b223ed2e6",
+  "status": "PASS",
+  "artifacts": {
+    "report_json": {
+      "path": "report.json",
+      "bytes": 3322,
+      "sha256": "9c39123f68c60afbc0d603ba1a77025b959af38a2a1eed2c9b995fe45af587f7"
+    },
+    "report_markdown": {
+      "path": "report.md",
+      "bytes": 1278,
+      "sha256": "70f85c3e05be838589e0dc5a7685432b8a5d6ea33440d03dd2cb8b2a840fa51f"
+    },
+    "report_csv": {
+      "path": "report.csv",
+      "bytes": 185,
+      "sha256": "21775f3aaeb421e8797e9a662c2abcff505eb247871b8f2514736f7db4991ecf"
+    }
+  }
+}

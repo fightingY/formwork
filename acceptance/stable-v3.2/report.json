@@ -1,0 +1,112 @@
+{
+  "schema_version": 2,
+  "entity_type": "guidance_ab_report",
+  "milestone": "stable-v3.2",
+  "created_at": "2026-08-12T07:20:14.129245+00:00",
+  "source_commit": "178d3ed142b1d492c741539685cb13b51aa075f0",
+  "verification_commit": "c3ed297d9d66630fb4f726ecfb74f39b223ed2e6",
+  "execution_verification_changed_paths": [
+    "CHANGELOG.md",
+    "README.md",
+    "STABLE_V1_MILESTONE_ROADMAP.md",
+    "docs/ETCLOVG_CAPABILITY_MATRIX.md",
+    "minicc.yaml",
+    "pyproject.toml",
+    "src/minicc/__init__.py",
+    "src/minicc/cli.py",
+    "src/minicc/evals/guidance_ab.py",
+    "tests/test_cli.py",
+    "tests/test_guidance_ab.py",
+    "uv.lock"
+  ],
+  "status": "PASS",
+  "passed": true,
+  "claim_scope": "Goal-relevant Skill catalog and commit-bound Feedback rules are selected with exact precision on the canonical case without reducing task pass rate. Automatic feedback extraction, ambient retrieval, RAG, and cross-task quality uplift are not claimed.",
+  "criteria": {
+    "source_commit_present": true,
+    "source_commit_matches_suites": true,
+    "verification_commit_present": true,
+    "verification_delta_allowed": true,
+    "suite_integrity_verified": true,
+    "canonical_identical_case": true,
+    "minimum_attempts_each": true,
+    "independent_runs": true,
+    "comparable_configuration": true,
+    "variant_identity": true,
+    "shared_sequence_and_order": true,
+    "disabled_selects_nothing": true,
+    "enabled_selects_exact_relevant_guidance": true,
+    "enabled_selection_events_once": true,
+    "enabled_pass_rate_not_lower": true,
+    "enabled_all_pass": true,
+    "enabled_uses_fewer_bash_actions": true,
+    "enabled_uses_fewer_prompt_tokens": true,
+    "no_provider_or_protocol_failures": true
+  },
+  "disabled": {
+    "suite_id": "suite-20260812-145957-8735fe6b",
+    "attempts": 3,
+    "passed_runs": 3,
+    "pass_rate": 1.0,
+    "bash_actions": 13,
+    "prompt_tokens": 16683,
+    "run_ids": [
+      "eval-G01_release_manifest_guidance-r1-20260812-145957-3ed3fbb2",
+      "eval-G01_release_manifest_guidance-r2-20260812-150031-258f96a4",
+      "eval-G01_release_manifest_guidance-r3-20260812-150110-27002d5f"
+    ],
+    "selections": [
+      {
+        "skills": [],
+        "rules": []
+      },
+      {
+        "skills": [],
+        "rules": []
+      },
+      {
+        "skills": [],
+        "rules": []
+      }
+    ]
+  },
+  "enabled": {
+    "suite_id": "suite-20260812-150155-3b650c49",
+    "attempts": 3,
+    "passed_runs": 3,
+    "pass_rate": 1.0,
+    "bash_actions": 6,
+    "prompt_tokens": 8162,
+    "run_ids": [
+      "eval-G01_release_manifest_guidance-r1-20260812-150155-1bbc29d3",
+      "eval-G01_release_manifest_guidance-r2-20260812-150218-d008ff33",
+      "eval-G01_release_manifest_guidance-r3-20260812-150254-e8ab4c61"
+    ],
+    "selections": [
+      {
+        "skills": [
+          "release-manifest"
+        ],
+        "rules": [
+          "release-legacy-id"
+        ]
+      },
+      {
+        "skills": [
+          "release-manifest"
+        ],
+        "rules": [
+          "release-legacy-id"
+        ]
+      },
+      {
+        "skills": [
+          "release-manifest"
+        ],
+        "rules": [
+          "release-legacy-id"
+        ]
+      }
+    ]
+  }
+}
