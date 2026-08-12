@@ -319,18 +319,46 @@ class ContextBuilder:
 
     def _instruction_context(self, state: RunState) -> list[str]:
         context: list[str] = []
+        selected_skills: list[str] = []
+        selected_rules: list[str] = []
         if self.skill_registry is not None:
-            skill_catalog = self.skill_registry.catalog_text()
+            skills = self.skill_registry.relevant_skills(state.goal)
+            selected_skills = [skill.name for skill in skills]
+            skill_catalog = self.skill_registry.catalog_text(state.goal)
             if skill_catalog:
                 context.append(skill_catalog)
         if self.feedback_memory is not None:
+            rules = self.feedback_memory.relevant_rules(state.goal)
+            selected_rules = [rule.id for rule in rules]
             memory_context = self.feedback_memory.context_text(state.goal)
             if memory_context:
                 context.append(memory_context)
+        self._record_guidance_selection(state, selected_skills, selected_rules)
         follow_up_context = working_memory_context(state)
         if follow_up_context:
             context.append(follow_up_context)
         return context
+
+    def _record_guidance_selection(
+        self,
+        state: RunState,
+        skill_names: list[str],
+        feedback_rule_ids: list[str],
+    ) -> None:
+        state.metrics["guidance_skill_names"] = skill_names
+        state.metrics["guidance_skill_count"] = len(skill_names)
+        state.metrics["guidance_feedback_rule_ids"] = feedback_rule_ids
+        state.metrics["guidance_feedback_rule_count"] = len(feedback_rule_ids)
+        if state.metrics.get("guidance_selection_events"):
+            return
+        state.metrics["guidance_selection_events"] = 1
+        if self.trace is not None:
+            self.trace.record(
+                "guidance_selected",
+                state,
+                skill_names=skill_names,
+                feedback_rule_ids=feedback_rule_ids,
+            )
 
     def _record_working_memory_injection(self, state: RunState) -> None:
         if not state.working_memory or state.metrics.get("working_memory_injection_events"):

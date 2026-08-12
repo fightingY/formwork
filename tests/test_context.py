@@ -450,15 +450,22 @@ def test_context_builder_injects_skill_catalog_and_feedback_memory(tmp_path) -> 
         '{"id":"mem_1","type":"caution","rule":"Use rg before broad file reads."}\n',
         encoding="utf-8",
     )
+    trace = TraceRecorder()
     builder = ContextBuilder(
         skill_registry=SkillRegistry(tmp_path / "skills"),
         feedback_memory=FeedbackMemory(memory_path),
+        trace=trace,
     )
 
-    messages = builder.build_messages(RunState.start("Use rg to inspect repository files"), [])
+    state = RunState.start("Use rg to inspect repository files")
+    messages = builder.build_messages(state, [])
+    builder.build_messages(state, [])
 
     assert "repo-inspection: Inspect repository structure." in messages[1]["content"]
     assert "caution: Use rg before broad file reads." in messages[1]["content"]
+    assert state.metrics["guidance_skill_names"] == ["repo-inspection"]
+    assert state.metrics["guidance_feedback_rule_ids"] == ["mem_1"]
+    assert [event["event"] for event in trace.events].count("guidance_selected") == 1
 
 
 def test_context_builder_adds_budget_pressure_after_thresholds() -> None:

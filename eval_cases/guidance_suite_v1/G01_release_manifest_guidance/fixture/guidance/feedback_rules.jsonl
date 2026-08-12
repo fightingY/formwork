@@ -1,0 +1,2 @@
+{"id":"release-legacy-id","type":"caution","rule":"For release manifest compatibility, preserve the legacy release_id key and sort file paths without mutating caller input.","scope":"project"}
+{"id":"database-online-migration","type":"prefer","rule":"For database migrations, prefer an online expand-and-contract rollout.","scope":"project"}

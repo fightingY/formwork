@@ -1,0 +1,1 @@
+"""Release manifest tests."""

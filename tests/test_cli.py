@@ -423,6 +423,25 @@ def test_eval_parser_accepts_cache_variant() -> None:
     assert args.cache_variant == "p2"
 
 
+def test_eval_parser_accepts_guidance_variant() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "eval",
+            "eval_cases/guidance_suite_v1",
+            "--guidance-variant",
+            "a1",
+            "--guidance-sequence-id",
+            "round-1",
+            "--guidance-execution-order",
+            "a0-first",
+        ]
+    )
+
+    assert args.guidance_variant == "a1"
+    assert args.guidance_sequence_id == "round-1"
+    assert args.guidance_feedback_path == "guidance/feedback_rules.jsonl"
+
+
 def test_cache_utilization_parser_collects_exact_round_inputs(tmp_path) -> None:
     args = cli.build_parser().parse_args(
         [
@@ -1135,5 +1154,5 @@ def test_cleanup_command_defaults_to_dry_run_and_apply_uses_same_candidate(tmp_p
     assert not run_dir.exists()
 
 
-def test_cli_version_matches_stable_v311_package() -> None:
-    assert __version__ == "3.1.1"
+def test_cli_version_matches_v32_development_package() -> None:
+    assert __version__ == "3.2.0.dev0"

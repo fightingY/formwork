@@ -708,6 +708,40 @@ Provider transport retry。最终 A0/A1 仍为 3/3 与 3/3 PASS，20 项聚合�
 
 本补丁不需要重新调用 Provider；Stable V3.1 Meta Review 与 V3.0 四维能力结论继续引用原正式归档。
 
+### V3.2：目标相关 Skill/Feedback 指引选择
+
+目标：把现有“展示全部 Skill catalog + 读取本机可变反馈文件”收敛为可审计、可绑定、可做 A/B 的
+相关指引选择能力。本阶段不实现自动反馈提取、环境式检索或 RAG。
+
+进入条件：`stable-v3.1.1` 工程质量补丁已通过并发布；开发从该 tag 建立
+`experimental/skill-feedback-memory`。
+
+实现范围：
+
+- Skill 仅按 goal 与 name/description 的确定性词项重合选择，排序和上限固定，拒绝 symlink skill。
+- 正式 A1 的 Feedback rules 必须来自 eval workspace 中的 `guidance/feedback_rules.jsonl`，由 case
+  authority 与 Git commit 共同绑定；不得读取本机 ambient `.minicc` 作为正式证据。
+- 每个 run 在 metrics/trace 中记录 skill 名称、feedback rule ID 和唯一 selection event。
+- `guidance-report` 只聚合完整、不可变且同提交的 A0/A1 suite，并输出四文件报告。
+
+正式协议：
+
+```powershell
+uv run minicc eval eval_cases/guidance_suite_v1 --case G01_release_manifest_guidance --repeat 3 --guidance-variant a0 --guidance-sequence-id <round> --guidance-execution-order <a0-first|a1-first> --milestone v3.2-guidance-acceptance --release-gate
+uv run minicc eval eval_cases/guidance_suite_v1 --case G01_release_manifest_guidance --repeat 3 --guidance-variant a1 --guidance-sequence-id <same-round> --guidance-execution-order <same-order> --milestone v3.2-guidance-acceptance --release-gate
+uv run minicc guidance-report --disabled-suite <a0-report.json> --enabled-suite <a1-report.json> --output-dir acceptance/experimental-v3.2-guidance --release-gate
+```
+
+验收标准：
+
+- A0/A1 各 3 个独立真实模型 run，绑定同一实现提交、case authority、模型、温度和 Docker 摘要。
+- A0 三次均不选择 skill/rule；A1 三次均且只选择 `release-manifest` 与 `release-legacy-id`，干扰项为 0。
+- A1 3/3 PASS 且通过率不低于 A0；两个 arm 均无 Provider/protocol failure。
+- 全量工程门继续通过，最终 acceptance 只保留 report JSON/Markdown/CSV/manifest 四个文件。
+
+通过只允许声明“canonical case 上的相关指引精确选择与任务非回归”。自动规则提取、长期记忆、
+跨 case 泛化或任务质量提升必须另开后续版本验证，不能由本结果外推。
+
 进入 Stable 的最低条件：
 
 - 先有确定性单元和集成测试。

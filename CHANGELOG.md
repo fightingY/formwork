@@ -2,6 +2,17 @@
 
 本文件记录 miniCC 的稳定版本变更。格式参考 Keep a Changelog，版本号遵循语义化版本。
 
+## [Unreleased]
+
+### Added
+
+- V3.2 实验分支增加目标相关 Skill/Feedback 确定性选择、选择 trace/metrics 和正式 A/B 报告门。
+- A1 的反馈来源绑定到 eval workspace 中的固定提交，A0 显式禁用两类指引。
+
+### Boundaries
+
+- 当前不声明自动反馈提取、环境式检索、RAG 或跨任务质量提升；只有正式 A/B 通过后才评估升格。
+
 ## [3.1.1] - 2026-08-12
 
 ### Added

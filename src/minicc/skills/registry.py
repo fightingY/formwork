@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,8 +27,23 @@ class SkillRegistry:
                 skills.append(skill)
         return skills
 
-    def catalog_text(self, *, limit: int = 20) -> str:
-        skills = self.list_skills()[:limit]
+    def relevant_skills(self, goal: str, *, limit: int = 5) -> list[Skill]:
+        if limit < 1:
+            return []
+        goal_terms = _terms(goal)
+        if not goal_terms:
+            return []
+        scored: list[tuple[int, str, Skill]] = []
+        for skill in self.list_skills():
+            skill_terms = _terms(f"{skill.name} {skill.description}")
+            score = len(goal_terms & skill_terms)
+            if score:
+                scored.append((-score, skill.name, skill))
+        scored.sort(key=lambda item: (item[0], item[1]))
+        return [item[2] for item in scored[:limit]]
+
+    def catalog_text(self, goal: str | None = None, *, limit: int = 5) -> str:
+        skills = self.relevant_skills(goal, limit=limit) if goal is not None else self.list_skills()[:limit]
         if not skills:
             return ""
         lines = ["Available skills:"]
@@ -38,6 +54,8 @@ class SkillRegistry:
 
 
 def _parse_skill_file(path: Path) -> Skill | None:
+    if path.is_symlink() or not path.is_file():
+        return None
     text = path.read_text(encoding="utf-8")
     metadata = _frontmatter(text)
     name = metadata.get("name") or path.parent.name
@@ -74,3 +92,11 @@ def _first_non_empty_body_line(text: str) -> str:
         if stripped:
             return stripped
     return ""
+
+
+def _terms(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[\w-]+", text.lower(), flags=re.UNICODE)
+        if len(token) >= 3
+    }

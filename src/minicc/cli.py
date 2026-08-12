@@ -69,6 +69,7 @@ from minicc.evals.compaction_ab import (
 from minicc.evals.compaction_ab import (
     load_suite_report as load_compaction_suite_report,
 )
+from minicc.evals.guidance_ab import build_guidance_ab_report, write_guidance_ab_report
 from minicc.evals.memory_ab import load_follow_up_case, run_memory_ab, write_memory_ab_report
 from minicc.evals.memory_acceptance import (
     REQUIRED_MEMORY_CASES,
@@ -239,6 +240,28 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("p0-first", "p1-first", "p2-first"),
         default=None,
         help="Record the balanced P0/P1 order used for this cache experiment round.",
+    )
+    eval_parser.add_argument(
+        "--guidance-variant",
+        choices=("a0", "a1"),
+        default=None,
+        help="V3.2 guidance experiment: a0=disabled, a1=relevant Skill/Feedback selection.",
+    )
+    eval_parser.add_argument(
+        "--guidance-sequence-id",
+        default=None,
+        help="Within-round namespace shared by the V3.2 A0/A1 guidance arms.",
+    )
+    eval_parser.add_argument(
+        "--guidance-execution-order",
+        choices=("a0-first", "a1-first"),
+        default=None,
+        help="Record the balanced A0/A1 order used for the V3.2 guidance experiment.",
+    )
+    eval_parser.add_argument(
+        "--guidance-feedback-path",
+        default="guidance/feedback_rules.jsonl",
+        help="Workspace-relative, commit-bound feedback rule source for the A1 arm.",
     )
     eval_parser.set_defaults(handler=eval_command)
 
@@ -499,6 +522,16 @@ def build_parser() -> argparse.ArgumentParser:
     meta_report_parser.add_argument("--output-dir", type=Path, required=True)
     meta_report_parser.add_argument("--release-gate", action="store_true")
     meta_report_parser.set_defaults(handler=meta_review_report_command)
+
+    guidance_report_parser = subparsers.add_parser(
+        "guidance-report",
+        help="Verify and aggregate the V3.2 disabled/enabled guidance suites.",
+    )
+    guidance_report_parser.add_argument("--disabled-suite", type=Path, required=True)
+    guidance_report_parser.add_argument("--enabled-suite", type=Path, required=True)
+    guidance_report_parser.add_argument("--output-dir", type=Path, required=True)
+    guidance_report_parser.add_argument("--release-gate", action="store_true")
+    guidance_report_parser.set_defaults(handler=guidance_report_command)
 
     web_parser = subparsers.add_parser("web", help="Serve a read-only trace viewer.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
@@ -827,6 +860,19 @@ def _build_loop(
         and state.prompt_namespace.startswith(("cache-experiment/", "memory-experiment/"))
         else FeedbackMemory(Path.cwd() / ".minicc" / "memory" / "feedback_rules.jsonl")
     )
+    if state is not None and state.metrics.get("guidance_variant") == "a0":
+        skill_registry = None
+        feedback_memory = None
+    else:
+        skill_registry = SkillRegistry(skill_root)
+        if (
+            state is not None
+            and state.workspace_host_path is not None
+            and state.metrics.get("guidance_feedback_path")
+        ):
+            feedback_memory = FeedbackMemory(
+                state.workspace_host_path / str(state.metrics["guidance_feedback_path"])
+            )
     return AgentLoop(
         provider,
         executor,
@@ -841,7 +887,7 @@ def _build_loop(
                 retention_markers=settings.context.retention_markers,
                 prompt_layout=prompt_layout,
             ),
-            skill_registry=SkillRegistry(skill_root),
+            skill_registry=skill_registry,
             feedback_memory=feedback_memory,
             semantic_compactor=semantic_compactor,
         ),
@@ -893,6 +939,35 @@ def eval_command(args: argparse.Namespace) -> int:
     cache_variant = getattr(args, "cache_variant", None)
     cache_sequence_id = str(getattr(args, "cache_sequence_id", "") or "").strip()
     execution_order = getattr(args, "execution_order", None)
+    guidance_variant = getattr(args, "guidance_variant", None)
+    guidance_sequence_id = str(getattr(args, "guidance_sequence_id", "") or "").strip()
+    guidance_execution_order = getattr(args, "guidance_execution_order", None)
+    guidance_feedback_path = str(
+        getattr(args, "guidance_feedback_path", "guidance/feedback_rules.jsonl") or ""
+    ).strip().replace("\\", "/")
+    if guidance_variant and (context_variant or cache_variant):
+        print("--guidance-variant cannot be combined with context/cache variants.", file=sys.stderr)
+        return 2
+    if guidance_variant and not guidance_sequence_id:
+        print("--guidance-variant requires --guidance-sequence-id.", file=sys.stderr)
+        return 2
+    if guidance_variant and not guidance_execution_order:
+        print("--guidance-variant requires --guidance-execution-order.", file=sys.stderr)
+        return 2
+    if (guidance_sequence_id or guidance_execution_order) and not guidance_variant:
+        print("guidance sequence/order options require --guidance-variant.", file=sys.stderr)
+        return 2
+    if guidance_variant and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", guidance_sequence_id):
+        print("invalid --guidance-sequence-id.", file=sys.stderr)
+        return 2
+    feedback_parts = PurePosixPath(guidance_feedback_path).parts
+    if guidance_variant and (
+        not guidance_feedback_path
+        or PurePosixPath(guidance_feedback_path).is_absolute()
+        or ".." in feedback_parts
+    ):
+        print("--guidance-feedback-path must be a safe workspace-relative path.", file=sys.stderr)
+        return 2
     if cache_variant is not None and not cache_sequence_id:
         print("--cache-variant requires --cache-sequence-id.", file=sys.stderr)
         return 2
@@ -918,10 +993,16 @@ def eval_command(args: argparse.Namespace) -> int:
             {"p0": "rebuild", "p1": "append", "p2": "epoch"}[cache_variant],
         )
         settings = replace(settings, context=replace(settings.context, prompt_layout=prompt_layout))
+    guidance_namespace = (
+        f"guidance-experiment/{guidance_sequence_id}/{guidance_variant}"
+        if guidance_variant
+        else ""
+    )
     milestone = _effective_milestone(settings, args)
     v212_formal = bool(args.release_gate and "2.1.2" in milestone)
     v30_formal = bool(args.release_gate and "3.0" in milestone)
-    authority_locked_formal = v212_formal or v30_formal
+    v32_formal = bool(args.release_gate and milestone == "v3.2-guidance-acceptance")
+    authority_locked_formal = v212_formal or v30_formal or v32_formal
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     git_commit, worktree_dirty = _git_evidence(Path.cwd())
     selected_case_names = set(args.case_names or [])
@@ -950,6 +1031,11 @@ def eval_command(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if v32_formal and (
+        len(selected_cases) != 1 or selected_cases[0].name != "G01_release_manifest_guidance"
+    ):
+        print("Release gate rejected: V3.2 requires the canonical G01 case", file=sys.stderr)
+        return 2
     live_case_authority_profiles = build_case_authority_profiles(
         selected_cases,
         project_root=Path.cwd(),
@@ -959,7 +1045,11 @@ def eval_command(args: argparse.Namespace) -> int:
         profile_error = (
             _v212_authority_profile_error(live_case_authority_profiles)
             if v212_formal
-            else _v30_authority_profile_error(live_case_authority_profiles)
+            else (
+                _v30_authority_profile_error(live_case_authority_profiles)
+                if v30_formal
+                else ""
+            )
         )
         if profile_error:
             print(f"Release gate rejected: {profile_error}", file=sys.stderr)
@@ -1026,6 +1116,11 @@ def eval_command(args: argparse.Namespace) -> int:
         state.constraints.extend(_case_constraints(case))
         if cache_namespace:
             state.prompt_namespace = cache_namespace
+        if guidance_namespace:
+            state.prompt_namespace = guidance_namespace
+            state.metrics["guidance_variant"] = guidance_variant
+            state.metrics["guidance_sequence_id"] = guidance_sequence_id
+            state.metrics["guidance_feedback_path"] = guidance_feedback_path
         if state.run_dir is None or state.artifacts_dir is None or state.workspace_host_path is None:
             raise RuntimeError("eval runner did not initialize run workspace paths")
         artifacts = ArtifactStore(
@@ -1102,7 +1197,15 @@ def eval_command(args: argparse.Namespace) -> int:
         "cache_variant": cache_variant or "configured",
         "cache_sequence_id": cache_sequence_id or None,
         "execution_order": execution_order,
-        "feedback_memory_mode": "disabled" if cache_variant else "configured",
+        "guidance_variant": guidance_variant or "configured",
+        "guidance_sequence_id": guidance_sequence_id or None,
+        "guidance_execution_order": guidance_execution_order,
+        "guidance_feedback_path": guidance_feedback_path if guidance_variant else None,
+        "feedback_memory_mode": (
+            "disabled"
+            if cache_variant or guidance_variant == "a0"
+            else "commit_bound" if guidance_variant == "a1" else "configured"
+        ),
         "prompt_layout": settings.context.prompt_layout,
         "compaction_strategy": settings.context.compaction_strategy,
         "system_prefix_sha256": hashlib.sha256(STABLE_PREFIX.encode("utf-8")).hexdigest(),
@@ -2298,6 +2401,22 @@ def _release_gate_error(
         }
         if set(args.case_names) != expected_cases:
             return "V3.0 acceptance requires the exact C01/C02/C03/C04/C09 matrix"
+    if milestone == "v3.2-guidance-acceptance":
+        if args.repeat != 3:
+            return "V3.2 guidance acceptance requires exactly --repeat 3"
+        expected_path = (Path.cwd() / "eval_cases" / "guidance_suite_v1").resolve()
+        if Path(args.path).resolve() != expected_path:
+            return "V3.2 guidance acceptance requires eval_cases/guidance_suite_v1"
+        if set(args.case_names) != {"G01_release_manifest_guidance"}:
+            return "V3.2 guidance acceptance requires the canonical G01 case"
+        if getattr(args, "guidance_variant", None) not in {"a0", "a1"}:
+            return "V3.2 guidance acceptance requires --guidance-variant"
+        if not getattr(args, "guidance_sequence_id", None):
+            return "V3.2 guidance acceptance requires --guidance-sequence-id"
+        if not getattr(args, "guidance_execution_order", None):
+            return "V3.2 guidance acceptance requires --guidance-execution-order"
+        if getattr(args, "guidance_feedback_path", None) != "guidance/feedback_rules.jsonl":
+            return "V3.2 guidance acceptance requires the canonical feedback path"
     return ""
 
 
@@ -2626,6 +2745,38 @@ def meta_review_report_command(args: argparse.Namespace) -> int:
         print(f"Meta Review report failed: {exc}", file=sys.stderr)
         return 1
     print(f"meta_review_ab_status: {report['status']}")
+    print(f"json_report: {bundle['report.json']}")
+    print(f"markdown_report: {bundle['report.md']}")
+    return 0 if report["passed"] else 1
+
+
+def guidance_report_command(args: argparse.Namespace) -> int:
+    git_commit, worktree_dirty = _git_evidence(Path.cwd())
+    if args.release_gate and worktree_dirty:
+        print("Release gate rejected: worktree must be clean", file=sys.stderr)
+        return 2
+    try:
+        disabled = load_cache_suite_report(args.disabled_suite, verify_manifest=True)
+        enabled = load_cache_suite_report(args.enabled_suite, verify_manifest=True)
+        suite_commits = {
+            str(suite.get("configuration", {}).get("git_commit") or "")
+            for suite in (disabled, enabled)
+        }
+        if len(suite_commits) != 1 or not next(iter(suite_commits)):
+            raise ValueError("both suites must be bound to one execution commit")
+        source_commit = next(iter(suite_commits))
+        if args.release_gate and git_commit != source_commit:
+            raise ValueError("release verification must run on the execution commit")
+        report = build_guidance_ab_report(
+            disabled,
+            enabled,
+            source_commit=source_commit,
+        )
+        bundle = write_guidance_ab_report(report, args.output_dir)
+    except (OSError, ValueError, FileExistsError) as exc:
+        print(f"Guidance report failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"guidance_ab_status: {report['status']}")
     print(f"json_report: {bundle['report.json']}")
     print(f"markdown_report: {bundle['report.md']}")
     return 0 if report["passed"] else 1

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -65,6 +66,9 @@ class FeedbackMemory:
             lines.append(f"- {rule.type}: {rule.rule}")
         return "\n".join(lines)
 
+    def selected_rule_ids(self, goal: str, *, limit: int = 10) -> list[str]:
+        return [rule.id for rule in self.relevant_rules(goal, limit=limit)]
+
 
 def _rule_from_payload(payload: Any) -> FeedbackRule | None:
     if not isinstance(payload, dict):
@@ -85,16 +89,8 @@ def _rule_from_payload(payload: Any) -> FeedbackRule | None:
 
 
 def _terms(text: str) -> set[str]:
-    normalized = text.lower()
-    token = ""
-    terms: set[str] = set()
-    for char in normalized:
-        if char.isalnum() or char in {"_", "-"}:
-            token += char
-            continue
-        if len(token) >= 3:
-            terms.add(token)
-        token = ""
-    if len(token) >= 3:
-        terms.add(token)
-    return terms
+    return {
+        token
+        for token in re.findall(r"[\w-]+", text.lower(), flags=re.UNICODE)
+        if len(token) >= 3
+    }
