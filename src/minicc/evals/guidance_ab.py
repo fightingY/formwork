@@ -68,6 +68,10 @@ def build_guidance_ab_report(
         and all(_integer(_metrics(row).get("guidance_selection_events")) == 1 for row in enabled_cases),
         "enabled_pass_rate_not_lower": enabled_rate >= disabled_rate,
         "enabled_all_pass": bool(enabled_cases) and enabled_rate == 1.0,
+        "enabled_uses_fewer_bash_actions": _arm_bash_actions(enabled_cases)
+        <= _arm_bash_actions(disabled_cases) - len(enabled_cases),
+        "enabled_uses_fewer_prompt_tokens": _arm_prompt_tokens(enabled_cases)
+        < _arm_prompt_tokens(disabled_cases),
         "no_provider_or_protocol_failures": all(
             _integer(_metrics(row).get(key)) == 0
             for row in (*disabled_cases, *enabled_cases)
@@ -190,11 +194,19 @@ def _arm_summary(suite: Mapping[str, Any], cases: list[Mapping[str, Any]]) -> di
         "attempts": len(cases),
         "passed_runs": sum(row.get("passed") is True for row in cases),
         "pass_rate": _pass_rate(cases),
-        "bash_actions": sum(_integer(_metrics(row).get("bash_actions")) for row in cases),
-        "prompt_tokens": sum(_integer(_metrics(row).get("prompt_tokens")) for row in cases),
+        "bash_actions": _arm_bash_actions(cases),
+        "prompt_tokens": _arm_prompt_tokens(cases),
         "run_ids": [row.get("run_id") for row in cases],
         "selections": [_selection(row) for row in cases],
     }
+
+
+def _arm_bash_actions(cases: list[Mapping[str, Any]]) -> int:
+    return sum(_integer(_metrics(row).get("bash_actions")) for row in cases)
+
+
+def _arm_prompt_tokens(cases: list[Mapping[str, Any]]) -> int:
+    return sum(_integer(_metrics(row).get("prompt_tokens")) for row in cases)
 
 
 def _format_markdown(report: Mapping[str, Any]) -> str:

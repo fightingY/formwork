@@ -320,20 +320,27 @@ class ContextBuilder:
     def _instruction_context(self, state: RunState) -> list[str]:
         context: list[str] = []
         selected_skills: list[str] = []
+        selected_skill_hashes: dict[str, str] = {}
         selected_rules: list[str] = []
         if self.skill_registry is not None:
             skills = self.skill_registry.relevant_skills(state.goal)
             selected_skills = [skill.name for skill in skills]
-            skill_catalog = self.skill_registry.catalog_text(state.goal)
-            if skill_catalog:
-                context.append(skill_catalog)
+            selected_skill_hashes = {skill.name: skill.sha256 for skill in skills}
+            skill_guidance = self.skill_registry.guidance_text(state.goal)
+            if skill_guidance:
+                context.append(skill_guidance)
         if self.feedback_memory is not None:
             rules = self.feedback_memory.relevant_rules(state.goal)
             selected_rules = [rule.id for rule in rules]
             memory_context = self.feedback_memory.context_text(state.goal)
             if memory_context:
                 context.append(memory_context)
-        self._record_guidance_selection(state, selected_skills, selected_rules)
+        self._record_guidance_selection(
+            state,
+            selected_skills,
+            selected_skill_hashes,
+            selected_rules,
+        )
         follow_up_context = working_memory_context(state)
         if follow_up_context:
             context.append(follow_up_context)
@@ -343,10 +350,12 @@ class ContextBuilder:
         self,
         state: RunState,
         skill_names: list[str],
+        skill_hashes: dict[str, str],
         feedback_rule_ids: list[str],
     ) -> None:
         state.metrics["guidance_skill_names"] = skill_names
         state.metrics["guidance_skill_count"] = len(skill_names)
+        state.metrics["guidance_skill_hashes"] = skill_hashes
         state.metrics["guidance_feedback_rule_ids"] = feedback_rule_ids
         state.metrics["guidance_feedback_rule_count"] = len(feedback_rule_ids)
         if state.metrics.get("guidance_selection_events"):
@@ -357,6 +366,7 @@ class ContextBuilder:
                 "guidance_selected",
                 state,
                 skill_names=skill_names,
+                skill_hashes=skill_hashes,
                 feedback_rule_ids=feedback_rule_ids,
             )
 

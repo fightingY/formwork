@@ -737,6 +737,8 @@ uv run minicc guidance-report --disabled-suite <a0-report.json> --enabled-suite 
 - A0/A1 各 3 个独立真实模型 run，绑定同一实现提交、case authority、模型、温度和 Docker 摘要。
 - A0 三次均不选择 skill/rule；A1 三次均且只选择 `release-manifest` 与 `release-legacy-id`，干扰项为 0。
 - A1 3/3 PASS 且通过率不低于 A0；两个 arm 均无 Provider/protocol failure。
+- A1 三次合计 Bash 动作至少比 A0 少 3 个，且总 prompt tokens 低于 A0；只证明该固定 case 的
+  指引收益，不外推到其他任务。
 - 全量工程门继续通过，最终 acceptance 只保留 report JSON/Markdown/CSV/manifest 四个文件。
 
 通过只允许声明“canonical case 上的相关指引精确选择与任务非回归”。自动规则提取、长期记忆、

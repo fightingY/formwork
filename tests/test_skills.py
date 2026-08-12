@@ -23,6 +23,8 @@ def test_skill_registry_reads_frontmatter_catalog(tmp_path) -> None:
     assert len(skills) == 1
     assert skills[0].name == "python-debugging"
     assert skills[0].description == "Debug pytest failures."
+    assert skills[0].instructions == "Use pytest output to find the first failure."
+    assert len(skills[0].sha256) == 64
     assert "python-debugging: Debug pytest failures." in registry.catalog_text()
 
 
@@ -35,7 +37,7 @@ def test_skill_registry_selects_only_goal_relevant_skills(tmp_path) -> None:
         skill_dir = skills_root / name
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: {description}\n---\n",
+            f"---\nname: {name}\ndescription: {description}\n---\nFollow the scoped guidance.\n",
             encoding="utf-8",
         )
 
@@ -48,3 +50,6 @@ def test_skill_registry_selects_only_goal_relevant_skills(tmp_path) -> None:
     assert "python-debugging" in catalog
     assert "release-notes" not in catalog
     assert registry.catalog_text("Unrelated database migration") == ""
+    guidance = registry.guidance_text("Fix a python pytest failure")
+    assert "Selected skill instructions:" in guidance
+    assert "python-debugging" in guidance

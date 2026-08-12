@@ -442,7 +442,8 @@ def test_context_builder_injects_skill_catalog_and_feedback_memory(tmp_path) -> 
     skill_dir = tmp_path / "skills" / "repo-inspection"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: repo-inspection\ndescription: Inspect repository structure.\n---\n",
+        "---\nname: repo-inspection\ndescription: Inspect repository structure.\n---\n"
+        "Use rg to inspect the repository.\n",
         encoding="utf-8",
     )
     memory_path = tmp_path / "feedback_rules.jsonl"
@@ -461,9 +462,11 @@ def test_context_builder_injects_skill_catalog_and_feedback_memory(tmp_path) -> 
     messages = builder.build_messages(state, [])
     builder.build_messages(state, [])
 
-    assert "repo-inspection: Inspect repository structure." in messages[1]["content"]
+    assert "## repo-inspection" in messages[1]["content"]
+    assert "Description: Inspect repository structure." in messages[1]["content"]
     assert "caution: Use rg before broad file reads." in messages[1]["content"]
     assert state.metrics["guidance_skill_names"] == ["repo-inspection"]
+    assert len(state.metrics["guidance_skill_hashes"]["repo-inspection"]) == 64
     assert state.metrics["guidance_feedback_rule_ids"] == ["mem_1"]
     assert [event["event"] for event in trace.events].count("guidance_selected") == 1
 

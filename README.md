@@ -61,7 +61,8 @@ Meta Review：`minicc meta-review <run_id>` 读取已结束 run 的不可变证�
 当前开发分支为 `3.2.0.dev0`，只研究目标相关 Skill/Feedback 指引选择。A0 显式禁用两者，A1
 从固定 case workspace 中选择与目标相关的 Skill catalog 和 commit-bound Feedback rules，并把
 选择结果写入 metrics/trace。正式口径要求同一 G01 case、同一提交和 Provider 配置下 A0/A1
-各 3 次，A1 精确选择相关指引、不得选择干扰项且任务通过率不得下降。该阶段不声明自动经验
+各 3 次，A1 精确选择并直接注入有哈希的相关 skill 正文、不得选择干扰项、任务通过率不得下降，
+且至少减少每个 A1 run 一个 Bash 动作并降低总 prompt tokens。该阶段不声明自动经验
 提取、环境式检索、RAG 或跨任务质量提升。
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。

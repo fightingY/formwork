@@ -35,8 +35,8 @@ def _suite(variant: str, *, suite_id: str, run_prefix: str) -> dict:
                     "guidance_selection_events": 1,
                     "provider_errors": 0,
                     "protocol_errors": 0,
-                    "bash_actions": 3,
-                    "prompt_tokens": 100,
+                    "bash_actions": 4 if variant == "a0" else 2,
+                    "prompt_tokens": 140 if variant == "a0" else 100,
                 },
             }
             for index in range(1, 4)

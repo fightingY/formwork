@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,8 @@ class Skill:
     name: str
     description: str
     path: Path
+    instructions: str
+    sha256: str
 
 
 class SkillRegistry:
@@ -52,17 +55,42 @@ class SkillRegistry:
         lines.append("Load a skill only when useful by reading its SKILL.md with bash.")
         return "\n".join(lines)
 
+    def guidance_text(self, goal: str, *, limit: int = 5) -> str:
+        skills = self.relevant_skills(goal, limit=limit)
+        if not skills:
+            return ""
+        sections = ["Selected skill instructions:"]
+        for skill in skills:
+            sections.extend(
+                [
+                    f"## {skill.name}",
+                    f"Description: {skill.description}",
+                    skill.instructions,
+                ]
+            )
+        return "\n".join(sections)
+
 
 def _parse_skill_file(path: Path) -> Skill | None:
     if path.is_symlink() or not path.is_file():
         return None
-    text = path.read_text(encoding="utf-8")
+    raw = path.read_bytes()
+    text = raw.decode("utf-8")
     metadata = _frontmatter(text)
     name = metadata.get("name") or path.parent.name
     description = metadata.get("description") or _first_non_empty_body_line(text)
     if not name or not description:
         return None
-    return Skill(name=name, description=description, path=path)
+    instructions = _body(text)[:4_000].strip()
+    if not instructions:
+        return None
+    return Skill(
+        name=name,
+        description=description,
+        path=path,
+        instructions=instructions,
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
 
 
 def _frontmatter(text: str) -> dict[str, str]:
@@ -91,6 +119,16 @@ def _first_non_empty_body_line(text: str) -> str:
         stripped = line.strip().lstrip("#").strip()
         if stripped:
             return stripped
+    return ""
+
+
+def _body(text: str) -> str:
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            return "\n".join(lines[index + 1 :])
     return ""
 
 
