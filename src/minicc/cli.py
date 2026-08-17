@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -32,10 +33,12 @@ from minicc.core.ledger import (
     write_artifact_index,
 )
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
+from minicc.core.project_context import inspect_repository, write_repository_profile
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
+from minicc.core.verification import CommandCompletionVerifier, CompletionVerifier
 from minicc.evals.cache_ab import (
     build_cache_ab_report,
     write_cache_ab_report,
@@ -99,11 +102,14 @@ from minicc.sandbox.docker_runner import (
 from minicc.sandbox.local_runner import LocalCommandExecutor
 from minicc.sandbox.workspace import (
     prepare_run_workspace,
+    workspace_content_digest,
     workspace_content_records,
     write_workspace_diff,
 )
 from minicc.skills.registry import SkillRegistry
+from minicc.trace.metrics import write_metrics
 from minicc.trace.recorder import TraceRecorder, trace_path_for
+from minicc.trace.report import write_run_report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -128,9 +134,33 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--milestone", default=None, help="Override project.milestone for run indexing.")
     run_parser.add_argument("--max-turns", type=int, default=None, help="Override budget.max_turns.")
     run_parser.add_argument(
+        "--source-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Read a repository from this path, copy it into miniCC's run root, and leave the "
+            "source directory untouched."
+        ),
+    )
+    run_parser.add_argument(
         "--execute-local",
         action="store_true",
         help="Execute bash actions on the host for development demos instead of Docker.",
+    )
+    run_parser.add_argument(
+        "--verify-command",
+        action="append",
+        default=[],
+        help=(
+            "Run this pre-bound command when the model requests final; repeat the option "
+            "to bind multiple completion checks."
+        ),
+    )
+    run_parser.add_argument(
+        "--verification-timeout-sec",
+        type=int,
+        default=120,
+        help="Timeout for each pre-bound completion verification command.",
     )
     run_parser.add_argument(
         "--no-workspace-copy",
@@ -544,6 +574,24 @@ def run_command(args: argparse.Namespace) -> int:
     settings = load_settings()
     milestone = _effective_milestone(settings, args)
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
+    source_arg = getattr(args, "source_dir", None)
+    source_dir = (source_arg or Path.cwd()).resolve()
+    if not source_dir.is_dir():
+        print(f"Source directory does not exist: {source_dir}", file=sys.stderr)
+        return 2
+    if source_arg is not None and args.no_workspace_copy:
+        print("--source-dir cannot be used with --no-workspace-copy.", file=sys.stderr)
+        return 2
+    raw_verification_commands = getattr(args, "verify_command", []) or []
+    verification_commands = tuple(str(command).strip() for command in raw_verification_commands)
+    if any(not command for command in verification_commands):
+        print("--verify-command cannot be empty.", file=sys.stderr)
+        return 2
+    verification_timeout_sec = int(getattr(args, "verification_timeout_sec", 120))
+    if verification_timeout_sec <= 0:
+        print("--verification-timeout-sec must be positive.", file=sys.stderr)
+        return 2
+    source_digest_before = workspace_content_digest(source_dir)
     provider = _build_provider_or_print_error(settings)
     if provider is None:
         return 2
@@ -551,6 +599,28 @@ def run_command(args: argparse.Namespace) -> int:
     workspace = None
     runner = None
     state = RunState.start(args.goal, milestone=milestone, stage="daily_development")
+    completion_verifier = None
+    if verification_commands:
+        completion_verifier = CommandCompletionVerifier(
+            commands=verification_commands,
+            timeout_sec=verification_timeout_sec,
+        )
+        state.constraints.append(
+            "Completion is accepted only after these pre-bound verification commands pass: "
+            + " ; ".join(verification_commands)
+        )
+        verifier_payload = json.dumps(
+            {
+                "commands": verification_commands,
+                "timeout_sec": verification_timeout_sec,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        state.metrics["completion_verifier_sha256"] = hashlib.sha256(
+            verifier_payload
+        ).hexdigest()
     result = None
     try:
         follow_up_from = getattr(args, "follow_up_from", None)
@@ -565,8 +635,9 @@ def run_command(args: argparse.Namespace) -> int:
             executor: BashExecutor = LocalCommandExecutor()
         else:
             workspace = prepare_run_workspace(
-                Path.cwd(),
+                source_dir,
                 run_id=state.run_id,
+                runs_root=(Path.cwd() / ".minicc" / "runs") if source_arg is not None else None,
                 ignored_allowlist=settings.workspace.ignored_allowlist,
                 allowlist_source="minicc.yaml:workspace.ignored_allowlist",
             )
@@ -601,6 +672,8 @@ def run_command(args: argparse.Namespace) -> int:
                 )
                 executor = DockerCommandExecutor(runner, artifacts=artifacts)
 
+        _attach_repository_context(state, state.workspace_host_path or Path.cwd())
+
         if follow_up_from:
             try:
                 attach_working_memory(
@@ -623,6 +696,7 @@ def run_command(args: argparse.Namespace) -> int:
             max_turns=settings.budget.max_turns if args.max_turns is None else args.max_turns,
             stream=settings.provider.stream if args.stream is None else args.stream,
             interrupt_after_steps=getattr(args, "interrupt_after_steps", None),
+            completion_verifier=completion_verifier,
         )
         result = loop.run(state)
         session.save(result.state)
@@ -643,6 +717,22 @@ def run_command(args: argparse.Namespace) -> int:
                 _write_run_artifact_index(state)
             except Exception as exc:
                 print(f"Failed to finalize run evidence: {exc}", file=sys.stderr)
+        try:
+            source_digest_after = workspace_content_digest(source_dir)
+            state.metrics["source_content_sha256_before"] = source_digest_before
+            state.metrics["source_content_sha256_after"] = source_digest_after
+            state.metrics["source_workspace_unchanged"] = source_digest_after == source_digest_before
+            if source_digest_after != source_digest_before:
+                state.status = "failed"
+                state.state_summary = "Source repository changed during isolated execution."
+                print(state.state_summary, file=sys.stderr)
+        except OSError as exc:
+            state.status = "failed"
+            state.state_summary = f"Cannot verify source repository integrity: {exc}"
+            print(state.state_summary, file=sys.stderr)
+        SessionManager().save(state)
+        write_metrics(state)
+        write_run_report(state)
         catalog.register_state(milestone, state, git_commit=_git_evidence(Path.cwd())[0])
 
     if result is None:
@@ -718,6 +808,8 @@ def resume_command(args: argparse.Namespace) -> int:
         if not from_checkpoint:
             session.apply_pending_approval_result(state, executor, trace=trace)
         if state.status == "running":
+            if state.workspace_host_path is not None and not state.repository_profile:
+                _attach_repository_context(state, state.workspace_host_path, trace=trace)
             loop = _build_loop(provider, executor, settings=settings, session=session, state=state)
             result = loop.run(state, restored_trajectory) if from_checkpoint else loop.run(state)
         else:
@@ -817,6 +909,36 @@ def _build_provider_or_print_error(settings: Settings) -> OpenAICompatibleProvid
     )
 
 
+def _attach_repository_context(
+    state: RunState,
+    workspace: Path,
+    *,
+    trace: TraceRecorder | None = None,
+) -> None:
+    profile = inspect_repository(workspace)
+    state.repository_profile = profile.to_dict()
+    state.project_guide = profile.guide.to_dict() if profile.guide is not None else {}
+    state.metrics["repository_profile_schema_version"] = profile.schema_version
+    state.metrics["repository_workspace_kind"] = profile.workspace_kind
+    state.metrics["project_guide_status"] = profile.guide_status
+    if profile.guide is not None:
+        state.metrics["project_guide_sha256"] = profile.guide.sha256
+    if state.run_dir is not None:
+        profile_path = state.run_dir / "repository_profile.json"
+        state.metrics["repository_profile_path"] = str(profile_path)
+        state.metrics["repository_profile_sha256"] = write_repository_profile(profile, profile_path)
+    if trace is not None:
+        trace.record(
+            "repository_profile_created",
+            state,
+            schema_version=profile.schema_version,
+            workspace_kind=profile.workspace_kind,
+            guide_status=profile.guide_status,
+            build_files=list(profile.build_files),
+            candidate_test_commands=list(profile.candidate_test_commands),
+        )
+
+
 def _build_loop(
     provider: OpenAICompatibleProvider,
     executor: BashExecutor,
@@ -827,6 +949,7 @@ def _build_loop(
     max_turns: int | None = None,
     stream: bool | None = None,
     interrupt_after_steps: int | None = None,
+    completion_verifier: CompletionVerifier | None = None,
 ) -> AgentLoop:
     if state is not None:
         start_session = getattr(provider, "start_session", None)
@@ -834,6 +957,19 @@ def _build_loop(
             start_session(state.run_id)
     skill_root = (state.workspace_host_path if state and state.workspace_host_path else Path.cwd()) / "skills"
     trace = TraceRecorder(trace_path_for(state)) if state is not None else TraceRecorder()
+    if state is not None and state.repository_profile and not state.metrics.get(
+        "repository_profile_trace_recorded"
+    ):
+        trace.record(
+            "repository_profile_created",
+            state,
+            schema_version=state.metrics.get("repository_profile_schema_version", 1),
+            workspace_kind=state.metrics.get("repository_workspace_kind", "unknown"),
+            guide_status=state.metrics.get("project_guide_status", "absent"),
+            build_files=state.repository_profile.get("build_files", []),
+            candidate_test_commands=state.repository_profile.get("candidate_test_commands", []),
+        )
+        state.metrics["repository_profile_trace_recorded"] = 1
     checkpoint_manager = (
         CheckpointManager(state.run_dir, trace=trace)
         if state is not None and state.run_dir is not None and state.workspace_host_path is not None
@@ -895,6 +1031,7 @@ def _build_loop(
         session=session,
         trace=trace,
         checkpoint_manager=checkpoint_manager,
+        completion_verifier=completion_verifier,
         config=LoopConfig(
             max_turns=settings.budget.max_turns if max_turns is None else max_turns,
             max_action_timeout_sec=settings.budget.max_action_timeout_sec,
@@ -1123,6 +1260,7 @@ def eval_command(args: argparse.Namespace) -> int:
             state.metrics["guidance_feedback_path"] = guidance_feedback_path
         if state.run_dir is None or state.artifacts_dir is None or state.workspace_host_path is None:
             raise RuntimeError("eval runner did not initialize run workspace paths")
+        _attach_repository_context(state, state.workspace_host_path)
         artifacts = ArtifactStore(
             state.artifacts_dir,
             display_path_prefix=".minicc_artifacts",
@@ -1162,6 +1300,7 @@ def eval_command(args: argparse.Namespace) -> int:
                 session=session,
                 state=state,
                 max_turns=_case_int(case, "max_turns", case_settings.budget.max_turns),
+                completion_verifier=_completion_verifier_for_case(case),
             )
             return loop.run(state).state
         finally:
@@ -1365,6 +1504,7 @@ def memory_eval_command(args: argparse.Namespace) -> int:
             attach_working_memory(state, source_run_id, runs_root=runs_root)
         if state.run_dir is None or state.artifacts_dir is None or state.workspace_host_path is None:
             raise RuntimeError("memory eval runner did not initialize run workspace paths")
+        _attach_repository_context(state, state.workspace_host_path)
         artifacts = ArtifactStore(
             state.artifacts_dir,
             display_path_prefix=".minicc_artifacts",
@@ -1406,6 +1546,7 @@ def memory_eval_command(args: argparse.Namespace) -> int:
                 session=session,
                 state=state,
                 max_turns=_case_int(eval_case, "max_turns", case_settings.budget.max_turns),
+                completion_verifier=_completion_verifier_for_case(eval_case),
             )
             return loop.run(state).state
         finally:
@@ -1967,6 +2108,22 @@ def _case_constraints(case: EvalCase) -> list[str]:
             + " ; ".join(verification_commands)
         )
     return constraints
+
+
+def _completion_verifier_for_case(case: EvalCase) -> CompletionVerifier | None:
+    if not case.completion_gate:
+        return None
+    commands = tuple(
+        str(assertion.get("command"))
+        for assertion in case.assertions
+        if assertion.get("type") == "command" and assertion.get("command")
+    )
+    if not commands:
+        raise ValueError(f"completion_gate requires at least one command assertion: {case.name}")
+    return CommandCompletionVerifier(
+        commands=commands,
+        timeout_sec=_case_int(case, "verification_timeout_sec", 120),
+    )
 
 
 def _v212_authority_profile_error(

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
+import sys
 import time
 
 from minicc.core.protocol import BashAction
@@ -42,6 +44,8 @@ class LocalCommandExecutor:
                 cwd=state.workspace_host_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=action.timeout_sec,
             )
         except subprocess.TimeoutExpired as exc:
@@ -76,10 +80,27 @@ class LocalCommandExecutor:
 
 
 def _local_shell_args(command: str) -> list[str] | None:
+    if sys.platform == "win32" and _uses_windows_native_build_tool(command):
+        return ["cmd.exe", "/d", "/s", "/c", command]
     bash_path = shutil.which("bash")
     if bash_path:
-        return [bash_path, "-lc", command]
+        return [bash_path, "-lc", _normalize_command_for_windows_bash(command)]
     return None
+
+
+def _uses_windows_native_build_tool(command: str) -> bool:
+    return re.match(
+        r"^\s*(?:mvn(?:\.cmd)?|gradle(?:\.bat)?|gradlew(?:\.bat)?|"
+        r"\.\\mvnw(?:\.cmd)?|\.\\gradlew(?:\.bat)?)(?:\s|$)",
+        command,
+        flags=re.IGNORECASE,
+    ) is not None
+
+
+def _normalize_command_for_windows_bash(command: str) -> str:
+    if sys.platform != "win32":
+        return command
+    return re.sub(r"(?<![\w./-])mvn(?=\s)", "cmd.exe /c mvn", command)
 
 
 def _decode_timeout_output(value: str | bytes | None) -> str:

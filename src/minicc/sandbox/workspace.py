@@ -23,6 +23,7 @@ HARD_DENY_NAMES = {
     ".mypy_cache",
     ".ruff_cache",
     "node_modules",
+    "target",
     ".minicc",
     ".workbuddy",
     "dist",

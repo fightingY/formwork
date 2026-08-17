@@ -35,7 +35,7 @@ M1: uv 项目骨架、Provider Adapter、Action Protocol、Minimal Agent Loop
 M2: workspace copy、Docker sandbox、Observation contract、Artifact store
 M3: PolicyChain、Command/Network/Budget policy、ask/approval/resume
 M4: Prompt builder、prompt cache 友好布局、context budget、semantic compaction
-M5: Experimental Skill/Feedback Memory、Trace events、Metrics
+M5: Goal-relevant Skill/Feedback selection、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
@@ -65,6 +65,12 @@ A0/A1 各 3 次真实模型验收，两侧均为 3/3 PASS 且无 Provider/protoc
 正文后，Bash 动作总数从 13 降至 6（-53.85%），prompt tokens 从 16,683 降至 8,162
 （-51.08%）。完整四文件归档见 `acceptance/stable-v3.2/`。该结论只覆盖固定 case，不声明自动
 经验提取、环境式检索、RAG 或跨任务质量提升。
+
+V3.3 当前处于 `experimental` 开发阶段：已增加只读 Repository Inspector、受限
+`MINICC.md` Project Guide 注入和可选 Runtime Completion Verification Gate。模型请求 `final`
+时，显式启用的 Gate 会运行预绑定 Verifier，失败结果回到同一 Agent Loop，只有通过后才允许
+`completed`。这两项能力已有确定性测试，但尚未完成真实 Spring Boot 仓库的 3-run 验收，因此不属于
+Stable V3.2 声明，也不宣称已经提高真实仓库成功率。
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -465,6 +471,20 @@ uv run minicc run "运行测试并总结结果" --execute-local --no-workspace-c
 ```
 
 这个模式只建议开发调试时使用。
+
+对外部仓库做隔离演示时，使用 `--source-dir`；miniCC 会把源仓库复制到 run workspace，
+并在结束时复核源仓库内容摘要。可以用一个或多个 `--verify-command` 绑定 Runtime
+Completion Gate，模型只有在这些命令通过后才能完成：
+
+```bash
+uv run minicc run "修复代码并补充回归测试" \
+  --source-dir D:\Code\MyHeiMaDianPing \
+  --execute-local \
+  --verify-command "mvn -q -Dtest=CacheDeleteMessageTest test"
+```
+
+Windows 本地执行会将 Maven/Gradle 命令交给原生 shell，并按 UTF-8 读取输出；构建产物
+目录（例如 `target/`）不会进入 workspace diff。
 
 ## 审批与恢复
 

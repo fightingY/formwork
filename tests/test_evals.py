@@ -3,7 +3,12 @@ import subprocess
 
 import pytest
 
-from minicc.cli import _case_constraints, _settings_for_eval_case
+from minicc.cli import (
+    _attach_repository_context,
+    _case_constraints,
+    _completion_verifier_for_case,
+    _settings_for_eval_case,
+)
 from minicc.config import (
     BudgetSettings,
     ContextSettings,
@@ -13,6 +18,7 @@ from minicc.config import (
     Settings,
 )
 from minicc.core.state import RunState
+from minicc.core.verification import CommandCompletionVerifier
 from minicc.evals import assertions
 from minicc.evals.assertions import run_assertions
 from minicc.evals.case import discover_cases, load_case
@@ -37,6 +43,7 @@ prompt: Write docs.
 context:
   max_prompt_chars: 1000
   retention_markers: [README.md]
+completion_gate: true
 assertions:
   - type: file_exists
     path: README.md
@@ -50,7 +57,47 @@ assertions:
     assert case.fixture_dir == fixture.resolve()
     assert case.writable_paths is None
     assert case.context == {"max_prompt_chars": 1000, "retention_markers": ["README.md"]}
+    assert case.completion_gate is True
     assert discover_cases(tmp_path / "cases") == [case]
+
+
+def test_repository_context_is_written_outside_workspace(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    run_dir = tmp_path / "run"
+    workspace.mkdir()
+    run_dir.mkdir()
+    (workspace / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    state = RunState.start("Inspect", workspace_host_path=workspace, run_dir=run_dir)
+
+    _attach_repository_context(state, workspace)
+
+    assert state.repository_profile["workspace_kind"] == "python"
+    assert (run_dir / "repository_profile.json").is_file()
+    assert not (workspace / "repository_profile.json").exists()
+    assert len(state.metrics["repository_profile_sha256"]) == 64
+
+
+def test_completion_verifier_requires_explicit_case_flag_and_command(tmp_path) -> None:
+    case_dir = tmp_path / "case"
+    fixture = case_dir / "fixture"
+    fixture.mkdir(parents=True)
+    case_path = case_dir / "case.yaml"
+    case_path.write_text(
+        """
+prompt: Verify the task.
+completion_gate: true
+assertions:
+  - type: command
+    command: python -m unittest
+    expect_exit_code: 0
+""",
+        encoding="utf-8",
+    )
+
+    verifier = _completion_verifier_for_case(load_case(case_path))
+
+    assert isinstance(verifier, CommandCompletionVerifier)
+    assert verifier.commands == ("python -m unittest",)
 
 
 def test_eval_assertions_cover_files_metrics_trace_and_diff(tmp_path) -> None:

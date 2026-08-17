@@ -26,6 +26,7 @@ ObservationKind = Literal[
     "policy_violation",
     "protocol_error",
     "approval_result",
+    "verification_error",
 ]
 
 
@@ -84,6 +85,8 @@ class RunState:
     memory_references: list[dict[str, Any]] = field(default_factory=list)
     working_memory: list[dict[str, Any]] = field(default_factory=list)
     working_memory_source_run_id: str | None = None
+    repository_profile: dict[str, Any] = field(default_factory=dict)
+    project_guide: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def start(
@@ -162,6 +165,8 @@ class RunState:
             memory_references=list(data.get("memory_references", [])),
             working_memory=list(data.get("working_memory", [])),
             working_memory_source_run_id=data.get("working_memory_source_run_id"),
+            repository_profile=dict(data.get("repository_profile", {})),
+            project_guide=dict(data.get("project_guide", {})),
         )
 
 
@@ -268,6 +273,13 @@ def initial_metrics() -> dict[str, Any]:
         "checkpoints_created": 0,
         "resumes_completed": 0,
         "resume_drift_errors": 0,
+        "model_final_requests": 0,
+        "verification_attempts": 0,
+        "verification_rejected": 0,
+        "verification_passed": 0,
+        "verification_bash_actions": 0,
+        "verification_command_failures": 0,
+        "verification_timeouts": 0,
     }
 
 

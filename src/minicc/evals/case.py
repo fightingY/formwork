@@ -25,6 +25,7 @@ class EvalCase:
     assertions: list[dict[str, Any]] = field(default_factory=list)
     writable_paths: tuple[str, ...] | None = None
     context: dict[str, Any] = field(default_factory=dict)
+    completion_gate: bool = False
     definition_sha256: str = ""
 
 
@@ -94,6 +95,7 @@ def load_case(path: Path) -> EvalCase:
         assertions=[item for item in assertions if isinstance(item, dict)],
         writable_paths=writable_paths,
         context={**context, "retention_markers": list(retention_markers)},
+        completion_gate=bool(data.get("completion_gate", False)),
         definition_sha256=hashlib.sha256(source).hexdigest(),
     )
 

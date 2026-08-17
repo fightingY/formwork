@@ -471,6 +471,29 @@ def test_context_builder_injects_skill_catalog_and_feedback_memory(tmp_path) -> 
     assert [event["event"] for event in trace.events].count("guidance_selected") == 1
 
 
+def test_context_builder_injects_repository_profile_and_project_guide() -> None:
+    state = RunState.start("Run the repository tests")
+    state.repository_profile = {
+        "schema_version": 1,
+        "workspace_kind": "maven",
+        "build_files": ["pom.xml"],
+        "candidate_test_commands": ["mvn test"],
+    }
+    state.project_guide = {
+        "path": "MINICC.md",
+        "sha256": "abc123",
+        "text": "Use the offline Maven test command.",
+    }
+
+    content = ContextBuilder().build_messages(state, [])[1]["content"]
+
+    assert "Repository profile (deterministic, read-only)" in content
+    assert '"workspace_kind": "maven"' in content
+    assert "<MINICC.md>" in content
+    assert "Use the offline Maven test command." in content
+    assert "</MINICC.md>" in content
+
+
 def test_context_builder_adds_budget_pressure_after_thresholds() -> None:
     builder = ContextBuilder()
     state = RunState.start("Finish task")

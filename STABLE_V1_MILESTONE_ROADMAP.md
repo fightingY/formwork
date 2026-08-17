@@ -752,6 +752,125 @@ Stable 升格验收（2026-08-12）：执行提交
 tokens 从 16,683 降至 8,162，全部收益门通过。最终归档只保留
 `acceptance/stable-v3.2/` 下四个报告文件，声明边界维持不变。
 
+### V3.3：真实仓库演示与验证闭环
+
+状态：`completed`（开发验收）。M1/M2/M3 已实现并完成确定性回归；M4 已完成真实仓库演示与证据归档。
+该结果仍不属于 Stable V3.2 的通用能力声明。
+
+目标：把现有 Harness 能力落到一个真实外部仓库任务上，形成可复现的“项目理解 -> 修改 ->
+运行验证 -> 证据归档”演示。重点是证明已实现的工程机制确实有效，不把“模型相对裸跑的通用
+能力提升”作为主线发布条件。
+
+当前真实仓库预演记录（2026-08-18）：固定源仓库 `D:\Code\MyHeiMaDianPing`、Provider
+`deepseek-ai/DeepSeek-V4-Flash`、任务 `CacheDeleteMessage` 重试退避边界、Gate 命令
+`mvn -q -Dtest=CacheDeleteMessageTest test`。首轮 `20260817-235501-ec4a3027` 因
+Windows Bash 的 `JAVA_HOME`/UTF-8 基础设施问题失败；修复执行器后，
+`20260818-000100-5f0ff300`（9 turns、8 actions、Gate 1/1）和
+`20260818-001529-ceb0129e`（6 turns、5 actions、Gate 1/1）通过。两次通过 run 的源仓库
+摘要均保持不变，最终 diff 均仅包含 DTO 与单元测试两个文件；随后第三次修复后 run
+`20260818-073342-6124bae6`（8 turns、7 actions、Gate 1/1）也通过。三次修复后 run
+均保留 state、trace、metrics、workspace manifest、diff 和 report，且源仓库摘要未改变；
+首轮基础设施失败也作为初始失败证据保留在 `20260817-235501-ec4a3027`，没有删除或重跑覆盖。
+
+本版本只新增两项直接服务于该目标的运行时能力：Real-repository Onboarding 和 Runtime
+Completion Verification Gate。C02 继续作为 smoke test，C07 继续作为 artifact/cache 组件回归，
+G01 继续作为相关指引效率实验；三者不能替代真实仓库演示，但仍然保留为已有能力的回归证据。
+
+#### V3.3-M0：能力口径与 A/B 合同冻结
+
+- 修正文档与源码漂移：在真实实现并验收前，不得声称存在 `project_guide.py`、自动读取
+  `MINICC.md`、自动识别构建系统或运行时完成验证。
+- 在代码和报告中区分 `model_final_requested`、`verification_rejected`、`completed` 和
+  `failed`；模型输出 `final` 不再天然等价于任务成功。
+- 定义可复现的 `minimal`/`full` Harness profile，并把所有 feature flag、Provider 返回的模型
+  身份、温度、预算、sandbox 镜像摘要和源码快照哈希写入 state、trace、metrics 与 suite report。
+- A0 `minimal` 仍保留相同的 Provider、`bash/ask/final` 协议、Bash executor、workspace 副本、
+  PolicyChain 和 Observation 合同。不得用“没有工具的单轮问答”充当 Baseline。
+- A1 `full` 在 A0 基础上启用项目画像、项目指南、现有 Context 治理和 Completion Gate。正式报告
+  必须列出两侧唯一差异，禁止使用未记录的 ambient memory、人工提示或运行中干预。
+
+#### V3.3-M1：Project Context / Real-repository Onboarding
+
+- 新增有界、确定性的 Repository Inspector，在 run workspace 副本中识别 Git 状态、语言、
+  `pom.xml`/Gradle/Python/Node 构建入口、候选测试命令、模块边界和外部服务前置条件；不得遍历
+  `.git`、依赖缓存、构建产物或敏感目录。
+- 新增可选 Project Guide Loader，只读取 workspace 根目录中显式存在的 `MINICC.md`，限制大小，
+  拒绝 symlink，并记录相对路径、内容 SHA-256、截断状态和注入事件。项目指南可以描述通用构建和
+  约束，但不得包含正式任务的目标文件、补丁、答案常量或隐藏断言。
+- 生成不可变 `repository_profile.json`，每个字段携带来源文件或探测依据；画像不确定时标记
+  `unknown`，不得让模型生成的猜测伪装成 Inspector 事实。
+- Repository Inspector 是 Context 的输入生产者，ContextBuilder 仍负责预算、布局、压缩和注入；
+  不把仓库扫描、Maven/Gradle 解析硬编码进 ContextBuilder。
+- 同一源码快照重复生成的 profile 必须字节稳定；Inspector 自身不得修改 workspace，且在 Windows、
+  WSL/Docker 路径差异下输出相同的仓库相对事实。
+
+#### V3.3-M2：Runtime Completion Verification Gate
+
+- 为 Agent Loop 注入 `CompletionVerifier` 接口。未配置代码任务 Verifier 时使用显式
+  `NoopCompletionVerifier` 保持普通 `run` 行为兼容；不得把 Maven、pytest 或某个 case 写死在循环。
+- 模型请求 `final` 时，Gate 在同一隔离 workspace 和相同 Policy/Trace 边界内运行预先声明的
+  Verifier。通过后才允许 `completed`；失败时生成结构化 observation，追加到 trajectory，并让模型
+  在剩余预算内继续修复。
+- Verifier 命令及超时必须在 run 开始前绑定并哈希；模型、Skill、Project Guide 和被测仓库均不能
+  修改该合同。禁止联网安装依赖、跳过测试、删除测试或用退出码包装伪造 PASS。
+- Gate 设置独立的最大尝试次数和总耗时；每次记录命令、exit code、stdout/stderr artifact、触发
+  `final` 的 turn、失败分类和最终 verdict。Verifier 基础设施错误与任务失败分开统计。
+- Eval 的事后 assertions 继续作为独立裁判，不直接复用 Gate 自报的 verdict。正式 PASS 要求运行时
+  Gate 与事后 assertions 一致；不一致时 fail closed。
+
+#### V3.3-M3：外部仓库只读快照与任务冻结
+
+- 外部源仓库只允许作为快照来源。运行前记录 resolved path、Git commit、dirty/untracked 清单和
+  内容摘要，复制到 `.minicc/runs/<run-id>/workspace` 后才允许 Agent、Inspector 或 Verifier 执行。
+- 每个 run 前后复核原始仓库 Git 状态和内容摘要完全一致；任何源仓库变化都使整个 suite
+  infrastructure FAIL，不得计入通过率。正式流程不提供 `--no-workspace-copy`。
+- 首轮选择 3 个真实、可解释的 Spring Boot 任务，每个任务修改范围控制在 1-5 个文件，Verifier
+  在预热依赖后应于 2-5 分钟内完成。任务不得依赖未受控的远程 MySQL、Redis、Kafka 或网络服务。
+- 任务优先覆盖：测试环境隔离、多文件业务缺陷、边界回归测试补全。具体任务由执行阶段根据真实
+  失败选择，但必须在正式 A/B 前冻结 prompt、source commit、writable paths、Verifier、预算和
+  case hash。
+- 允许使用 2 个任务调试 Harness；至少 1 个 holdout 任务在冻结后不得根据 A0/A1 输出修改 Project
+  Guide、Skill、Verifier 或预算。隐藏断言只约束正确性和防作弊，不得要求唯一实现细节。
+
+#### V3.3-M4：真实仓库演示与证据归档
+
+- 选择 1 个真实、可解释的 Spring Boot 任务，优先覆盖测试环境隔离、多文件业务缺陷或边界回归
+  测试补全；任务修改范围控制在 1-5 个文件，Verifier 在依赖预热后应于 2-5 分钟内完成。
+- 同一冻结 commit 至少连续执行 3 次真实模型 run；每次都必须保留 state、trace、metrics、diff、
+  workspace manifest、Verifier artifact 和最终 report。三次运行不能依赖人工修改或中途提示。
+- 演示必须展示一次初始失败、模型行动轨迹、实际 diff、Runtime Gate 结果和独立事后 assertions；
+  不能只展示最终代码或模型的 final 文本。
+- 通过条件为：3 次任务均完成，三次原始仓库内容和 Git 状态均未改变，Runtime Gate 与事后
+  assertions 结论一致，且不存在未解释的 Provider/protocol/policy/infrastructure failure。
+- 主线只声明“在固定仓库、固定 commit、指定 Provider 和固定任务上完成可复现演示”，不声明任意
+  Spring Boot 仓库成功率，也不声明模型通用能力提升。
+
+#### V3.3-Optional：Capability Lift A/B 研究轨道
+
+- 在 M4 主线通过后，才允许选择 2-3 个冻结任务做最小 Loop / 完整 Harness 对照；该实验不阻塞
+  V3.3 主线，不影响 Stable 工程能力声明。
+- A0/A1 必须绑定同一 Provider、任务、预算、sandbox 和 source commit；A0 仍保留 Bash、workspace
+  copy、PolicyChain 和 Observation，不得用无工具单轮问答充当 Baseline。
+- 只报告固定任务上的通过率、错误 final、Gate 拒绝后恢复、动作数和 token；不外推到其他模型、
+  任意仓库或通用智能。
+- 若 A1 只减少 Bash/token 而成功率没有提升，结果仍可作为效率实验归档，但不写成 Capability Lift。
+- 正式运行开始后禁止提高预算、放宽断言、向 Skill/Project Guide 加入任务答案或删除失败 run；
+  任何合同变化必须使用新 case hash、suite id 和完整的新一轮 A/B。
+
+#### V3.3 验收与声明边界
+
+- 确定性测试覆盖 profile 生成、Project Guide 安全读取、FinalAction Gate 通过/拒绝/重试、Verifier
+  超时与基础设施错误、checkpoint/resume、源仓库零修改和 A/B 聚合资格。
+- `ruff`、`mypy`、全量 pytest coverage、package build、V3.2 guidance、V3.0 固定矩阵和 V2.0
+  checkpoint/resume 回归不得下降；V3.3 各子里程碑分开提交，避免一次同时改 Context、Loop 和 Eval。
+- 正式归档固定输出 report JSON/Markdown/CSV、manifest 和自包含 evidence；每个数字必须能定位到
+  task hash、run id、trace、metrics、diff、Verifier artifact 和复跑命令。
+- 只有 M4 主线通过后，才允许声明“在固定仓库、固定 commit、指定 Provider 和固定任务上完成
+  可复现的真实代码修改与测试验证”。M1/M2 的收益必须由对应 trace、metrics 和 Gate/Verifier
+  结果支撑，不得用 prompt 文案或单次模型 final 代替。
+- Optional A/B 只有在其自身对照门通过后，才允许增加作用域明确的 Capability Lift 声明；不得回退
+  使用 C02、C07、G01 或历史 67 runs 包装真实仓库成功率。
+
 进入 Stable 的最低条件：
 
 - 先有确定性单元和集成测试。
@@ -786,7 +905,9 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                  |
                                       |                  +-> V2.0.2 run/suite/report ledger
                                       |                             |
-                                      |                             +-> V3.0
+                                      |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
+                                      |                                                        |
+                                      |                                                        +-> V3.3 real-repo demo
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |
@@ -814,3 +935,7 @@ PolicyChain、trace、metrics、diff 和 report 执行闭环；在固定回归�
 ```
 
 具体百分比和优化数字必须由最终报告生成，不能提前写入项目说明或简历。
+
+若 V3.3 正式 A/B 通过，可在上述工程闭环之外增加一条有严格作用域的 Capability Lift 声明；若未
+通过，则继续只声明稳定的工程能力、固定回归和效率实验，不得把“具备 Gate/Onboarding”改写成
+“已经提高真实任务成功率”。

@@ -247,6 +247,9 @@ def test_diff_audits_new_gitignored_files_but_skips_generated_cache(tmp_path) ->
     cache = workspace.workspace_dir / "src" / "__pycache__"
     cache.mkdir(parents=True)
     (cache / "app.pyc").write_bytes(b"cache")
+    target = workspace.workspace_dir / "target"
+    target.mkdir()
+    (target / "classes.bin").write_bytes(b"build output")
 
     diff = write_workspace_diff(workspace.workspace_dir, workspace.artifacts_dir).read_text(
         encoding="utf-8"
@@ -256,6 +259,7 @@ def test_diff_audits_new_gitignored_files_but_skips_generated_cache(tmp_path) ->
     assert "+agent output" in diff
     assert "__pycache__" not in diff
     assert "app.pyc" not in diff
+    assert "target" not in diff
 
 
 def test_workspace_allowlist_rejects_path_escape(tmp_path) -> None:

@@ -12,6 +12,7 @@ from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
 from minicc.core.runner import ModelTurnConfig, ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.core.verification import CompletionVerifier
 from minicc.policy.base import PolicyChain
 from minicc.trace.recorder import TraceRecorder
 
@@ -48,6 +49,7 @@ class AgentLoop:
         trace: TraceRecorder | None = None,
         config: LoopConfig | None = None,
         checkpoint_manager: CheckpointManager | None = None,
+        completion_verifier: CompletionVerifier | None = None,
     ) -> None:
         self.config = config or LoopConfig()
         self.session = session or SessionManager()
@@ -70,6 +72,7 @@ class AgentLoop:
             policy_chain=policy_chain,
             session=self.session,
             trace=self.trace,
+            completion_verifier=completion_verifier,
         )
 
     def run(

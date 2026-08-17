@@ -96,6 +96,7 @@ def test_run_command_fake_provider_writes_complete_evidence_bundle(tmp_path, mon
         "state.json",
         "trace.jsonl",
         "metrics.json",
+        "repository_profile.json",
         "workspace_manifest.json",
         "artifacts/diff.patch",
         "run_report.json",
@@ -103,6 +104,90 @@ def test_run_command_fake_provider_writes_complete_evidence_bundle(tmp_path, mon
     ]:
         assert (run_dir / relative_path).exists()
     assert (tmp_path / ".minicc" / "artifacts" / run_dir.name / "manifest.json").exists()
+
+
+def test_run_source_dir_keeps_external_repository_unchanged(tmp_path, monkeypatch) -> None:
+    harness_root = tmp_path / "harness"
+    source_root = tmp_path / "external-project"
+    harness_root.mkdir()
+    source_root.mkdir()
+    (source_root / "pom.xml").write_text("<project />\n", encoding="utf-8")
+    original = (source_root / "pom.xml").read_bytes()
+    monkeypatch.chdir(harness_root)
+    settings = Settings(
+        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(max_turns=1),
+        context=ContextSettings(),
+        policy=PolicySettings(),
+    )
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        cli,
+        "_build_provider_or_print_error",
+        lambda loaded: FakeProvider(['{"type":"final","answer":"done"}']),
+    )
+    monkeypatch.setattr(cli, "LocalCommandExecutor", FakeExecutor)
+
+    exit_code = cli.run_command(
+        argparse.Namespace(
+            goal="inspect external project",
+            source_dir=source_root,
+            max_turns=None,
+            execute_local=True,
+            no_workspace_copy=False,
+            docker_image=None,
+            stream=None,
+        )
+    )
+
+    run_dirs = [path for path in (harness_root / ".minicc" / "runs").iterdir() if path.is_dir()]
+    state = json.loads((run_dirs[0] / "state.json").read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert (source_root / "pom.xml").read_bytes() == original
+    assert not (source_root / ".minicc").exists()
+    assert state["metrics"]["source_workspace_unchanged"] is True
+    assert state["repository_profile"]["workspace_kind"] == "maven"
+
+
+def test_run_command_binds_completion_verifier(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    settings = Settings(
+        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(max_turns=1),
+        context=ContextSettings(),
+        policy=PolicySettings(),
+    )
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        cli,
+        "_build_provider_or_print_error",
+        lambda loaded: FakeProvider(['{"type":"final","answer":"verified"}']),
+    )
+    monkeypatch.setattr(cli, "LocalCommandExecutor", FakeExecutor)
+
+    exit_code = cli.run_command(
+        argparse.Namespace(
+            goal="finish only after tests pass",
+            source_dir=None,
+            max_turns=None,
+            execute_local=True,
+            no_workspace_copy=False,
+            docker_image=None,
+            stream=None,
+            verify_command=["python -m pytest -q"],
+            verification_timeout_sec=45,
+        )
+    )
+
+    run_dir = next(path for path in (tmp_path / ".minicc" / "runs").iterdir() if path.is_dir())
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert state["metrics"]["verification_attempts"] == 1
+    assert state["metrics"]["verification_passed"] == 1
+    assert len(state["metrics"]["completion_verifier_sha256"]) == 64
+    assert "python -m pytest -q" in state["constraints"][0]
 
 
 def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tmp_path, monkeypatch) -> None:

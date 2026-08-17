@@ -552,10 +552,22 @@ def assertion_spec_sha256(assertion: dict[str, Any]) -> str:
 
 
 def _shell_args(command: str) -> list[str]:
+    if sys.platform == "win32" and _uses_windows_native_build_tool(command):
+        return ["cmd.exe", "/d", "/s", "/c", command]
     return ["bash", "-lc", _normalize_command_for_host_bash(command)]
+
+
+def _uses_windows_native_build_tool(command: str) -> bool:
+    return re.match(
+        r"^\s*(?:mvn(?:\.cmd)?|gradle(?:\.bat)?|gradlew(?:\.bat)?|"
+        r"\.\\mvnw(?:\.cmd)?|\.\\gradlew(?:\.bat)?)(?:\s|$)",
+        command,
+        flags=re.IGNORECASE,
+    ) is not None
 
 
 def _normalize_command_for_host_bash(command: str) -> str:
     if sys.platform != "win32":
         return command
-    return re.sub(r"(^|[;&|()\s])python(?=\s|$)", r"\1python3", command)
+    normalized = re.sub(r"(^|[;&|()\s])python(?=\s|$)", r"\1python3", command)
+    return re.sub(r"(?<![\w./-])mvn(?=\s)", "cmd.exe /c mvn", normalized)

@@ -13,6 +13,7 @@ from minicc.core.session import (
     record_execution_metrics,
 )
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.core.verification import CompletionVerifier
 from minicc.memory.working import ground_memory_references
 from minicc.policy.base import PolicyChain, PolicyDecision
 from minicc.trace.recorder import TraceRecorder
@@ -37,17 +38,52 @@ class ActionHandler:
         policy_chain: PolicyChain | None = None,
         session: SessionManager | None = None,
         trace: TraceRecorder | None = None,
+        completion_verifier: CompletionVerifier | None = None,
     ) -> None:
         self.executor = executor
         self.policy_chain = policy_chain or PolicyChain()
         self.session = session or SessionManager()
         self.trace = trace
+        self.completion_verifier = completion_verifier
+        self._active_verification_state: RunState | None = None
 
     def handle(self, action: Action, state: RunState) -> ActionOutcome:
         if self.trace is not None:
             self.trace.action_started(state, action)
 
         if isinstance(action, FinalAction):
+            state.metrics["model_final_requests"] = state.metrics.get("model_final_requests", 0) + 1
+            if self.completion_verifier is not None:
+                state.metrics["verification_attempts"] = state.metrics.get("verification_attempts", 0) + 1
+                self._active_verification_state = state
+                try:
+                    verification = self.completion_verifier.verify(
+                        state,
+                        self._execute_verification_action,
+                    )
+                finally:
+                    self._active_verification_state = None
+                if not verification.passed:
+                    state.metrics["verification_rejected"] = (
+                        state.metrics.get("verification_rejected", 0) + 1
+                    )
+                    observation = verification.observation or Observation(
+                        kind="verification_error",
+                        message=verification.reason or "Completion verification failed.",
+                    )
+                    state.last_observation = observation
+                    if self.trace is not None:
+                        self.trace.observation_created(state, observation)
+                    return ActionOutcome(
+                        steps=[
+                            TrajectoryStep(
+                                action=action,
+                                observation=observation,
+                                state_snapshot=state_snapshot_text(state),
+                            )
+                        ]
+                    )
+                state.metrics["verification_passed"] = state.metrics.get("verification_passed", 0) + 1
             state.metrics["memory_references_requested"] = len(action.memory)
             accepted, rejected = ground_memory_references(state, action.memory)
             state.memory_references = accepted
@@ -69,6 +105,55 @@ class ActionHandler:
             return ActionOutcome(should_continue=False)
 
         return self._handle_bash(action, state)
+
+    def _execute_verification_action(self, action: BashAction) -> Observation:
+        """Execute a pre-bound verifier command through the same policy and trace boundary."""
+        state = self._active_verification_state
+        if state is None:
+            raise RuntimeError("verification executor called outside a completion verification")
+        decision = self.policy_chain.evaluate(action, state)
+        if self.trace is not None:
+            self.trace.policy_decision(state, decision)
+        if decision.type == "deny":
+            return Observation(
+                kind="verification_error",
+                message=f"Verifier command denied by {decision.policy_name}: {decision.reason}",
+            )
+        if decision.type == "require_approval":
+            return Observation(
+                kind="verification_error",
+                message="Verifier command required approval and was not executed.",
+            )
+        action_to_execute = action
+        if decision.type == "rewrite" and decision.rewritten_action is not None:
+            action_to_execute = decision.rewritten_action
+        if self.trace is not None:
+            self.trace.record("verification_started", state, command=action_to_execute.command)
+            self.trace.sandbox_exec_started(state, action_to_execute.command)
+        execution_id = begin_execution(state, action_to_execute, self.session)
+        observation = self.executor.run(action_to_execute, state)
+        complete_execution(state, execution_id, observation, self.session)
+        state.metrics["verification_bash_actions"] = (
+            state.metrics.get("verification_bash_actions", 0) + 1
+        )
+        if observation.kind == "command_error":
+            state.metrics["verification_command_failures"] = (
+                state.metrics.get("verification_command_failures", 0) + 1
+            )
+        elif observation.kind == "timeout":
+            state.metrics["verification_timeouts"] = (
+                state.metrics.get("verification_timeouts", 0) + 1
+            )
+        if self.trace is not None:
+            self.trace.sandbox_exec_finished(state, observation)
+            self.trace.record(
+                "verification_finished",
+                state,
+                command=action_to_execute.command,
+                exit_code=observation.exit_code,
+                observation_kind=observation.kind,
+            )
+        return observation
 
     def _handle_bash(self, action: BashAction, state: RunState) -> ActionOutcome:
         decision = self.policy_chain.evaluate(action, state)
