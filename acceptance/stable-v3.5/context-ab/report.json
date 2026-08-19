@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "milestone": "v3.5-public-benchmark",
+  "status": "not_run",
+  "arms": ["a0", "a1"],
+  "reason": "formal Context A/B requires two frozen tasks, repeat-3 Docker runs, and observed compaction",
+  "valid": false
+}

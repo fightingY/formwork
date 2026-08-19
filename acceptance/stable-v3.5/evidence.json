@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "benchmark": {
+    "status": "not_run",
+    "source_lock": "eval_cases/public_benchmark_v1/source_lock.yaml",
+    "suite_manifest": "eval_cases/public_benchmark_v1/suite.yaml",
+    "report": "benchmark/report.json"
+  },
+  "context_ab": {
+    "status": "not_run",
+    "report": "context-ab/report.json"
+  },
+  "recovery": {
+    "status": "PASS",
+    "report": "recovery/report.json",
+    "runner": "tools/run_v35_recovery_matrix.py",
+    "scenarios": "eval_cases/recovery_suite_v1/scenarios.yaml"
+  }
+}

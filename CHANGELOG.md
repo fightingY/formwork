@@ -8,6 +8,7 @@
 
 - V3.4 最小真实项目评测闭环：初始失败验证、独立最终 verify、verdict、验证 artifact、自动 workspace 清理。
 - 增加从 MyHeiMaDianPing 抽取的三个最小 Java 任务 fixture 和 mutation 回归测试任务。
+- V3.5 六个公开题库 case 的 source/verifier 合同、离线 18-run 聚合器、恢复矩阵和归档索引。
 
 ## [3.2.0] - 2026-08-12
 

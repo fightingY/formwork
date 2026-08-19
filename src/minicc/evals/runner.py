@@ -207,6 +207,7 @@ def run_eval_case(
                 workspace_dir=workspace.workspace_dir,
                 run_dir=workspace.run_dir,
                 metrics=state.metrics,
+                verifier_dir=case.case_dir / "verifier",
             )
             if not initial_verification.passed:
                 raise RuntimeError(

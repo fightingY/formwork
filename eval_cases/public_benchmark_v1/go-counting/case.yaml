@@ -1,0 +1,30 @@
+name: go-counting
+capability: fixed_public_python_regression
+proves: board scoring and empty intersections
+prompt: |
+  Implement score(board) for a small Go board represented by rows of '.', 'X'
+  and 'O'. Count each stone for its owner and count empty regions enclosed by
+  one owner as territory; neutral or open empty regions score for neither.
+fixture: fixture
+sandbox_mode: locked
+budget:
+  max_turns: 10
+  max_bash_actions: 20
+  max_action_timeout_sec: 30
+workspace:
+  writable_paths: [go_counting.py]
+initial_verify:
+  type: python_verifier
+  path: verify.py
+  sha256: ebcc03d2e6a3b4dc740ab10ae5daa707b8b20a2d2fb15c95ab7ac955bffaa551
+  expect_exit_code: 1
+assertions:
+  - type: python_verifier
+    path: verify.py
+    sha256: ebcc03d2e6a3b4dc740ab10ae5daa707b8b20a2d2fb15c95ab7ac955bffaa551
+    timeout_sec: 120
+  - type: diff_allowlist
+    paths: [go_counting.py]
+  - type: max_changed_files
+    value: 1
+cleanup_workspace: true

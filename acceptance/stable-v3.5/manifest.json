@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "milestone": "v3.5",
+  "status": "development_complete_formal_runs_pending",
+  "source_lock": "eval_cases/public_benchmark_v1/source_lock.yaml",
+  "suite_manifest": "eval_cases/public_benchmark_v1/suite.yaml",
+  "benchmark": {
+    "status": "not_run",
+    "required_runs": 18,
+    "evidence": "benchmark/report.json"
+  },
+  "context_ab": {
+    "status": "not_run",
+    "required_arms": ["a0", "a1"],
+    "evidence": "context-ab/report.json"
+  },
+  "recovery": {
+    "status": "PASS",
+    "scenarios": 8,
+    "assertions": 9,
+    "evidence": "recovery/report.json"
+  },
+  "notes": [
+    "No real-model benchmark percentage is claimed.",
+    "A formal archive may be promoted only after Docker repeat-3 evidence is present."
+  ]
+}

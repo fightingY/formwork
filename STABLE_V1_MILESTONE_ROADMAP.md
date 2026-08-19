@@ -970,6 +970,78 @@ workspace retention、patch replay、跨 run 比较和更复杂的 judge。任�
 - 指标证明实际使用，而不是只有配置开关或 prompt 文案。
 - 不改变 V1.2 固定回归和 V2.0 resume 的结果。
 
+### V3.5：稳定公开题库评测
+
+目标：在 V3.4 的评测闭环上，只补齐三类能够稳定复跑的证据：6 个公开 Python 任务的固定回归、
+同一批任务上的一组 Context A/B、checkpoint/resume 与 workspace drift 恢复评测。详细实施步骤固定在
+[`docs/V3_5_PUBLIC_BENCHMARK_EXPERIMENT_PLAN.md`](docs/V3_5_PUBLIC_BENCHMARK_EXPERIMENT_PLAN.md)。
+
+#### 已冻结的技术取舍
+
+- 任务从 Aider Polyglot Benchmark 的 Exercism Python 候选池中预检后固定 6 个，首选 `wordy`、
+  `scale-generator`、`variable-length-quantity`、`go-counting`、`simple-linked-list`、`rest-api`，
+  备用候选为 `bowling`、`poker`、`sgf-parsing`；正式运行开始后不再替换。
+- 只复制完成这 6 个 case 必需的题目说明、初始代码和测试，并记录上游 URL、commit、原始路径、
+  SHA-256 和许可证。测试只放在 Agent 不可见的 `verifier/`。
+- 不接入 Aider Agent，不复制 Aider 整套 benchmark runner，不实现失败后再次修改，也不增加第四类实验、
+  通用导入框架或并发执行。
+- 每个 case 从全新 workspace 独立运行 3 次。主要结果就是“最终隐藏 Verifier 通过次数 / 18 次 run”；
+  同时报告预算内完成率、基础设施错误、turns、actions、耗时、token 和重复文件读取。
+- SWE-bench、SWE-bench Lite、远程仓库安装和历史 `minicc swebench-lite` 适配不属于 V3.5。
+
+#### V3.5-M0：任务与来源冻结
+
+- 建立 `source_lock.yaml` 和 `THIRD_PARTY_NOTICES.md`，记录 6 个任务的来源、commit、路径、许可证和摘要。
+- 固定 DeepSeek V4 Flash、temperature、预算、sandbox、执行顺序、3 次 repeat 和结果分母；`--execute-local`
+  只用于开发预检，正式 18-run 使用现有 Docker sandbox。
+- 在正式运行前只允许做一次单次校准；若 6 题明显过难或存在基础设施问题，先停下来修合同并重新冻结，
+  不得在正式运行后根据失败删题或放宽测试。
+
+#### V3.5-M1：固定 case 与隐藏 Verifier
+
+- 手工、逐题把 6 个任务适配为现有 `case.yaml + fixture/ + verifier/` 结构，不建设通用导入系统。
+- 先扩展 `case.py` 允许 `initial_verify.type=python_verifier`，再让 `runner.py` 在初始验证时传入
+  `verifier_dir`；同一个哈希绑定的隐藏 Python Verifier 必须证明“初始代码失败、参考代码通过、Agent
+  修改后重新独立验证”。
+- 测试覆盖 verifier 路径逃逸、SHA-256 不一致、初始假阳性、参考代码失败和测试泄漏到 workspace。
+
+#### V3.5-M2：固定回归
+
+- 先对 6 个任务各跑 1 次校准并保留完整结果；校准不进入正式通过率。
+- 冻结 6 个 case 的 definition、fixture、verifier、预算和执行顺序后，每题独立运行 3 次，共 18 次。
+- 复用现有 `minicc eval` 的 JSON/Markdown/CSV/manifest，并新增一个只读的离线 aggregator 校验 18 个
+  run、冻结 hash、分母和不可覆盖输出；不另写 benchmark runner 或报告平台。
+- 正式结果必须保留全部成功、失败、timeout 和 infrastructure error，不能只挑成功 run。
+
+#### V3.5-M3：一组 Context A/B
+
+- 从 6 个冻结任务中选择 2 个确实会触发上下文预算的任务。A0/A1 使用相同模型、任务、预算、sandbox
+  和执行顺序，唯一差异是现有 `--context-variant a0/a1`。
+- 每臂每题独立运行 3 次，报告最终 Verifier 通过率、prompt tokens、压缩次数、关键事实保留率、文件读取、
+  重复文件读取、turns 和 command failures。
+- 若 A1 没有实际触发 compaction，则报告无效并停止；不再增加其他上下文实验补数字。
+
+#### V3.5-M4：Resume / Drift 恢复评测
+
+- 复用现有 `CheckpointManager` 和 `tests/test_checkpoint.py`，补成一份自动化恢复报告，不重写 checkpoint。
+- 固定覆盖 8 个场景、9 个断言：修改前中断、修改后验证前中断、验证失败后中断、外部修改文件、外部
+  删除文件、错误 run/workspace 绑定（两个独立断言）、Provider 短暂失败、已完成 action 不重复执行。
+- 确定性场景全部通过后，选 1 个冻结公开任务做一次真实模型中断、恢复和最终隐藏 Verifier 验证。
+
+#### V3.5-M5：验收与声明
+
+- `acceptance/stable-v3.5/` 只保存固定回归、Context A/B、Recovery 三组报告及其 manifest/evidence 索引；
+  复用现有报告格式，不建设新的统一聚合器。
+- V3.5 完成条件为：18 次固定回归完整落盘、一组有效 Context A/B、8 个场景的 9 个恢复断言通过、1 次
+  真实模型恢复有最终 Verifier 结果、第三方来源完整、旧版本回归不下降。
+- 简历只使用报告实际生成的数字。任何百分比必须能追溯到 run id、trace、metrics、diff 和 Verifier。
+
+#### V3.5 时间边界
+
+- 按 M0 -> M1 -> M2 -> M3 -> M4 -> M5 顺序实施，每个阶段单独提交。
+- 不新增上述范围以外的题型、实验变体或框架。任何新想法先记到 future work，不进入 V3.5。
+- 每阶段先运行 focused pytest，最终再运行 `ruff check`、`mypy`、全量 pytest coverage 和 package build。
+
 ## 5. 停止规则
 
 出现以下任一情况，立即停止扩大实验规模：
@@ -998,7 +1070,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                             |
                                       |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
                                       |                                                        |
-                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval
+                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |
@@ -1026,6 +1098,11 @@ PolicyChain、trace、metrics、diff 和 report 执行闭环；在固定回归�
 ```
 
 具体百分比和优化数字必须由最终报告生成，不能提前写入项目说明或简历。
+
+V3.5 通过后，才可以在 Stable V3.0 的工程能力声明之后增加作用域明确的公开基准和受控实验声明：
+固定题目数量、repeat、Provider、source commit、Verifier 版本和报告路径必须同时写出。V3.5 未通过时，
+只能继续使用此前已经通过验收的证据，不得把 calibration、单次演示或计划中的指标写成正式 benchmark
+结果。
 
 若 V3.3 正式 A/B 通过，可在上述工程闭环之外增加一条有严格作用域的 Capability Lift 声明；若未
 通过，则继续只声明稳定的工程能力、固定回归和效率实验，不得把“具备 Gate/Onboarding”改写成

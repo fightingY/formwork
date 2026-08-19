@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "suite_id": "v3.5-recovery-matrix",
+  "scenario_count": 8,
+  "assertion_count": 9,
+  "passed_assertions": 9,
+  "drift_detection_rate": 1.0,
+  "duplicate_action_count": 0,
+  "status": "PASS",
+  "scenarios": [
+    {
+      "id": "modification-before-interruption",
+      "passed": true,
+      "duplicate_action_count": 0
+    },
+    {
+      "id": "modification-before-verification",
+      "passed": true
+    },
+    {
+      "id": "verification-failure-before-interruption",
+      "passed": true
+    },
+    {
+      "id": "external-modification",
+      "passed": true,
+      "drift_rejected": true
+    },
+    {
+      "id": "external-deletion",
+      "passed": true,
+      "drift_rejected": true
+    },
+    {
+      "id": "wrong-run-binding",
+      "passed": true
+    },
+    {
+      "id": "wrong-workspace-binding",
+      "passed": true
+    },
+    {
+      "id": "transient-provider-failure",
+      "passed": true,
+      "trajectory_preserved": true
+    }
+  ]
+}

@@ -56,6 +56,7 @@ def run_assertion(
         return _assert_python_verifier(
             assertion,
             workspace_dir=workspace_dir,
+            run_dir=run_dir,
             verifier_dir=verifier_dir,
         )
     if assertion_type == "file_exists":
@@ -154,7 +155,8 @@ def _assert_python_verifier(
     assertion: dict[str, Any],
     *,
     workspace_dir: Path,
-    verifier_dir: Path | None,
+    run_dir: Path | None = None,
+    verifier_dir: Path | None = None,
 ) -> AssertionResult:
     relative_path = str(assertion.get("path") or "").replace("\\", "/").strip()
     expected_sha256 = str(assertion.get("sha256") or "").lower()
@@ -199,6 +201,9 @@ def _assert_python_verifier(
 
     env = os.environ.copy()
     env["MINICC_WORKSPACE"] = str(workspace_dir.resolve())
+    stdout = ""
+    stderr = ""
+    exit_code: int | None = None
     try:
         completed = subprocess.run(
             [sys.executable, str(script)],
@@ -210,7 +215,13 @@ def _assert_python_verifier(
             errors="replace",
             timeout=int(assertion.get("timeout_sec", 120)),
         )
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+        exit_code = completed.returncode
     except (OSError, subprocess.TimeoutExpired) as exc:
+        if isinstance(exc, subprocess.TimeoutExpired):
+            stdout = _decode_output(exc.stdout)
+            stderr = _decode_output(exc.stderr)
         return AssertionResult(
             "python_verifier",
             False,
@@ -218,13 +229,43 @@ def _assert_python_verifier(
             expected_sha256,
         )
 
-    passed = completed.returncode == int(assertion.get("expect_exit_code", 0))
+    expected_exit_code = int(assertion.get("expect_exit_code", 0))
+    if run_dir is not None:
+        artifact_label = re.sub(
+            r"[^a-z0-9_-]+", "-",
+            str(assertion.get("_artifact_label") or "final").lower(),
+        )
+        artifact = (
+            run_dir
+            / "artifacts"
+            / "verification"
+            / f"{artifact_label}-{hashlib.sha256(relative_path.encode('utf-8')).hexdigest()[:12]}.json"
+        )
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(
+            json.dumps(
+                {
+                    "type": "python_verifier",
+                    "path": relative_path,
+                    "expected_exit_code": expected_exit_code,
+                    "exit_code": exit_code,
+                    "sha256": expected_sha256,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    passed = exit_code == expected_exit_code
     message = (
-        f"python verifier exit_code={completed.returncode}: {relative_path}; "
+        f"python verifier exit_code={exit_code}: {relative_path}; "
         f"sha256={expected_sha256}"
     )
     if not passed:
-        output = (completed.stdout + completed.stderr).strip()
+        output = (stdout + stderr).strip()
         if output:
             message += f"\noutput={output[-2000:]}"
     return AssertionResult(

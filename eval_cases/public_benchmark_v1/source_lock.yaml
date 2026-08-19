@@ -1,0 +1,44 @@
+schema_version: 1
+status: frozen
+source:
+  name: Exercism Python track
+  url: https://github.com/exercism/python
+  commit: 1f6aab8667bf653b10cc3799f94352fcdb749db6
+  license: MIT
+  license_path: LICENSE.md
+  imported_at: 2026-08-19
+  dirty: false
+  notes: Commit resolved from the upstream remote; minimal hand-adapted contracts are used and upstream tests/answers are not vendored.
+upstream_sources:
+  - name: Aider Polyglot Benchmark
+    url: https://github.com/Aider-AI/aider
+    commit: 5dc9490bb35f9729ef2c95d00a19ccd30c26339c
+    license: Apache-2.0
+    license_path: LICENSE.md
+    dirty: false
+    notes: Used only to document the public benchmark provenance; Aider's runner is not imported.
+tasks:
+  - name: wordy
+    upstream_path: exercises/practice/wordy
+    fixture_sha256: 0b7b0cab2668a89be14669b9efb086dbaba5ad833782eaf5d459c71295591c3c
+    verifier_sha256: 09ba16ed9ffefe5f73bb1fe16fddef376c4a06b57bb084d02bd7bd0d6b80316d
+  - name: scale-generator
+    upstream_path: exercises/practice/scale-generator
+    fixture_sha256: e94ec1acd037d00678a710becae08f82df70944b9647576c176ba32551cb452c
+    verifier_sha256: 009c7611b4090c84823a7fb729b90ab4fa57bd909a1aa72e3fed7849e72a959c
+  - name: variable-length-quantity
+    upstream_path: exercises/practice/variable-length-quantity
+    fixture_sha256: c4468866bc5aaceab691edc729417d76d7bb1df70f530ceb4467fb95737faedc
+    verifier_sha256: 22c15e369f1676576db8d7a556bde17b259f431b7c004fb10a5adeb9bbe67bf7
+  - name: go-counting
+    upstream_path: exercises/practice/go-counting
+    fixture_sha256: 395e2be25c1af6a08f1701993a90a7333c463d5def206386df643fa9b16c278e
+    verifier_sha256: ebcc03d2e6a3b4dc740ab10ae5daa707b8b20a2d2fb15c95ab7ac955bffaa551
+  - name: simple-linked-list
+    upstream_path: exercises/practice/simple-linked-list
+    fixture_sha256: 4ef35435032e55495633d36c5601ffaa37c01154ccd644451d405f9e33bc28a5
+    verifier_sha256: 20e71377dacdfce030603ec386e93a1385014462570725f60ffeaa3568ec3c70
+  - name: rest-api
+    upstream_path: exercises/practice/rest-api
+    fixture_sha256: 9a1940a2f3c481a9db3a9a6bfca41a71b94a38774d2d614de7e7b7d0ed59385a
+    verifier_sha256: 4031ea25c93032f50d204f6e3d2c779970d0d347e28bad281f89f5589f1a719b

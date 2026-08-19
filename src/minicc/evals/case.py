@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -87,11 +88,23 @@ def load_case(path: Path) -> EvalCase:
 
     initial_verify = data.get("initial_verify")
     if initial_verify is not None:
-        if not isinstance(initial_verify, dict) or str(initial_verify.get("type") or "command") != "command":
-            raise ValueError(f"initial_verify must be a command mapping: {path}")
-        initial_verify = {"type": "command", **initial_verify}
-        if not str(initial_verify.get("command") or "").strip():
+        if not isinstance(initial_verify, dict):
+            raise ValueError(f"initial_verify must be a mapping: {path}")
+        verifier_type = str(initial_verify.get("type") or "command")
+        if verifier_type not in {"command", "python_verifier"}:
+            raise ValueError(f"initial_verify has unsupported type: {path}")
+        initial_verify = {"type": verifier_type, **initial_verify}
+        if verifier_type == "command" and not str(initial_verify.get("command") or "").strip():
             raise ValueError(f"initial_verify requires a command: {path}")
+        if verifier_type == "python_verifier":
+            verifier_path = initial_verify.get("path")
+            if not isinstance(verifier_path, str):
+                raise ValueError(f"initial_verify python_verifier requires path: {path}")
+            _safe_relative_path(verifier_path, path)
+            digest = str(initial_verify.get("sha256") or "").lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError(f"initial_verify python_verifier requires a SHA-256 digest: {path}")
+            initial_verify["sha256"] = digest
         try:
             expected_initial_exit = int(initial_verify.get("expect_exit_code", 1))
         except (TypeError, ValueError) as exc:

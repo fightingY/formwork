@@ -1,0 +1,19 @@
+schema_version: 1
+suite_id: v3.5-recovery-matrix
+scenarios:
+  - id: modification-before-interruption
+    assertions: [resume, no_duplicate_action]
+  - id: modification-before-verification
+    assertions: [resume_keeps_diff]
+  - id: verification-failure-before-interruption
+    assertions: [resume_keeps_failure]
+  - id: external-modification
+    assertions: [drift_rejected]
+  - id: external-deletion
+    assertions: [drift_rejected]
+  - id: wrong-run-binding
+    assertions: [wrong_run_id_rejected]
+  - id: wrong-workspace-binding
+    assertions: [wrong_workspace_path_rejected]
+  - id: transient-provider-failure
+    assertions: [trajectory_preserved]
