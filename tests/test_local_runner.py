@@ -55,3 +55,31 @@ def test_windows_jdk_commands_use_native_shell(monkeypatch) -> None:
         "/c",
         command,
     ]
+
+
+def test_windows_simple_python_assertions_use_current_interpreter(monkeypatch) -> None:
+    monkeypatch.setattr(assertions.sys, "platform", "win32")
+    monkeypatch.setattr(assertions.sys, "executable", "python-current.exe")
+
+    assert assertions._shell_args("python verify.py") == ["python-current.exe", "verify.py"]
+
+
+def test_windows_simple_python_actions_use_current_interpreter(monkeypatch) -> None:
+    monkeypatch.setattr(local_runner.sys, "platform", "win32")
+    monkeypatch.setattr(local_runner.sys, "executable", "python-current.exe")
+
+    assert local_runner._local_shell_args("python verify.py") == ["python-current.exe", "verify.py"]
+
+
+def test_windows_python_pipeline_keeps_shell_semantics(monkeypatch) -> None:
+    monkeypatch.setattr(assertions.sys, "platform", "win32")
+    monkeypatch.setattr(local_runner.sys, "platform", "win32")
+
+    assert assertions._shell_args("python -m tool | python -m json.tool")[0:4] == [
+        "bash",
+        "-lc",
+        "python3 -m tool | python3 -m json.tool",
+    ]
+    local_args = local_runner._local_shell_args("python -m tool | python -m json.tool")
+    assert local_args is not None
+    assert local_args[-1] == "python3 -m tool | python3 -m json.tool"

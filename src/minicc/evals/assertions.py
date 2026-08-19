@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -50,7 +51,7 @@ def run_assertion(
 ) -> AssertionResult:
     assertion_type = str(assertion.get("type") or "")
     if assertion_type == "command":
-        return _assert_command(assertion, workspace_dir)
+        return _assert_command(assertion, workspace_dir, run_dir)
     if assertion_type == "python_verifier":
         return _assert_python_verifier(
             assertion,
@@ -90,23 +91,63 @@ def run_assertion(
     return AssertionResult(assertion_type or "<missing>", False, f"Unsupported assertion type: {assertion_type}")
 
 
-def _assert_command(assertion: dict[str, Any], workspace_dir: Path) -> AssertionResult:
+def _assert_command(
+    assertion: dict[str, Any],
+    workspace_dir: Path,
+    run_dir: Path | None = None,
+) -> AssertionResult:
     command = str(assertion.get("command") or "")
     expected = int(assertion.get("expect_exit_code", 0))
-    completed = subprocess.run(
-        _shell_args(command),
-        cwd=workspace_dir,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=int(assertion.get("timeout_sec", 120)),
-    )
-    passed = completed.returncode == expected
-    message = f"command exit_code={completed.returncode}, expected={expected}: {command}"
-    if not passed and completed.stderr:
-        message += f"\nstderr={completed.stderr[-1000:]}"
+    try:
+        completed = subprocess.run(
+            _shell_args(command),
+            cwd=workspace_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=int(assertion.get("timeout_sec", 120)),
+        )
+        stdout = getattr(completed, "stdout", "") or ""
+        stderr = getattr(completed, "stderr", "") or ""
+        exit_code = getattr(completed, "returncode", None)
+    except subprocess.TimeoutExpired as exc:
+        stdout = _decode_output(exc.stdout)
+        stderr = _decode_output(exc.stderr)
+        exit_code = None
+    except OSError as exc:
+        stdout = ""
+        stderr = str(exc)
+        exit_code = None
+    artifact_label = re.sub(r"[^a-z0-9_-]+", "-", str(assertion.get("_artifact_label") or "final").lower())
+    if run_dir is not None:
+        artifact = (
+            run_dir
+            / "artifacts"
+            / "verification"
+            / f"{artifact_label}-{hashlib.sha256(command.encode('utf-8')).hexdigest()[:12]}.json"
+        )
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(
+            json.dumps(
+                {"command": command, "expected_exit_code": expected, "exit_code": exit_code, "stdout": stdout, "stderr": stderr},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    passed = exit_code == expected
+    message = f"command exit_code={exit_code}, expected={expected}: {command}"
+    if not passed and stderr:
+        message += f"\nstderr={stderr[-1000:]}"
     return AssertionResult("command", passed, message)
+
+
+def _decode_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
 
 
 def _assert_python_verifier(
@@ -654,6 +695,9 @@ def assertion_spec_sha256(assertion: dict[str, Any]) -> str:
 def _shell_args(command: str) -> list[str]:
     if sys.platform == "win32" and _uses_windows_native_build_tool(command):
         return ["cmd.exe", "/d", "/s", "/c", command]
+    if sys.platform == "win32" and _uses_simple_python_command(command):
+        parts = shlex.split(command, posix=True)
+        return [sys.executable, *parts[1:]]
     return ["bash", "-lc", _normalize_command_for_host_bash(command)]
 
 
@@ -664,6 +708,12 @@ def _uses_windows_native_build_tool(command: str) -> bool:
         command,
         flags=re.IGNORECASE,
     ) is not None
+
+
+def _uses_simple_python_command(command: str) -> bool:
+    if any(operator in command for operator in ("&", "|", ";", "<", ">")):
+        return False
+    return re.match(r"^\s*(?:python(?:\.exe|3)?|py)(?:\s|$)", command, flags=re.IGNORECASE) is not None
 
 
 def _normalize_command_for_host_bash(command: str) -> str:

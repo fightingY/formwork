@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -82,6 +83,9 @@ class LocalCommandExecutor:
 def _local_shell_args(command: str) -> list[str] | None:
     if sys.platform == "win32" and _uses_windows_native_build_tool(command):
         return ["cmd.exe", "/d", "/s", "/c", command]
+    if sys.platform == "win32" and _uses_simple_python_command(command):
+        parts = shlex.split(command, posix=True)
+        return [sys.executable, *parts[1:]]
     bash_path = shutil.which("bash")
     if bash_path:
         return [bash_path, "-lc", _normalize_command_for_windows_bash(command)]
@@ -97,10 +101,17 @@ def _uses_windows_native_build_tool(command: str) -> bool:
     ) is not None
 
 
+def _uses_simple_python_command(command: str) -> bool:
+    if any(operator in command for operator in ("&", "|", ";", "<", ">")):
+        return False
+    return re.match(r"^\s*(?:python(?:\.exe|3)?|py)(?:\s|$)", command, flags=re.IGNORECASE) is not None
+
+
 def _normalize_command_for_windows_bash(command: str) -> str:
     if sys.platform != "win32":
         return command
-    return re.sub(r"(?<![\w./-])mvn(?=\s)", "cmd.exe /c mvn", command)
+    normalized = re.sub(r"(^|[;&|()\s])python(?=\s|$)", r"\1python3", command)
+    return re.sub(r"(?<![\w./-])mvn(?=\s)", "cmd.exe /c mvn", normalized)
 
 
 def _decode_timeout_output(value: str | bytes | None) -> str:
