@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
+from minicc.sandbox.workspace import (
+    content_digest_from_records,
+    prepare_run_workspace,
+    workspace_content_digest,
+    workspace_content_records,
+    write_workspace_diff,
+)
 
 
 def _git(project: Path, *args: str) -> str:
@@ -215,6 +221,23 @@ def test_workspace_content_digest_is_stable_and_changes_with_file_bytes(tmp_path
         runs_root=tmp_path / "runs",
     )
     assert changed.content_digest_sha256 != first.content_digest_sha256
+
+
+def test_workspace_content_digest_streams_files_without_changing_digest(
+    tmp_path, monkeypatch
+) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "large.bin").write_bytes((b"0123456789abcdef" * 131_072) + b"tail")
+    (fixture / "small.txt").write_text("small\n", encoding="utf-8")
+    expected = content_digest_from_records(workspace_content_records(fixture))
+
+    def reject_whole_file_read(path: Path) -> bytes:
+        raise AssertionError(f"whole-file read is not allowed while hashing: {path}")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_whole_file_read)
+
+    assert workspace_content_digest(fixture) == expected
 
 
 def test_diff_is_anchored_when_agent_commits_changes(tmp_path) -> None:

@@ -40,6 +40,7 @@ GIT_EXCLUDE_PATTERNS = [
 ]
 
 BASELINE_REF = "refs/minicc/baseline"
+HASH_CHUNK_SIZE = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -91,7 +92,14 @@ class _GitSourceSnapshot:
 
 
 def workspace_content_digest(source_dir: Path) -> str:
-    return content_digest_from_records(workspace_content_records(source_dir))
+    source_dir = source_dir.resolve()
+    if not source_dir.is_dir():
+        raise FileNotFoundError(f"Workspace source directory does not exist: {source_dir}")
+    policy = WorkspacePathPolicy()
+    return _content_digest(
+        source_dir,
+        _auditable_files(source_dir, policy),
+    )
 
 
 def workspace_content_records(
@@ -119,6 +127,10 @@ def content_digest_from_records(
         }
         for relative, kind, content in sorted(records, key=lambda item: item[0])
     ]
+    return _content_digest_from_entries(entries)
+
+
+def _content_digest_from_entries(entries: list[dict[str, object]]) -> str:
     payload = json.dumps(
         entries,
         ensure_ascii=False,
@@ -620,7 +632,36 @@ def _path_digest(paths: Sequence[str]) -> str:
 
 
 def _content_digest(root: Path, paths: Sequence[str]) -> str:
-    return content_digest_from_records(_content_records(root, paths))
+    entries: list[dict[str, object]] = []
+    for relative in sorted(paths):
+        path = root / relative
+        if path.is_symlink():
+            content = os.readlink(path).encode("utf-8", errors="surrogateescape")
+            kind = "symlink"
+            size = len(content)
+            digest = hashlib.sha256(content).hexdigest()
+        else:
+            kind = "file"
+            size, digest = _stream_file_digest(path)
+        entries.append(
+            {
+                "path": relative,
+                "kind": kind,
+                "bytes": size,
+                "sha256": digest,
+            }
+        )
+    return _content_digest_from_entries(entries)
+
+
+def _stream_file_digest(path: Path) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(HASH_CHUNK_SIZE):
+            digest.update(chunk)
+            size += len(chunk)
+    return size, digest.hexdigest()
 
 
 def _content_records(
