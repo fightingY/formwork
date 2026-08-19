@@ -77,6 +77,22 @@ V3.3 当前处于 `experimental` 开发阶段：已增加只读 Repository Inspe
 `completed`。这两项能力已有确定性测试，但尚未完成真实 Spring Boot 仓库的 3-run 验收，因此不属于
 Stable V3.2 声明，也不宣称已经提高真实仓库成功率。
 
+V3.4 增加了最小真实项目评测闭环，任务位于
+`eval_cases/real_project_suite_v1/`。它从 `MyHeiMaDianPing` 的真实业务场景抽取最小 Java fixture，
+不复制完整仓库；每次运行先要求初始 `verify` 失败，再由单 Agent 修改临时 workspace，最后由运行器
+独立执行最终 `verify`，保存初始/最终验证 artifact、diff、trace 和 `verdict`，并自动清理 workspace。
+任务自报完成不算通过。确定性验证可直接运行：
+
+```powershell
+python eval_cases/real_project_suite_v1/R01_cache_delete_retry_boundary/fixture/verify.py
+python eval_cases/real_project_suite_v1/R02_retry_policy_regression_test/fixture/verify.py
+python eval_cases/real_project_suite_v1/R03_cache_key_builder_feature/fixture/verify.py
+```
+
+真实模型评测使用 `uv run minicc eval eval_cases/real_project_suite_v1 --repeat 3 --execute-local`；
+Provider、Java toolchain 或清理问题会记为 `infrastructure_error`，不混入任务通过率。当前阶段仍不
+引入 GitHub 拉取、完整仓库复制、worktree、并发或 patch replay。
+
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
 Stable V2.0.1 已修复 workspace 可见文件、Git baseline 和最终 diff 的证据不一致：Git 项目从固定

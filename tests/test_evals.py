@@ -1,6 +1,7 @@
 import hashlib
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -553,6 +554,104 @@ assertions:
     assert (run_dir / "eval_result.md").exists()
     assert (tmp_path / "reports" / "report.csv").exists()
     assert (tmp_path / "reports" / "manifest.json").exists()
+
+
+def test_minimal_real_project_eval_verifies_failure_then_cleans_workspace(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "real-task"
+    fixture = case_dir / "fixture"
+    fixture.mkdir(parents=True)
+    (fixture / "answer.txt").write_text("broken\n", encoding="utf-8")
+    (fixture / "verify.py").write_text(
+        "from pathlib import Path\n"
+        "raise SystemExit(0 if Path('answer.txt').read_text() == 'fixed\\n' else 1)\n",
+        encoding="utf-8",
+    )
+    (case_dir / "case.yaml").write_text(
+        """
+name: real-task
+prompt: Fix answer.txt.
+initial_verify:
+  command: python verify.py
+  expect_exit_code: 1
+cleanup_workspace: true
+assertions:
+  - type: command
+    command: python verify.py
+    expect_exit_code: 0
+  - type: diff_allowlist
+    paths: [answer.txt]
+""",
+        encoding="utf-8",
+    )
+
+    def fixing_agent(case, state: RunState) -> RunState:
+        assert state.workspace_host_path is not None
+        (state.workspace_host_path / "answer.txt").write_text("fixed\n", encoding="utf-8")
+        state.status = "completed"
+        return state
+
+    result = run_eval_suite(
+        case_dir,
+        runs_root=tmp_path / "runs",
+        agent_runner=fixing_agent,
+    )
+
+    case_result = result.cases[0]
+    run_dir = Path(case_result.run_dir)
+    report = json.loads((run_dir / "eval_result.json").read_text(encoding="utf-8"))
+    verification_artifacts = sorted((run_dir / "artifacts" / "verification").glob("*.json"))
+    artifact_index = json.loads(
+        (tmp_path / "artifacts" / case_result.run_id / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert result.passed is True
+    assert case_result.verdict == "passed"
+    assert case_result.workspace_cleaned is True
+    assert not (run_dir / "workspace").exists()
+    assert [path.name.split("-", 1)[0] for path in verification_artifacts] == ["final", "initial"]
+    assert report["initial_verification"]["passed"] is True
+    assert report["workspace_cleaned"] is True
+    assert report["cleanup_error"] == ""
+    assert sorted(
+        key for key in artifact_index["evidence"] if key.startswith("verification_")
+    ) == [
+        next(key for key in artifact_index["evidence"] if key.startswith("verification_final-")),
+        next(key for key in artifact_index["evidence"] if key.startswith("verification_initial-")),
+    ]
+
+
+def test_minimal_real_project_eval_rejects_an_initially_passing_fixture(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "false-positive"
+    fixture = case_dir / "fixture"
+    fixture.mkdir(parents=True)
+    (fixture / "verify.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    (case_dir / "case.yaml").write_text(
+        """
+name: false-positive
+prompt: Do work.
+initial_verify:
+  command: python verify.py
+  expect_exit_code: 1
+assertions: []
+""",
+        encoding="utf-8",
+    )
+    called = False
+
+    def agent_must_not_run(case, state: RunState) -> RunState:
+        nonlocal called
+        called = True
+        return state
+
+    result = run_eval_suite(
+        case_dir,
+        runs_root=tmp_path / "runs",
+        agent_runner=agent_must_not_run,
+    )
+
+    assert called is False
+    assert result.passed is False
+    assert result.cases[0].verdict == "infrastructure_error"
+    assert result.cases[0].infrastructure_success is False
 
 
 def test_eval_repeat_preserves_independent_run_evidence(tmp_path) -> None:

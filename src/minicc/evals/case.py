@@ -26,6 +26,8 @@ class EvalCase:
     writable_paths: tuple[str, ...] | None = None
     context: dict[str, Any] = field(default_factory=dict)
     completion_gate: bool = False
+    initial_verify: dict[str, Any] | None = None
+    cleanup_workspace: bool = False
     definition_sha256: str = ""
 
 
@@ -83,6 +85,21 @@ def load_case(path: Path) -> EvalCase:
     else:
         writable_paths = tuple(_safe_relative_path(item, path) for item in raw_writable_paths)
 
+    initial_verify = data.get("initial_verify")
+    if initial_verify is not None:
+        if not isinstance(initial_verify, dict) or str(initial_verify.get("type") or "command") != "command":
+            raise ValueError(f"initial_verify must be a command mapping: {path}")
+        initial_verify = {"type": "command", **initial_verify}
+        if not str(initial_verify.get("command") or "").strip():
+            raise ValueError(f"initial_verify requires a command: {path}")
+        try:
+            expected_initial_exit = int(initial_verify.get("expect_exit_code", 1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"initial_verify.expect_exit_code must be an integer: {path}") from exc
+        if expected_initial_exit == 0:
+            raise ValueError(f"initial_verify must expect a failing command: {path}")
+        initial_verify["expect_exit_code"] = expected_initial_exit
+
     return EvalCase(
         name=str(data.get("name") or case_dir.name),
         prompt=prompt.strip(),
@@ -96,6 +113,8 @@ def load_case(path: Path) -> EvalCase:
         writable_paths=writable_paths,
         context={**context, "retention_markers": list(retention_markers)},
         completion_gate=bool(data.get("completion_gate", False)),
+        initial_verify=initial_verify,
+        cleanup_workspace=bool(data.get("cleanup_workspace", False)),
         definition_sha256=hashlib.sha256(source).hexdigest(),
     )
 

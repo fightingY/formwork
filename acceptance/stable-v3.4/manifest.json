@@ -1,0 +1,352 @@
+{
+  "schema_version": 2,
+  "entity_type": "suite",
+  "suite_id": "suite-20260819-191732-986a8475",
+  "milestone": "v3.4-acceptance",
+  "stage": "development_precheck",
+  "created_at": "2026-08-19T11:17:32.276121+00:00",
+  "completed_at": "2026-08-19T11:29:44.627155+00:00",
+  "status": "completed",
+  "result": "PASS",
+  "task_success": true,
+  "agent_success": true,
+  "infrastructure_success": true,
+  "policy_outcome": "clear",
+  "configuration": {
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "deepseek-ai/DeepSeek-V4-Flash",
+    "temperature": 0.0,
+    "stream": true,
+    "include_usage": true,
+    "sandbox_mode": "locked",
+    "execute_local": true,
+    "json_mode": true,
+    "max_completion_tokens": 2048,
+    "provider_max_retries": 2,
+    "provider_timeout_sec": 300.0,
+    "cache_scope_sha256": "c33df17ff86489f50fe13d889c018f09e82f94aa3ef615049bdbf91f2aed1555",
+    "docker_image": "python@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0",
+    "git_commit": "43cc5a3e8af670edf402001e6a969b918058bfc4",
+    "worktree_dirty": true,
+    "release_gate": false,
+    "milestone": "v3.4-acceptance",
+    "context_variant": "configured",
+    "cache_variant": "configured",
+    "cache_sequence_id": null,
+    "execution_order": null,
+    "guidance_variant": "configured",
+    "guidance_sequence_id": null,
+    "guidance_execution_order": null,
+    "guidance_feedback_path": null,
+    "feedback_memory_mode": "configured",
+    "prompt_layout": "append_until_compaction",
+    "compaction_strategy": "deterministic",
+    "system_prefix_sha256": "c1efea672a7500aeb92605828c539a160db25c1cfc87f102a7bb611c5641f809",
+    "max_prompt_chars": 120000,
+    "recent_turns": 6,
+    "semantic_max_completion_tokens": 2048,
+    "case_contexts": {
+      "R01_cache_delete_retry_boundary": {
+        "retention_markers": []
+      },
+      "R02_retry_policy_regression_test": {
+        "retention_markers": []
+      },
+      "R03_cache_key_builder_feature": {
+        "retention_markers": []
+      }
+    },
+    "case_authority_profiles": {
+      "R01_cache_delete_retry_boundary": {
+        "source_path": "eval_cases/real_project_suite_v1/R01_cache_delete_retry_boundary/case.yaml",
+        "fixture_source_path": "eval_cases/real_project_suite_v1/R01_cache_delete_retry_boundary/fixture",
+        "case_definition_sha256": "56b47b64e307374a640565d1eabdeeb0e7649189813cc7563602726cf9df97f2",
+        "fixture_content_sha256": "75955656fbc68163c3abe3477f1ab3c066db64dac4d885f7694ab8ea8bdab496"
+      },
+      "R02_retry_policy_regression_test": {
+        "source_path": "eval_cases/real_project_suite_v1/R02_retry_policy_regression_test/case.yaml",
+        "fixture_source_path": "eval_cases/real_project_suite_v1/R02_retry_policy_regression_test/fixture",
+        "case_definition_sha256": "2e168d0fcd14351589a0c6453adf406c942af72bbbb307a9d3ee19bbc81d890b",
+        "fixture_content_sha256": "698724288b516c60c977f1d2f9177736af1cc20b4725e9ba35d1a9c7f09a08ad"
+      },
+      "R03_cache_key_builder_feature": {
+        "source_path": "eval_cases/real_project_suite_v1/R03_cache_key_builder_feature/case.yaml",
+        "fixture_source_path": "eval_cases/real_project_suite_v1/R03_cache_key_builder_feature/fixture",
+        "case_definition_sha256": "28dee20fececd316f235204159987d9310814639c6d3c19719ee30864d253639",
+        "fixture_content_sha256": "d04bbf0857c537d7eea159e76bbe63f6a044f936234bba8c3bb201270c60f9c6"
+      }
+    },
+    "case_authority_bundle_sha256": "6d88700baf74cf24eaa0a2ab2985a732ee83bd569df41da2957c5e665dcebb7c",
+    "git_preflight_verified": false,
+    "git_postflight_verified": false
+  },
+  "run_ids": [
+    "eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8",
+    "eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6",
+    "eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0",
+    "eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7",
+    "eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d",
+    "eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687",
+    "eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60",
+    "eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e",
+    "eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03"
+  ],
+  "runs": [
+    {
+      "run_id": "eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8",
+      "case_name": "R01_cache_delete_retry_boundary",
+      "attempt": 1,
+      "status": "completed",
+      "result": "PASS",
+      "verdict": "passed",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "workspace_cleaned": true,
+      "cleanup_error": "",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260819-191732-986a8475\\manifest.json",
+        "verification_final-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8\\artifacts\\verification\\final-ee88dcce17f1.json",
+        "verification_initial-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8\\artifacts\\verification\\initial-ee88dcce17f1.json"
+      }
+    },
+    {
+      "run_id": "eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6",
+      "case_name": "R02_retry_policy_regression_test",
+      "attempt": 1,
+      "status": "completed",
+      "result": "PASS",
+      "verdict": "passed",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "workspace_cleaned": true,
+      "cleanup_error": "",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260819-191732-986a8475\\manifest.json",
+        "verification_final-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6\\artifacts\\verification\\final-ee88dcce17f1.json",
+        "verification_initial-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6\\artifacts\\verification\\initial-ee88dcce17f1.json"
+      }
+    },
+    {
+      "run_id": "eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0",
+      "case_name": "R03_cache_key_builder_feature",
+      "attempt": 1,
+      "status": "completed",
+      "result": "PASS",
+      "verdict": "passed",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "workspace_cleaned": true,
+      "cleanup_error": "",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260819-191732-986a8475\\manifest.json",
+        "verification_final-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0\\artifacts\\verification\\final-ee88dcce17f1.json",
+        "verification_initial-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0\\artifacts\\verification\\initial-ee88dcce17f1.json"
+      }
+    },
+    {
+      "run_id": "eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7",
+      "case_name": "R01_cache_delete_retry_boundary",
+      "attempt": 2,
+      "status": "completed",
+      "result": "PASS",
+      "verdict": "passed",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "workspace_cleaned": true,
+      "cleanup_error": "",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260819-191732-986a8475\\manifest.json",
+        "verification_final-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7\\artifacts\\verification\\final-ee88dcce17f1.json",
+        "verification_initial-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7\\artifacts\\verification\\initial-ee88dcce17f1.json"
+      }
+    },
+    {
+      "run_id": "eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d",
+      "case_name": "R02_retry_policy_regression_test",
+      "attempt": 2,
+      "status": "completed",
+      "result": "PASS",
+      "verdict": "passed",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "workspace_cleaned": true,
+      "cleanup_error": "",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260819-191732-986a8475\\manifest.json",
+        "verification_final-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d\\artifacts\\verification\\final-ee88dcce17f1.json",
+        "verification_initial-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d\\artifacts\\verification\\initial-ee88dcce17f1.json"
+      }
+    },
+    {
+      "run_id": "eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687",
+      "case_name": "R03_cache_key_builder_feature",
+      "attempt": 2,
+      "status": "completed",
+      "result": "PASS",
+      "verdict": "passed",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "workspace_cleaned": true,
+      "cleanup_error": "",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260819-191732-986a8475\\manifest.json",
+        "verification_final-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687\\artifacts\\verification\\final-ee88dcce17f1.json",
+        "verification_initial-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687\\artifacts\\verification\\initial-ee88dcce17f1.json"
+      }
+    },
+    {
+      "run_id": "eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60",
+      "case_name": "R01_cache_delete_retry_boundary",
+      "attempt": 3,
+      "status": "completed",
+      "result": "PASS",
+      "verdict": "passed",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "workspace_cleaned": true,
+      "cleanup_error": "",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260819-191732-986a8475\\manifest.json",
+        "verification_final-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60\\artifacts\\verification\\final-ee88dcce17f1.json",
+        "verification_initial-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60\\artifacts\\verification\\initial-ee88dcce17f1.json"
+      }
+    },
+    {
+      "run_id": "eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e",
+      "case_name": "R02_retry_policy_regression_test",
+      "attempt": 3,
+      "status": "completed",
+      "result": "PASS",
+      "verdict": "passed",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "workspace_cleaned": true,
+      "cleanup_error": "",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260819-191732-986a8475\\manifest.json",
+        "verification_final-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e\\artifacts\\verification\\final-ee88dcce17f1.json",
+        "verification_initial-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e\\artifacts\\verification\\initial-ee88dcce17f1.json"
+      }
+    },
+    {
+      "run_id": "eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03",
+      "run_dir": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03",
+      "case_name": "R03_cache_key_builder_feature",
+      "attempt": 3,
+      "status": "completed",
+      "result": "PASS",
+      "verdict": "passed",
+      "task_success": true,
+      "agent_success": true,
+      "infrastructure_success": true,
+      "policy_outcome": "clear",
+      "workspace_cleaned": true,
+      "cleanup_error": "",
+      "evidence": {
+        "state": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03\\state.json",
+        "trace": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03\\trace.jsonl",
+        "metrics": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03\\metrics.json",
+        "workspace_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03\\workspace_manifest.json",
+        "diff": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03\\artifacts\\diff.patch",
+        "run_report": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03\\eval_result.json",
+        "suite_manifest": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\suites\\suite-20260819-191732-986a8475\\manifest.json",
+        "verification_final-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03\\artifacts\\verification\\final-ee88dcce17f1.json",
+        "verification_initial-ee88dcce17f1": "D:\\MyPythonCode\\mini-claude-code\\.minicc\\runs\\eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03\\artifacts\\verification\\initial-ee88dcce17f1.json"
+      }
+    }
+  ],
+  "reports": {
+    "json": "report.json",
+    "markdown": "report.md",
+    "csv": "report.csv"
+  },
+  "artifacts": {
+    "report_json": {
+      "path": "report.json",
+      "bytes": 303942,
+      "sha256": "2f4b64c6b0af2cf102b59118cf3036dddf40257851e4750a0f0eb83b2d9289cd"
+    },
+    "report_markdown": {
+      "path": "report.md",
+      "bytes": 9812,
+      "sha256": "d2a70701ac5349db06357014d878bb126a091070e5b184824bcd817050c1ee6b"
+    },
+    "report_csv": {
+      "path": "report.csv",
+      "bytes": 2150,
+      "sha256": "ede3bc21d72d1f6a42e6e3769e254c8095b5c113d7d6663c91ceded21daf385a"
+    }
+  }
+}

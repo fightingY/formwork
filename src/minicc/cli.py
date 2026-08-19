@@ -2104,6 +2104,8 @@ def _case_constraints(case: EvalCase) -> list[str]:
         for assertion in case.assertions
         if assertion.get("type") == "command" and assertion.get("command")
     ]
+    if case.initial_verify is not None and case.initial_verify.get("command"):
+        verification_commands.append(str(case.initial_verify["command"]))
     if verification_commands:
         constraints.append(
             "Use these authoritative offline verification commands; do not install a different test runner: "
@@ -2120,8 +2122,10 @@ def _completion_verifier_for_case(case: EvalCase) -> CompletionVerifier | None:
         for assertion in case.assertions
         if assertion.get("type") == "command" and assertion.get("command")
     )
+    if not commands and case.initial_verify is not None and case.initial_verify.get("command"):
+        commands = (str(case.initial_verify["command"]),)
     if not commands:
-        raise ValueError(f"completion_gate requires at least one command assertion: {case.name}")
+        raise ValueError(f"completion_gate requires an authoritative verification command: {case.name}")
     return CommandCompletionVerifier(
         commands=commands,
         timeout_sec=_case_int(case, "verification_timeout_sec", 120),

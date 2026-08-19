@@ -1,0 +1,10 @@
+schema_version,suite_id,run_id,milestone,stage,case_name,attempt,status,result,verdict,task_success,agent_success,infrastructure_success,policy_outcome,workspace_cleaned,cleanup_error
+2,suite-20260819-191732-986a8475,eval-R01_cache_delete_retry_boundary-r1-20260819-191732-dd7192a8,v3.4-acceptance,development_precheck,R01_cache_delete_retry_boundary,1,completed,PASS,passed,True,True,True,clear,True,
+2,suite-20260819-191732-986a8475,eval-R02_retry_policy_regression_test-r1-20260819-191836-9a389ca6,v3.4-acceptance,development_precheck,R02_retry_policy_regression_test,1,completed,PASS,passed,True,True,True,clear,True,
+2,suite-20260819-191732-986a8475,eval-R03_cache_key_builder_feature-r1-20260819-191955-b5eb90e0,v3.4-acceptance,development_precheck,R03_cache_key_builder_feature,1,completed,PASS,passed,True,True,True,clear,True,
+2,suite-20260819-191732-986a8475,eval-R01_cache_delete_retry_boundary-r2-20260819-192303-db0191f7,v3.4-acceptance,development_precheck,R01_cache_delete_retry_boundary,2,completed,PASS,passed,True,True,True,clear,True,
+2,suite-20260819-191732-986a8475,eval-R02_retry_policy_regression_test-r2-20260819-192346-470dcb6d,v3.4-acceptance,development_precheck,R02_retry_policy_regression_test,2,completed,PASS,passed,True,True,True,clear,True,
+2,suite-20260819-191732-986a8475,eval-R03_cache_key_builder_feature-r2-20260819-192447-f008d687,v3.4-acceptance,development_precheck,R03_cache_key_builder_feature,2,completed,PASS,passed,True,True,True,clear,True,
+2,suite-20260819-191732-986a8475,eval-R01_cache_delete_retry_boundary-r3-20260819-192529-dd05ea60,v3.4-acceptance,development_precheck,R01_cache_delete_retry_boundary,3,completed,PASS,passed,True,True,True,clear,True,
+2,suite-20260819-191732-986a8475,eval-R02_retry_policy_regression_test-r3-20260819-192713-588e7d7e,v3.4-acceptance,development_precheck,R02_retry_policy_regression_test,3,completed,PASS,passed,True,True,True,clear,True,
+2,suite-20260819-191732-986a8475,eval-R03_cache_key_builder_feature-r3-20260819-192857-8127df03,v3.4-acceptance,development_precheck,R03_cache_key_builder_feature,3,completed,PASS,passed,True,True,True,clear,True,

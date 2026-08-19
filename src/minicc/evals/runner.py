@@ -3,12 +3,17 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import shlex
+import shutil
+import stat
 import subprocess
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import TracebackType
+from typing import Any
 
 from minicc.core.ledger import (
     LEDGER_SCHEMA_VERSION,
@@ -20,6 +25,7 @@ from minicc.core.ledger import (
 from minicc.core.state import RunState, new_run_id, save_run_state
 from minicc.evals.assertions import (
     AssertionResult,
+    run_assertion,
     run_assertions,
     trace_action_shape_evidence_events,
 )
@@ -64,6 +70,10 @@ class EvalCaseResult:
     request_rows: list[dict] = field(default_factory=list)
     trace_assertion_events: list[dict] = field(default_factory=list)
     assertion_specs: list[dict] = field(default_factory=list)
+    initial_verification: AssertionResult | None = None
+    workspace_cleaned: bool = False
+    cleanup_error: str = ""
+    verdict: str = "failed"
 
 
 @dataclass(frozen=True)
@@ -189,8 +199,24 @@ def run_eval_case(
             raise RuntimeError(
                 f"case authority profile changed before snapshot: {case.name}"
             )
+        initial_verification = None
+        if case.initial_verify is not None:
+            initial_spec = {**case.initial_verify, "_artifact_label": "initial"}
+            initial_verification = run_assertion(
+                initial_spec,
+                workspace_dir=workspace.workspace_dir,
+                run_dir=workspace.run_dir,
+                metrics=state.metrics,
+            )
+            if not initial_verification.passed:
+                raise RuntimeError(
+                    "Initial verification did not fail as declared: "
+                    + initial_verification.message
+                )
         state = agent_runner(case, state)
     except Exception as exc:
+        if "initial_verification" not in locals():
+            initial_verification = None
         state.status = "failed"
         state.state_summary = _format_infrastructure_error(exc)
         state.metrics["infrastructure_errors"] = state.metrics.get("infrastructure_errors", 0) + 1
@@ -204,6 +230,12 @@ def run_eval_case(
         metrics=metrics or state.metrics,
         verifier_dir=case.case_dir / "verifier",
     )
+    if initial_verification is not None:
+        assertion_results.insert(0, AssertionResult(
+            "initial_verify",
+            initial_verification.passed,
+            initial_verification.message,
+        ))
     expected_status = _expected_run_status(case)
     agent_success = state.status == expected_status
     task_assertions = [result for result in assertion_results if result.type != "run_status"]
@@ -246,6 +278,32 @@ def run_eval_case(
         request_rows=request_rows,
         trace_assertion_events=trace_assertion_events,
         assertion_specs=[dict(assertion) for assertion in case.assertions],
+        initial_verification=initial_verification,
+        verdict=_eval_verdict(passed, infrastructure_success, result_metrics),
+    )
+    cleanup_error = ""
+    workspace_cleaned = False
+    if case.cleanup_workspace:
+        try:
+            shutil.rmtree(workspace.workspace_dir, onerror=_retry_readonly_removal)
+            workspace_cleaned = True
+        except OSError as exc:
+            cleanup_error = str(exc)
+            result.metrics["workspace_cleanup_error"] = cleanup_error
+            (workspace.run_dir / "cleanup_error.txt").write_text(cleanup_error + "\n", encoding="utf-8")
+    if workspace_cleaned:
+        result.metrics["workspace_cleaned"] = True
+    result = replace(
+        result,
+        passed=result.passed and not cleanup_error,
+        infrastructure_success=result.infrastructure_success and not cleanup_error,
+        workspace_cleaned=workspace_cleaned,
+        cleanup_error=cleanup_error,
+        verdict=(
+            "infrastructure_error"
+            if cleanup_error
+            else _eval_verdict(result.passed, result.infrastructure_success, result.metrics)
+        ),
     )
     write_eval_case_report(result, workspace.run_dir)
     write_artifact_index(
@@ -256,6 +314,28 @@ def run_eval_case(
         hash_artifacts=True,
     )
     return result
+
+
+def _retry_readonly_removal(
+    operation: Callable[[str], object],
+    path: str,
+    error_info: tuple[type[BaseException], BaseException, TracebackType | None],
+) -> None:
+    error = error_info[1]
+    if not isinstance(error, PermissionError):
+        raise error
+    os.chmod(path, os.stat(path).st_mode | stat.S_IWRITE)
+    operation(path)
+
+
+def _eval_verdict(passed: bool, infrastructure_success: bool, metrics: Mapping[str, Any]) -> str:
+    if passed:
+        return "passed"
+    if int(metrics.get("timeouts", 0) or 0) > 0:
+        return "timeout"
+    if not infrastructure_success:
+        return "infrastructure_error"
+    return "failed"
 
 
 def write_eval_report(result: EvalSuiteResult, output_dir: Path) -> tuple[Path, Path]:
@@ -311,6 +391,7 @@ def suite_to_dict(result: EvalSuiteResult) -> dict:
                 "stage": case.stage,
                 "capability": case.capability,
                 "passed": case.passed,
+                "verdict": case.verdict,
                 "run_status": case.run_status,
                 "attempt": case.attempt,
                 "run_id": case.run_id,
@@ -333,6 +414,11 @@ def suite_to_dict(result: EvalSuiteResult) -> dict:
                 "evidence": _run_evidence_paths(case),
                 "metrics": case.metrics,
                 "assertions": [asdict(assertion) for assertion in case.assertions],
+                "initial_verification": (
+                    asdict(case.initial_verification) if case.initial_verification is not None else None
+                ),
+                "workspace_cleaned": case.workspace_cleaned,
+                "cleanup_error": case.cleanup_error,
             }
             for case in result.cases
         ],
@@ -376,6 +462,7 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
         if case.proves:
             lines.append(case.proves)
         lines.append(f"Run: `{case.run_id}`")
+        lines.append(f"Verdict: `{case.verdict}`")
         lines.append(
             "Outcome: "
             f"task={'PASS' if case.task_success else 'FAIL'}, "
@@ -383,6 +470,10 @@ def format_markdown_report(result: EvalSuiteResult) -> str:
             f"infrastructure={'PASS' if case.infrastructure_success else 'FAIL'}"
         )
         lines.append(f"Policy outcome: `{case.policy_outcome}`")
+        lines.append(
+            f"Workspace cleaned: `{'true' if case.workspace_cleaned else 'false'}`"
+            + (f" (error: {case.cleanup_error})" if case.cleanup_error else "")
+        )
         lines.append(
             "Metrics: "
             f"turns={case.metrics.get('turns', 0)}, "
@@ -410,10 +501,13 @@ def format_csv_report(result: EvalSuiteResult) -> str:
             "attempt",
             "status",
             "result",
+            "verdict",
             "task_success",
             "agent_success",
             "infrastructure_success",
             "policy_outcome",
+            "workspace_cleaned",
+            "cleanup_error",
         ]
     )
     for case in result.cases:
@@ -428,10 +522,13 @@ def format_csv_report(result: EvalSuiteResult) -> str:
                 case.attempt,
                 case.run_status,
                 "PASS" if case.passed else "FAIL",
+                case.verdict,
                 case.task_success,
                 case.agent_success,
                 case.infrastructure_success,
                 case.policy_outcome,
+                case.workspace_cleaned,
+                case.cleanup_error,
             ]
         )
     return buffer.getvalue()
@@ -514,6 +611,7 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         "capability": result.capability,
         "attempt": result.attempt,
         "passed": result.passed,
+        "verdict": result.verdict,
         "run_id": result.run_id,
         "run_status": result.run_status,
         "task_success": result.task_success,
@@ -546,6 +644,11 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         "budget": result.budget or {},
         "metrics": result.metrics,
         "assertions": [asdict(assertion) for assertion in result.assertions],
+        "initial_verification": (
+            asdict(result.initial_verification) if result.initial_verification is not None else None
+        ),
+        "workspace_cleaned": result.workspace_cleaned,
+        "cleanup_error": result.cleanup_error,
     }
     json_path = run_dir / "eval_result.json"
     markdown_path = run_dir / "eval_result.md"
@@ -554,6 +657,7 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         f"# {result.name} attempt {result.attempt}",
         "",
         f"- Passed: `{'true' if result.passed else 'false'}`",
+        f"- Verdict: `{result.verdict}`",
         f"- Run status: `{payload['run_status']}`",
         f"- Task success: `{'true' if result.task_success else 'false'}`",
         f"- Agent success: `{'true' if result.agent_success else 'false'}`",
@@ -562,6 +666,7 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         f"- Suite id: `{result.suite_id}`",
         f"- Run id: `{result.run_id}`",
         f"- Sandbox mode: `{result.sandbox_mode}`",
+        f"- Workspace cleaned: `{'true' if result.workspace_cleaned else 'false'}`",
         "",
         "## Verifier",
         "",
@@ -588,10 +693,13 @@ def _suite_payloads(result: EvalSuiteResult) -> tuple[dict, dict]:
             "attempt": case.attempt,
             "status": case.run_status,
             "result": "PASS" if case.passed else "FAIL",
+            "verdict": case.verdict,
             "task_success": case.task_success,
             "agent_success": case.agent_success,
             "infrastructure_success": case.infrastructure_success,
             "policy_outcome": case.policy_outcome,
+            "workspace_cleaned": case.workspace_cleaned,
+            "cleanup_error": case.cleanup_error,
             "evidence": _run_evidence_paths(case),
         }
         for case in result.cases
@@ -639,6 +747,9 @@ def _run_evidence_paths(result: EvalCaseResult) -> dict[str, str]:
     working_memory = run_dir / "working_memory.json"
     if working_memory.is_file():
         evidence["working_memory"] = str(working_memory)
+    verification_dir = run_dir / "artifacts" / "verification"
+    for verification in sorted(verification_dir.glob("*.json")):
+        evidence[f"verification_{verification.stem}"] = str(verification)
     return evidence
 
 

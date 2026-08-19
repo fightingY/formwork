@@ -871,6 +871,97 @@ G01 继续作为相关指引效率实验；三者不能替代真实仓库演示�
 - Optional A/B 只有在其自身对照门通过后，才允许增加作用域明确的 Capability Lift 声明；不得回退
   使用 C02、C07、G01 或历史 67 runs 包装真实仓库成功率。
 
+### V3.4：最小真实项目评测闭环（已完成本地真实模型验收）
+
+目标：把真实项目评测收敛为一个适合实习项目展示、面试解释和本地复跑的最小闭环。该阶段优先
+证明“Agent 修改了代码，并且修改后的项目通过了独立验证”，不继续扩展为通用远程仓库平台。
+
+#### 设计取舍
+
+- 每次只运行一个 Agent、一个本地任务、一个临时 workspace。
+- 任务使用小型 fixture 或从真实项目中抽取的最小文件集，不复制整个大型项目及其依赖缓存。
+- workspace 由 `mkdtemp` 创建，任务结束后在 `finally` 中清理；日志、trace 和验证结果在清理前
+  保存到 run artifact。
+- Agent 的最终文本只作为过程记录，不能作为成功依据。
+- 成功必须由评测代码重新执行预先声明的 `verify` 命令，并要求退出码为 0；必要时再增加少量
+  文件完整性断言，例如测试文件不得被修改。
+- 本阶段不引入 Git worktree、patch replay、远程 GitHub 拉取、跨任务缓存或复杂 workspace
+  retention。它们属于未来需求，不能阻塞当前真实任务演示。
+
+#### 单任务目录约定
+
+每个评测任务只需要以下内容：
+
+```text
+<case>/
+  case.yaml       # prompt、预算、setup、verify、允许的工作目录
+  setup.ps1       # 可选：生成或准备初始项目
+  verify.ps1      # 独立验证脚本，退出码 0 才算通过
+  fixture/        # 小型项目文件，或从真实项目抽取的最小复现
+```
+
+`setup` 负责准备一个已知会失败的初始状态；运行器在 Agent 开始前先执行一次 `verify`，确认
+任务确实是失败态，避免出现“任务本来就已经通过”的假阳性。
+
+#### 运行流程
+
+```text
+创建临时 workspace
+    -> materialize fixture / 执行 setup
+    -> verify 必须先失败
+    -> 启动单 Agent（cwd = workspace）
+    -> Agent 请求结束或达到预算
+    -> 运行器重新执行 verify
+    -> 保存 trace、stdout/stderr、diff 和 verdict
+    -> finally 清理临时 workspace
+```
+
+运行器至少区分以下结果：
+
+- `passed`：Agent 结束后独立 `verify` 通过，且没有违反任务约束。
+- `failed`：Agent 结束但 `verify` 仍失败，或文件约束不满足。
+- `infrastructure_error`：setup、verify 基础设施、Provider 或清理流程本身出错，不能混入任务
+  成功率。
+- `timeout`：超过任务预算；仍保留 trace 和验证输出。
+
+#### 第一批任务（已落地）
+
+已实现 3 个小而真实的任务，不追求数量：
+
+1. 修复一个已有失败测试的业务 bug。
+2. 为一个已有模块补齐边界回归测试。
+3. 给一个 CLI 或 service 增加小功能，并由已有测试验证行为。
+
+当前 fixture 位于 `eval_cases/real_project_suite_v1/`：R01 覆盖缓存删除重试时序 bug，R02 覆盖
+边界回归测试与 mutation 检查，R03 覆盖商铺搜索缓存 key 小功能。三个验证器均要求本地 Java
+toolchain，缺失时返回基础设施错误，不伪造任务结果。
+
+本地真实模型验收已完成：三个 case 各连续运行 3 次，共 9/9 `passed`，无 Provider error，9/9
+workspace 清理成功。证据归档于 `acceptance/stable-v3.4/`，执行 stage 为 `development_precheck`；
+由于当前任务验证器依赖 Windows Java 17，本轮没有宣称 Docker `release_gate`，也不改变历史 Stable
+版本的正式口径。
+
+任务应来自 `D:\Code\MyHeiMaDianPing` 等真实项目中的可隔离问题，但每个 case 只保留完成任务
+所需的最小文件和命令。任务 prompt、初始失败证据、verify 命令和禁止修改文件在冻结后不得随
+模型输出调整。
+
+#### 验收标准
+
+- 先用一个 case 跑通完整流程，再扩展到 2-3 个 case。
+- 每个 case 至少连续运行 3 次真实模型，记录每次的 verdict、turns、actions、耗时和验证输出。
+- 通过条件是独立 `verify` 通过，不接受 Agent 自报完成替代验证。
+- 每次运行都保留最小可审计证据：run metadata、trace、verify stdout/stderr、diff 或变更文件
+  列表、最终 verdict。
+- 所有结束路径都执行清理；清理失败单独报告，不覆盖原始任务 verdict。
+- 任务失败、验证失败、Provider/基础设施失败分开统计。
+- 不改变已有 V3.0-V3.3 的回归口径；本阶段不宣称任意 GitHub 仓库成功率或通用 coding 能力提升。
+
+#### 后续再考虑
+
+只有 V3.4 的最小闭环稳定后，才讨论以下扩展：远程 GitHub source、完整仓库快照、并发任务、
+workspace retention、patch replay、跨 run 比较和更复杂的 judge。任何扩展都必须有明确需求，
+不能因为“业界有”就提前加入。
+
 进入 Stable 的最低条件：
 
 - 先有确定性单元和集成测试。
@@ -907,7 +998,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                             |
                                       |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
                                       |                                                        |
-                                      |                                                        +-> V3.3 real-repo demo
+                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |
