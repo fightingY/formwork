@@ -6,6 +6,7 @@ from minicc.core.protocol import (
     FinalAction,
     MemoryReference,
     ProtocolError,
+    SkillAction,
     action_to_dict,
     parse_action,
 )
@@ -21,6 +22,12 @@ def test_parse_ask_action() -> None:
     action = parse_action('{"type":"ask","question":"Allow network access?"}')
 
     assert action == AskAction(question="Allow network access?")
+
+
+def test_parse_skill_action() -> None:
+    action = parse_action('{"type":"skill","name":"Python-Debugging"}')
+
+    assert action == SkillAction(name="python-debugging")
 
 
 def test_parse_final_action() -> None:
@@ -95,6 +102,7 @@ def test_caps_timeout_to_loop_budget() -> None:
         ('{"type":"bash","command":"echo ok","timeout_sec":0}', "bash.timeout_sec"),
         ('{"type":"bash","command":"echo ok","purpose":42}', "bash.purpose"),
         ('{"type":"ask","question":""}', "ask.question"),
+        ('{"type":"skill","name":"../secret"}', "skill.name"),
         ('{"type":"final","answer":""}', "final.answer"),
         ('{"type":"unknown"}', "Action type"),
     ],

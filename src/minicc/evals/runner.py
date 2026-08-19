@@ -202,6 +202,7 @@ def run_eval_case(
         workspace_dir=workspace.workspace_dir,
         run_dir=workspace.run_dir,
         metrics=metrics or state.metrics,
+        verifier_dir=case.case_dir / "verifier",
     )
     expected_status = _expected_run_status(case)
     agent_success = state.status == expected_status

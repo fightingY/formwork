@@ -8,7 +8,7 @@ from typing import Any, Literal, cast
 import yaml
 
 CompactionStrategy = Literal["disabled", "deterministic", "semantic"]
-PromptLayout = Literal["rebuild", "append", "epoch"]
+PromptLayout = Literal["rebuild", "append", "epoch", "append_until_compaction"]
 
 
 @dataclass(frozen=True)
@@ -286,8 +286,10 @@ def _compaction_strategy(config: dict[str, Any]) -> CompactionStrategy:
 
 def _prompt_layout(config: dict[str, Any]) -> PromptLayout:
     value = str(config.get("prompt_layout", "rebuild")).strip().lower()
-    if value not in {"rebuild", "append", "epoch"}:
-        raise ValueError("context.prompt_layout must be rebuild, append, or epoch")
+    if value not in {"rebuild", "append", "epoch", "append_until_compaction"}:
+        raise ValueError(
+            "context.prompt_layout must be rebuild, append, epoch, or append_until_compaction"
+        )
     return cast(PromptLayout, value)
 
 

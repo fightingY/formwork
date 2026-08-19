@@ -137,6 +137,21 @@ def test_epoch_layout_preserves_complete_prefix_after_recent_window_would_move()
     assert trace.events[-1]["prefix_profile"]["prefix_reset_reason"] == "exact_append"
 
 
+def test_append_until_compaction_is_the_descriptive_epoch_layout() -> None:
+    builder = ContextBuilder(
+        ContextConfig(prompt_layout="append_until_compaction", recent_turns=1)
+    )
+    state = RunState.start("Inspect repository")
+    first_step = _step("pwd", "first")
+    second_step = _step("ls", "second")
+
+    after_first = builder.build_messages(state, [first_step])
+    after_second = builder.build_messages(state, [first_step, second_step])
+
+    assert after_second[: len(after_first)] == after_first
+    assert state.metrics["prompt_layout"] == "append_until_compaction"
+
+
 def test_epoch_layout_starts_new_prefix_epoch_after_compaction() -> None:
     trace = TraceRecorder()
     builder = ContextBuilder(
@@ -159,6 +174,10 @@ def test_epoch_layout_starts_new_prefix_epoch_after_compaction() -> None:
     assert state.metrics["cache_prefix_epoch"] == 2
     assert state.metrics["cache_prefix_reset_requests"] == 1
     assert state.metrics["cache_prefix_reset_reason"] == "compaction_epoch_rollover"
+    event = state.metrics["context_compaction_events"][0]
+    assert event["before_chars"] > event["after_chars"]
+    assert event["compacted_step_start"] == 1
+    assert event["compacted_step_end"] >= event["compacted_step_start"]
 
 
 def test_epoch_compaction_uses_hysteresis_and_does_not_reset_again_next_turn() -> None:
@@ -462,8 +481,9 @@ def test_context_builder_injects_skill_catalog_and_feedback_memory(tmp_path) -> 
     messages = builder.build_messages(state, [])
     builder.build_messages(state, [])
 
-    assert "## repo-inspection" in messages[1]["content"]
-    assert "Description: Inspect repository structure." in messages[1]["content"]
+    assert "repo-inspection: Inspect repository structure." in messages[1]["content"]
+    assert "Use rg to inspect the repository." not in messages[1]["content"]
+    assert '"type":"skill"' in messages[1]["content"]
     assert "caution: Use rg before broad file reads." in messages[1]["content"]
     assert state.metrics["guidance_skill_names"] == ["repo-inspection"]
     assert len(state.metrics["guidance_skill_hashes"]["repo-inspection"]) == 64

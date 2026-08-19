@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from minicc.core.context import state_snapshot_text
-from minicc.core.protocol import Action, AskAction, BashAction, FinalAction
+from minicc.core.protocol import Action, AskAction, BashAction, FinalAction, SkillAction
 from minicc.core.session import (
     SessionManager,
     begin_execution,
@@ -16,6 +16,7 @@ from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.core.verification import CompletionVerifier
 from minicc.memory.working import ground_memory_references
 from minicc.policy.base import PolicyChain, PolicyDecision
+from minicc.skills.registry import SkillRegistry
 from minicc.trace.recorder import TraceRecorder
 
 
@@ -39,12 +40,14 @@ class ActionHandler:
         session: SessionManager | None = None,
         trace: TraceRecorder | None = None,
         completion_verifier: CompletionVerifier | None = None,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         self.executor = executor
         self.policy_chain = policy_chain or PolicyChain()
         self.session = session or SessionManager()
         self.trace = trace
         self.completion_verifier = completion_verifier
+        self.skill_registry = skill_registry
         self._active_verification_state: RunState | None = None
 
     def handle(self, action: Action, state: RunState) -> ActionOutcome:
@@ -104,7 +107,55 @@ class ActionHandler:
                 self.trace.approval_requested(state, action.question)
             return ActionOutcome(should_continue=False)
 
+        if isinstance(action, SkillAction):
+            return self._handle_skill(action, state)
+
         return self._handle_bash(action, state)
+
+    def _handle_skill(self, action: SkillAction, state: RunState) -> ActionOutcome:
+        loaded = self.skill_registry.load_text(action.name) if self.skill_registry else None
+        if loaded is None:
+            observation = Observation(
+                kind="command_error",
+                message=f"Skill {action.name!r} is not available in the frozen run catalog.",
+            )
+        else:
+            observation = Observation(
+                kind="command_result",
+                exit_code=0,
+                stdout_preview=loaded,
+                message=f"Loaded skill {action.name!r} from the frozen run catalog.",
+            )
+            state.metrics["skill_load_actions"] = int(
+                state.metrics.get("skill_load_actions", 0)
+            ) + 1
+            loaded_names = state.metrics.get("loaded_skill_names", [])
+            if not isinstance(loaded_names, list):
+                loaded_names = []
+            state.metrics["loaded_skill_names"] = list(
+                dict.fromkeys([*loaded_names, action.name])
+            )
+            if self.trace is not None:
+                skill = self.skill_registry.get(action.name) if self.skill_registry else None
+                self.trace.record(
+                    "skill_loaded",
+                    state,
+                    skill_name=action.name,
+                    skill_sha256=skill.sha256 if skill else None,
+                    skill_source=skill.source if skill else None,
+                )
+        state.last_observation = observation
+        if self.trace is not None:
+            self.trace.observation_created(state, observation)
+        return ActionOutcome(
+            steps=[
+                TrajectoryStep(
+                    action=action,
+                    observation=observation,
+                    state_snapshot=state_snapshot_text(state),
+                )
+            ]
+        )
 
     def _execute_verification_action(self, action: BashAction) -> Observation:
         """Execute a pre-bound verifier command through the same policy and trace boundary."""

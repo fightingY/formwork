@@ -1,7 +1,8 @@
 from minicc.core.action_handler import ActionHandler
-from minicc.core.protocol import AskAction, BashAction, FinalAction, MemoryReference
+from minicc.core.protocol import AskAction, BashAction, FinalAction, MemoryReference, SkillAction
 from minicc.core.state import Observation, RunState
 from minicc.policy.base import PolicyChain, PolicyDecision
+from minicc.skills.registry import SkillRegistry
 from minicc.trace.recorder import TraceRecorder
 
 
@@ -54,6 +55,34 @@ def test_action_handler_ask_waits_and_saves_state(tmp_path) -> None:
     assert state.approval_question == "Which branch?"
     assert state.metrics["approvals_requested"] == 1
     assert (tmp_path / "state.json").exists()
+
+
+def test_action_handler_loads_skill_from_frozen_catalog(tmp_path) -> None:
+    skill_dir = tmp_path / "skills" / "python-debugging"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: python-debugging\ndescription: Debug pytest failures.\n---\n"
+        "Read the first failing traceback.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(tmp_path / "skills")
+    registry.list_skills()
+    skill_file.write_text("changed after freeze", encoding="utf-8")
+    trace = TraceRecorder()
+    state = RunState.start("debug")
+
+    outcome = ActionHandler(
+        FakeExecutor(),
+        trace=trace,
+        skill_registry=registry,
+    ).handle(SkillAction(name="python-debugging"), state)
+
+    assert outcome.steps[0].observation.kind == "command_result"
+    assert "Read the first failing traceback." in outcome.steps[0].observation.stdout_preview
+    assert "changed after freeze" not in outcome.steps[0].observation.stdout_preview
+    assert state.metrics["loaded_skill_names"] == ["python-debugging"]
+    assert any(event["event"] == "skill_loaded" for event in trace.events)
 
 
 def test_action_handler_executes_rewritten_action() -> None:

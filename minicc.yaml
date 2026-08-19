@@ -33,7 +33,8 @@ context:
   compaction_strategy: deterministic
   semantic_max_input_chars: 60000
   semantic_max_completion_tokens: 2048
-  prompt_layout: append
+  # Keep the full append-only history until the prompt budget triggers one compaction.
+  prompt_layout: append_until_compaction
 
 policy:
   require_approval_for_network: true

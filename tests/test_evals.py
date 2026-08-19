@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 
@@ -137,6 +138,48 @@ def test_eval_assertions_cover_files_metrics_trace_and_diff(tmp_path) -> None:
     )
 
     assert all(result.passed for result in results)
+
+
+def test_python_verifier_is_hash_bound_and_runs_outside_workspace(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    run_dir = tmp_path / "run"
+    verifier_dir = tmp_path / "verifier"
+    workspace.mkdir()
+    run_dir.mkdir()
+    verifier_dir.mkdir()
+    (workspace / "answer.txt").write_text("fixed\n", encoding="utf-8")
+    script = verifier_dir / "verify.py"
+    script.write_text(
+        "import os\n"
+        "from pathlib import Path\n"
+        "workspace = Path(os.environ['MINICC_WORKSPACE'])\n"
+        "raise SystemExit(0 if (workspace / 'answer.txt').read_text() == 'fixed\\n' else 1)\n",
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+
+    result = assertions.run_assertion(
+        {"type": "python_verifier", "path": "verify.py", "sha256": digest},
+        workspace_dir=workspace,
+        run_dir=run_dir,
+        metrics={},
+        verifier_dir=verifier_dir,
+    )
+
+    assert result.passed is True
+    assert result.spec_sha256 == digest
+
+    script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    changed = assertions.run_assertion(
+        {"type": "python_verifier", "path": "verify.py", "sha256": digest},
+        workspace_dir=workspace,
+        run_dir=run_dir,
+        metrics={},
+        verifier_dir=verifier_dir,
+    )
+
+    assert changed.passed is False
+    assert "digest mismatch" in changed.message
 
 
 def test_metric_equals_rejects_a_different_value(tmp_path) -> None:

@@ -106,7 +106,7 @@ from minicc.sandbox.workspace import (
     workspace_content_records,
     write_workspace_diff,
 )
-from minicc.skills.registry import SkillRegistry
+from minicc.skills.registry import SkillRegistry, default_skill_roots
 from minicc.trace.metrics import write_metrics
 from minicc.trace.recorder import TraceRecorder, trace_path_for
 from minicc.trace.report import write_run_report
@@ -955,7 +955,7 @@ def _build_loop(
         start_session = getattr(provider, "start_session", None)
         if callable(start_session):
             start_session(state.run_id)
-    skill_root = (state.workspace_host_path if state and state.workspace_host_path else Path.cwd()) / "skills"
+    skill_workspace = state.workspace_host_path if state and state.workspace_host_path else Path.cwd()
     trace = TraceRecorder(trace_path_for(state)) if state is not None else TraceRecorder()
     if state is not None and state.repository_profile and not state.metrics.get(
         "repository_profile_trace_recorded"
@@ -988,7 +988,9 @@ def _build_loop(
     if state is not None and int(state.metrics.get("turns") or 0) > 0:
         stored_layout = state.metrics.get("prompt_layout")
         prompt_layout = (
-            stored_layout if stored_layout in {"rebuild", "append", "epoch"} else "rebuild"
+            stored_layout
+            if stored_layout in {"rebuild", "append", "epoch", "append_until_compaction"}
+            else "rebuild"
         )
     feedback_memory = (
         None
@@ -1000,7 +1002,7 @@ def _build_loop(
         skill_registry = None
         feedback_memory = None
     else:
-        skill_registry = SkillRegistry(skill_root)
+        skill_registry = SkillRegistry(roots=default_skill_roots(skill_workspace))
         if (
             state is not None
             and state.workspace_host_path is not None

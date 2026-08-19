@@ -90,7 +90,7 @@ def _local_shell_args(command: str) -> list[str] | None:
 
 def _uses_windows_native_build_tool(command: str) -> bool:
     return re.match(
-        r"^\s*(?:mvn(?:\.cmd)?|gradle(?:\.bat)?|gradlew(?:\.bat)?|"
+        r"^\s*(?:mvn(?:\.cmd)?|gradle(?:\.bat)?|gradlew(?:\.bat)?|javac|java|"
         r"\.\\mvnw(?:\.cmd)?|\.\\gradlew(?:\.bat)?)(?:\s|$)",
         command,
         flags=re.IGNORECASE,

@@ -127,6 +127,48 @@ def test_model_turn_runner_uses_weighted_run_cache_hit_rate() -> None:
     assert state.metrics["cache_observed_hit_tokens"] == 250
     assert state.metrics["cache_observed_prompt_tokens"] == 1100
     assert state.metrics["cache_hit_rate"] == 250 / 1100
+    assert state.metrics["cache_requests"] == [
+        {
+            "request_index": 0,
+            "provider": "CacheProvider",
+            "model": None,
+            "prompt_tokens": 1000,
+            "completion_tokens": None,
+            "cache_read_tokens": 250,
+            "cache_write_tokens": None,
+            "uncached_tokens": 750,
+            "cache_hit_rate": 0.25,
+            "system_prefix_estimated_tokens": None,
+            "project_prefix_estimated_tokens": None,
+            "conversation_estimated_tokens": None,
+            "prefix_hash": "",
+            "previous_request_is_prefix": False,
+            "longest_common_prefix_estimated_tokens": 0,
+            "prefix_reset_reason": "",
+            "compaction_id": None,
+            "latency_ms": 1,
+        },
+        {
+            "request_index": 0,
+            "provider": "CacheProvider",
+            "model": None,
+            "prompt_tokens": 100,
+            "completion_tokens": None,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": None,
+            "uncached_tokens": 100,
+            "cache_hit_rate": 0.0,
+            "system_prefix_estimated_tokens": None,
+            "project_prefix_estimated_tokens": None,
+            "conversation_estimated_tokens": None,
+            "prefix_hash": "",
+            "previous_request_is_prefix": False,
+            "longest_common_prefix_estimated_tokens": 0,
+            "prefix_reset_reason": "",
+            "compaction_id": None,
+            "latency_ms": 1,
+        },
+    ]
 
 
 def test_model_turn_runner_distinguishes_unreported_cache_metrics_from_zero_hits() -> None:

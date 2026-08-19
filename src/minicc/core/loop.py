@@ -73,6 +73,7 @@ class AgentLoop:
             session=self.session,
             trace=self.trace,
             completion_verifier=completion_verifier,
+            skill_registry=self.context_builder.skill_registry,
         )
 
     def run(

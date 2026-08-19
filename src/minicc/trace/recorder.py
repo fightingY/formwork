@@ -104,6 +104,11 @@ class TraceRecorder:
                 "empirical_hit_block_tokens": state.metrics.get(
                     "cache_empirical_hit_block_tokens"
                 ),
+                "request_metrics": (
+                    state.metrics.get("cache_requests", [])[-1]
+                    if state.metrics.get("cache_requests")
+                    else None
+                ),
             },
         )
 
@@ -142,6 +147,7 @@ class TraceRecorder:
         source_steps: int = 0,
         input_chars: int = 0,
         output_chars: int = 0,
+        **details: Any,
     ) -> None:
         self.record(
             "context_compacted",
@@ -151,6 +157,7 @@ class TraceRecorder:
             source_steps=source_steps,
             input_chars=input_chars,
             output_chars=output_chars,
+            **details,
         )
 
     def semantic_compaction_started(

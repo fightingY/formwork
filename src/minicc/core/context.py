@@ -20,11 +20,13 @@ You must output exactly one JSON object per turn. Do not output Markdown.
 
 Allowed actions:
 {"type":"bash","command":"pytest -q","timeout_sec":60,"purpose":"run tests"}
+{"type":"skill","name":"skill-name"}
 {"type":"ask","question":"A concrete question for the user"}
 {"type":"final","answer":"The final answer to the user"}
 
 Behavior rules:
 - Use bash actions to inspect files, run tests, or make changes.
+- Use skill to load one catalog entry only when its instructions are relevant.
 - Use ask only when the task is blocked by missing user input.
 - Use final only when the task is complete or cannot continue.
 - Treat observations as authoritative harness results.
@@ -52,7 +54,7 @@ Observation contract:
 
 EPOCH_COMPACTION_TARGET_RATIO = 0.65
 CompactionStrategy = Literal["disabled", "deterministic", "semantic"]
-PromptLayout = Literal["rebuild", "append", "epoch"]
+PromptLayout = Literal["rebuild", "append", "epoch", "append_until_compaction"]
 
 
 @dataclass(frozen=True)
@@ -80,8 +82,15 @@ class ContextBuilder:
         self.config = config or ContextConfig()
         if self.config.compaction_strategy not in {"disabled", "deterministic", "semantic"}:
             raise ValueError("compaction_strategy must be disabled, deterministic, or semantic")
-        if self.config.prompt_layout not in {"rebuild", "append", "epoch"}:
-            raise ValueError("prompt_layout must be rebuild, append, or epoch")
+        if self.config.prompt_layout not in {
+            "rebuild",
+            "append",
+            "epoch",
+            "append_until_compaction",
+        }:
+            raise ValueError(
+                "prompt_layout must be rebuild, append, epoch, or append_until_compaction"
+            )
         if self.config.compaction_strategy == "semantic" and semantic_compactor is None:
             raise ValueError("semantic compaction requires a semantic_compactor")
         self.skill_registry = skill_registry
@@ -98,7 +107,7 @@ class ContextBuilder:
         state.metrics["context_compaction_strategy"] = self.config.compaction_strategy
         self._record_working_memory_injection(state)
         recent = self._active_trajectory(state, trajectory)
-        if self.config.prompt_layout in {"append", "epoch"}:
+        if self.config.prompt_layout in {"append", "epoch", "append_until_compaction"}:
             messages, stable_prefix_messages = self._append_messages(state, recent)
         else:
             messages = self._rebuild_messages(state, recent)
@@ -148,11 +157,12 @@ class ContextBuilder:
         compacted_steps = int(state.metrics.get("context_compacted_steps", 0))
         uncompressed_trajectory = trajectory[compacted_steps:]
         estimated_messages = self._build_messages_with_trajectory(state, uncompressed_trajectory)
-        if self._messages_len(estimated_messages) <= self.config.max_prompt_chars:
+        before_chars = self._messages_len(estimated_messages)
+        if before_chars <= self.config.max_prompt_chars:
             return
         state.metrics["context_budget_triggered"] = True
 
-        if self.config.prompt_layout == "epoch":
+        if self._uses_budget_driven_history():
             compactable_end = compacted_steps + self._epoch_compactable_steps(
                 state,
                 uncompressed_trajectory,
@@ -206,6 +216,36 @@ class ContextBuilder:
             markers=tuple(state.metrics["context_retention_markers"]),
             max_chars=self.config.summary_max_chars,
         )
+        if self._uses_budget_driven_history():
+            suffix = trajectory[compactable_end:]
+            post_compaction_chars = self._messages_len(
+                self._build_messages_with_trajectory(state, suffix)
+            )
+            target_chars = int(
+                self.config.max_prompt_chars * EPOCH_COMPACTION_TARGET_RATIO
+            )
+            non_summary_chars = max(post_compaction_chars - len(state.state_summary), 0)
+            marker_floor = sum(
+                len(str(marker)) + 3
+                for marker in state.metrics["context_retention_markers"]
+                if str(marker) in source_text
+            )
+            summary_floor = min(
+                self.config.summary_max_chars,
+                max(int(self.config.max_prompt_chars * 0.10), 1),
+            )
+            summary_budget = max(
+                target_chars - non_summary_chars,
+                marker_floor,
+                summary_floor,
+            )
+            if len(state.state_summary) > summary_budget:
+                state.state_summary = _preserve_retention_markers(
+                    state.state_summary,
+                    source_text=source_text,
+                    markers=tuple(state.metrics["context_retention_markers"]),
+                    max_chars=summary_budget,
+                )
 
         state.metrics["context_compacted_steps"] = compactable_end
         state.metrics["context_compaction_strategy"] = strategy
@@ -219,7 +259,7 @@ class ContextBuilder:
             state.metrics.get("context_compaction_chars_saved", 0)
             + max(len(trajectory_text) - len(state.state_summary), 0)
         )
-        if self.config.prompt_layout == "epoch":
+        if self._uses_budget_driven_history():
             state.metrics["cache_prefix_pending_reset_reason"] = "compaction_epoch_rollover"
             state.metrics["context_compaction_target_ratio"] = EPOCH_COMPACTION_TARGET_RATIO
             state.metrics["context_compaction_target_chars"] = int(
@@ -230,6 +270,13 @@ class ContextBuilder:
             self.format_trajectory(trajectory[compactable_end:]),
         )
         self._record_retention_metrics(state, active_context=active_context)
+        after_chars = self._messages_len(
+            self._build_messages_with_trajectory(
+                state,
+                trajectory[compactable_end:],
+            )
+        )
+        state.metrics["context_compaction_post_chars"] = after_chars
         self._record_compaction(
             state,
             f"Compacted {len(compactable)} older trajectory step(s) into state_summary.",
@@ -237,12 +284,11 @@ class ContextBuilder:
             source_steps=len(compactable),
             input_chars=len(trajectory_text),
             output_chars=len(state.state_summary),
-        )
-        state.metrics["context_compaction_post_chars"] = self._messages_len(
-            self._build_messages_with_trajectory(
-                state,
-                trajectory[compactable_end:],
-            )
+            before_chars=before_chars,
+            after_chars=after_chars,
+            compacted_step_start=compacted_steps + 1,
+            compacted_step_end=compactable_end,
+            preserved_recent_steps=len(trajectory) - compactable_end,
         )
 
     def _epoch_compactable_steps(
@@ -252,8 +298,13 @@ class ContextBuilder:
     ) -> int:
         if not trajectory:
             return 0
+        summary_reserve = max(
+            self.config.summary_max_chars - len(state.state_summary),
+            0,
+        )
         target_chars = max(
-            int(self.config.max_prompt_chars * EPOCH_COMPACTION_TARGET_RATIO),
+            int(self.config.max_prompt_chars * EPOCH_COMPACTION_TARGET_RATIO)
+            - summary_reserve,
             1,
         )
         for compact_count in range(1, len(trajectory) + 1):
@@ -275,10 +326,13 @@ class ContextBuilder:
         state: RunState,
         trajectory: list[TrajectoryStep],
     ) -> list[TrajectoryStep]:
-        if self.config.prompt_layout != "epoch":
+        if not self._uses_budget_driven_history():
             return self.recent_trajectory(trajectory)
         compacted_steps = max(int(state.metrics.get("context_compacted_steps", 0)), 0)
         return trajectory[min(compacted_steps, len(trajectory)) :]
+
+    def _uses_budget_driven_history(self) -> bool:
+        return self.config.prompt_layout in {"epoch", "append_until_compaction"}
 
     def _dynamic_context(
         self,
@@ -328,9 +382,11 @@ class ContextBuilder:
             skills = self.skill_registry.relevant_skills(state.goal)
             selected_skills = [skill.name for skill in skills]
             selected_skill_hashes = {skill.name: skill.sha256 for skill in skills}
-            skill_guidance = self.skill_registry.guidance_text(state.goal)
-            if skill_guidance:
-                context.append(skill_guidance)
+            skill_catalog = self.skill_registry.catalog_text(state.goal)
+            if skill_catalog:
+                context.append(skill_catalog)
+            state.metrics["skill_catalog_digest"] = self.skill_registry.catalog_digest
+            state.metrics["skill_catalog_errors"] = list(self.skill_registry.errors)
         if self.feedback_memory is not None:
             rules = self.feedback_memory.relevant_rules(state.goal)
             selected_rules = [rule.id for rule in rules]
@@ -548,10 +604,36 @@ class ContextBuilder:
         source_steps: int,
         input_chars: int,
         output_chars: int,
+        before_chars: int,
+        after_chars: int,
+        compacted_step_start: int,
+        compacted_step_end: int,
+        preserved_recent_steps: int,
     ) -> None:
-        state.metrics["context_compactions"] = state.metrics.get("context_compactions", 0) + 1
+        compaction_id = int(state.metrics.get("context_compactions", 0)) + 1
+        state.metrics["context_compactions"] = compaction_id
         state.metrics["last_context_compaction"] = message
+        event = {
+            "compaction_id": compaction_id,
+            "strategy": strategy,
+            "before_chars": before_chars,
+            "after_chars": after_chars,
+            "compacted_step_start": compacted_step_start,
+            "compacted_step_end": compacted_step_end,
+            "preserved_recent_steps": preserved_recent_steps,
+            "summary_input_chars": input_chars,
+            "summary_output_chars": output_chars,
+            "facts_expected": int(state.metrics.get("context_retention_expected", 0)),
+            "facts_preserved": int(state.metrics.get("context_retention_retained", 0)),
+            "fact_retention_rate": state.metrics.get("context_retention_rate"),
+        }
+        raw_events = state.metrics.get("context_compaction_events", [])
+        events = list(raw_events) if isinstance(raw_events, list) else []
+        events.append(event)
+        state.metrics["context_compaction_events"] = events
         if self.trace is not None:
+            trace_details = dict(event)
+            trace_details.pop("strategy", None)
             self.trace.context_compacted(
                 state,
                 message,
@@ -559,6 +641,7 @@ class ContextBuilder:
                 source_steps=source_steps,
                 input_chars=input_chars,
                 output_chars=output_chars,
+                **trace_details,
             )
 
     def _record_prompt_metrics(
@@ -581,6 +664,18 @@ class ContextBuilder:
         state.metrics["stable_prefix_chars"] = profile["content_chars"]
         state.metrics["stable_prefix_estimated_tokens"] = profile["estimated_tokens"]
         state.metrics["stable_prefix_message_count"] = profile["message_count"]
+        system_tokens = _estimate_messages_tokens(messages[:1])
+        stable_tokens = int(str(profile["estimated_tokens"]))
+        current_tokens = _estimate_messages_tokens(messages)
+        state.metrics["cache_layer_system_estimated_tokens_current"] = system_tokens
+        state.metrics["cache_layer_project_estimated_tokens_current"] = max(
+            stable_tokens - system_tokens,
+            0,
+        )
+        state.metrics["cache_layer_conversation_estimated_tokens_current"] = max(
+            current_tokens - stable_tokens,
+            0,
+        )
         cache_profile = self._cache_prefix_profile(
             state,
             messages,

@@ -6,6 +6,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -90,6 +91,7 @@ class OpenAICompatibleProvider:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.provider_name = _provider_name(base_url, model)
         self.timeout_sec = timeout_sec
         self.max_retries = max(0, max_retries)
         self._client: httpx.Client | None = None
@@ -410,3 +412,15 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _provider_name(base_url: str, model: str) -> str:
+    identity = f"{base_url} {model}".lower()
+    for name, markers in (
+        ("deepseek", ("deepseek",)),
+        ("anthropic", ("anthropic", "claude")),
+        ("openai", ("openai.com", "gpt-", "codex")),
+    ):
+        if any(marker in identity for marker in markers):
+            return name
+    return urlparse(base_url).hostname or "openai-compatible"

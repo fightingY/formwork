@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -25,9 +26,16 @@ def run_assertions(
     workspace_dir: Path,
     run_dir: Path,
     metrics: dict[str, Any] | None = None,
+    verifier_dir: Path | None = None,
 ) -> list[AssertionResult]:
     return [
-        run_assertion(assertion, workspace_dir=workspace_dir, run_dir=run_dir, metrics=metrics or {})
+        run_assertion(
+            assertion,
+            workspace_dir=workspace_dir,
+            run_dir=run_dir,
+            metrics=metrics or {},
+            verifier_dir=verifier_dir,
+        )
         for assertion in assertions
     ]
 
@@ -38,10 +46,17 @@ def run_assertion(
     workspace_dir: Path,
     run_dir: Path,
     metrics: dict[str, Any],
+    verifier_dir: Path | None = None,
 ) -> AssertionResult:
     assertion_type = str(assertion.get("type") or "")
     if assertion_type == "command":
         return _assert_command(assertion, workspace_dir)
+    if assertion_type == "python_verifier":
+        return _assert_python_verifier(
+            assertion,
+            workspace_dir=workspace_dir,
+            verifier_dir=verifier_dir,
+        )
     if assertion_type == "file_exists":
         return _assert_file_exists(assertion, workspace_dir)
     if assertion_type == "file_not_exists":
@@ -92,6 +107,91 @@ def _assert_command(assertion: dict[str, Any], workspace_dir: Path) -> Assertion
     if not passed and completed.stderr:
         message += f"\nstderr={completed.stderr[-1000:]}"
     return AssertionResult("command", passed, message)
+
+
+def _assert_python_verifier(
+    assertion: dict[str, Any],
+    *,
+    workspace_dir: Path,
+    verifier_dir: Path | None,
+) -> AssertionResult:
+    relative_path = str(assertion.get("path") or "").replace("\\", "/").strip()
+    expected_sha256 = str(assertion.get("sha256") or "").lower()
+    if verifier_dir is None:
+        return AssertionResult(
+            "python_verifier",
+            False,
+            "python verifier directory is not configured",
+        )
+    path = Path(relative_path)
+    if (
+        not relative_path
+        or path.is_absolute()
+        or ".." in path.parts
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    ):
+        return AssertionResult(
+            "python_verifier",
+            False,
+            "python verifier requires a safe relative path and a SHA-256 digest",
+        )
+
+    verifier_root = verifier_dir.resolve()
+    script = (verifier_root / path).resolve()
+    if verifier_root not in script.parents or not script.is_file():
+        return AssertionResult(
+            "python_verifier",
+            False,
+            f"python verifier is missing or escapes its root: {relative_path}",
+        )
+    actual_sha256 = hashlib.sha256(script.read_bytes()).hexdigest()
+    if actual_sha256 != expected_sha256:
+        return AssertionResult(
+            "python_verifier",
+            False,
+            (
+                f"python verifier digest mismatch: expected={expected_sha256}, "
+                f"actual={actual_sha256}"
+            ),
+            expected_sha256,
+        )
+
+    env = os.environ.copy()
+    env["MINICC_WORKSPACE"] = str(workspace_dir.resolve())
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=verifier_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=int(assertion.get("timeout_sec", 120)),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return AssertionResult(
+            "python_verifier",
+            False,
+            f"python verifier could not complete: {exc}",
+            expected_sha256,
+        )
+
+    passed = completed.returncode == int(assertion.get("expect_exit_code", 0))
+    message = (
+        f"python verifier exit_code={completed.returncode}: {relative_path}; "
+        f"sha256={expected_sha256}"
+    )
+    if not passed:
+        output = (completed.stdout + completed.stderr).strip()
+        if output:
+            message += f"\noutput={output[-2000:]}"
+    return AssertionResult(
+        "python_verifier",
+        passed,
+        message,
+        expected_sha256,
+    )
 
 
 def _assert_file_exists(assertion: dict[str, Any], workspace_dir: Path) -> AssertionResult:
@@ -559,7 +659,7 @@ def _shell_args(command: str) -> list[str]:
 
 def _uses_windows_native_build_tool(command: str) -> bool:
     return re.match(
-        r"^\s*(?:mvn(?:\.cmd)?|gradle(?:\.bat)?|gradlew(?:\.bat)?|"
+        r"^\s*(?:mvn(?:\.cmd)?|gradle(?:\.bat)?|gradlew(?:\.bat)?|javac|java|"
         r"\.\\mvnw(?:\.cmd)?|\.\\gradlew(?:\.bat)?)(?:\s|$)",
         command,
         flags=re.IGNORECASE,

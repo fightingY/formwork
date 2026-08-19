@@ -34,6 +34,9 @@ class ModelTurnRunner:
         trace: TraceRecorder | None = None,
     ) -> None:
         self.provider = provider
+        self.provider_name = str(
+            getattr(provider, "provider_name", type(provider).__name__)
+        )
         self.config = config or ModelTurnConfig()
         self.protocol_errors = 0
         self.trace = trace
@@ -43,15 +46,16 @@ class ModelTurnRunner:
         state: RunState,
         messages: list[dict[str, str]],
     ) -> ModelTurn:
+        state.metrics["provider_name"] = self.provider_name
         response = self.provider.complete(messages, options=self.config.model_options)
         state.metrics["turns"] += 1
+        _accumulate_response_identity(state, response.raw)
         _accumulate_usage(
             state,
             response.usage,
             response.latency_ms,
             attempt_count=response.attempt_count,
         )
-        _accumulate_response_identity(state, response.raw)
         if self.trace is not None:
             self.trace.model_response(
                 state,
@@ -151,6 +155,67 @@ def _accumulate_usage(
         state.metrics["provider_retried_requests"] = (
             int(state.metrics.get("provider_retried_requests", 0)) + 1
         )
+    _record_cache_request(state, usage, latency_ms=latency_ms)
+
+
+def _record_cache_request(
+    state: RunState,
+    usage: ModelUsage,
+    *,
+    latency_ms: int,
+) -> None:
+    prompt_tokens = usage.prompt_tokens
+    cache_read_tokens = usage.cache_hit_tokens
+    if cache_read_tokens is None:
+        cache_read_tokens = usage.cached_tokens
+    uncached_tokens = usage.cache_miss_tokens
+    if uncached_tokens is None and prompt_tokens is not None and cache_read_tokens is not None:
+        uncached_tokens = max(prompt_tokens - cache_read_tokens, 0)
+    models = state.metrics.get("provider_response_models", [])
+    model = models[-1] if isinstance(models, list) and models else None
+    compaction_count = int(state.metrics.get("context_compactions", 0) or 0)
+    request = {
+        "request_index": int(state.metrics.get("cache_prefix_request_index", 0) or 0),
+        "provider": state.metrics.get("provider_name"),
+        "model": model,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_write_tokens": None,
+        "uncached_tokens": uncached_tokens,
+        "cache_hit_rate": (
+            usage.cache_hit_rate
+            if usage.cache_hit_rate is not None
+            else (
+                cache_read_tokens / prompt_tokens
+                if cache_read_tokens is not None and prompt_tokens
+                else None
+            )
+        ),
+        "system_prefix_estimated_tokens": state.metrics.get(
+            "cache_layer_system_estimated_tokens_current"
+        ),
+        "project_prefix_estimated_tokens": state.metrics.get(
+            "cache_layer_project_estimated_tokens_current"
+        ),
+        "conversation_estimated_tokens": state.metrics.get(
+            "cache_layer_conversation_estimated_tokens_current"
+        ),
+        "prefix_hash": state.metrics.get("cache_prefix_request_sha256"),
+        "previous_request_is_prefix": bool(
+            state.metrics.get("cache_prefix_previous_is_exact")
+        ),
+        "longest_common_prefix_estimated_tokens": state.metrics.get(
+            "cache_prefix_lcp_estimated_tokens"
+        ),
+        "prefix_reset_reason": state.metrics.get("cache_prefix_reset_reason"),
+        "compaction_id": compaction_count or None,
+        "latency_ms": latency_ms,
+    }
+    raw_requests = state.metrics.get("cache_requests", [])
+    requests = list(raw_requests) if isinstance(raw_requests, list) else []
+    requests.append(request)
+    state.metrics["cache_requests"] = requests
 
 
 def _accumulate_cacheability(

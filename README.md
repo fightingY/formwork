@@ -66,6 +66,11 @@ A0/A1 各 3 次真实模型验收，两侧均为 3/3 PASS 且无 Provider/protoc
 （-51.08%）。完整四文件归档见 `acceptance/stable-v3.2/`。该结论只覆盖固定 case，不声明自动
 经验提取、环境式检索、RAG 或跨任务质量提升。
 
+当前开发版在这份历史验收之上改为懒加载：稳定 prompt 只放目标相关 skill 的名称、描述、来源
+和 catalog digest；模型通过 `skill` action 才取得冻结版本的正文。Registry 按
+`skills/`、`.agents/skills/`、用户目录和 bundled 目录的顺序合并，同名 skill 以前者覆盖，
+frontmatter 使用 PyYAML 校验。该改动已有确定性测试，但尚未重跑 V3.2 真实模型 A/B。
+
 V3.3 当前处于 `experimental` 开发阶段：已增加只读 Repository Inspector、受限
 `MINICC.md` Project Guide 注入和可选 Runtime Completion Verification Gate。模型请求 `final`
 时，显式启用的 Gate 会运行预绑定 Verifier，失败结果回到同一 Agent Loop，只有通过后才允许
@@ -283,10 +288,12 @@ prompt 分别下降 14.08% 和 16.60%，未缓存 token 分别下降 31.75% 和 
 
 ## V2.1.2 Prompt Cache P1/P2
 
-P2 使用 `epoch` 消息布局：一个 epoch 内的 action/observation 只追加，不再因
+P2 历史实验使用 `epoch` 消息布局；当前配置名为更直白的
+`append_until_compaction`：action/observation 只追加，不再因
 `recent_turns` 滑窗逐回合删除旧消息；真正触及上下文预算时，一次压缩到 65% 目标水位，写入
-不可变 summary checkpoint 并开始新 epoch。每个请求都会记录相邻完整消息的 LCP、epoch、
-冷启动、reset 原因、理论可复用 token、实际 hit/miss、兑现率和经验命中粒度。Provider HTTP
+summary checkpoint 并开始新的前缀段。每个请求都会记录分层 token 估算、相邻完整消息的
+LCP、前缀哈希、冷启动、reset 原因、实际 hit/miss、理论可复用 token 和兑现率。压缩事件另行
+记录压缩前后字符数、步骤范围、保留最近步骤数和事实保留率。Provider HTTP
 client 在一个 run 内复用；连接、读写或协议类传输错误发生后丢弃失效 client，再按配置重试。
 
 正式固定探针使用 12 个不同动态后缀。长稳定前缀来自仓库真实的
@@ -402,6 +409,7 @@ context:
   max_prompt_chars: 120000
   recent_turns: 6
   artifact_preview_chars: 12000
+  prompt_layout: append_until_compaction
 
 provider:
   base_url: https://api.siliconflow.cn/v1
@@ -574,14 +582,14 @@ src/minicc/
     loop.py           # 只保留 Agent Loop 编排
     runner.py         # 模型调用、usage 统计、action 解析
     context.py        # M4 ContextBuilder：prompt 分层、预算检查、压缩摘要
-    action_handler.py # final/ask/bash 分流，policy 和 executor 调度
+    action_handler.py # final/ask/skill/bash 分流，policy 和 executor 调度
     session.py        # state 保存、审批请求和审批结果应用
     prompt.py         # 旧 prompt 模块兼容入口，仅导出 ContextBuilder / SYSTEM_PROMPT
-    protocol.py       # bash / ask / final action parser
+    protocol.py       # bash / skill / ask / final action parser
     provider.py       # OpenAI-compatible Provider Adapter
     state.py          # RunState / Observation / TrajectoryStep
   skills/
-    registry.py       # SkillRegistry：读取 SKILL.md catalog
+    registry.py       # SkillRegistry：多来源 catalog、YAML 校验、哈希冻结与按需加载
   memory/
     feedback.py       # FeedbackMemory：读取反馈规则
   trace/

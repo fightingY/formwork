@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-ActionType = Literal["bash", "ask", "final"]
+ActionType = Literal["bash", "skill", "ask", "final"]
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,12 @@ class AskAction:
 
 
 @dataclass(frozen=True)
+class SkillAction:
+    name: str
+    type: Literal["skill"] = "skill"
+
+
+@dataclass(frozen=True)
 class MemoryReference:
     path: str
     line_start: int
@@ -37,7 +43,7 @@ class FinalAction:
     type: Literal["final"] = "final"
 
 
-Action = BashAction | AskAction | FinalAction
+Action = BashAction | SkillAction | AskAction | FinalAction
 
 
 class ProtocolError(ValueError):
@@ -68,13 +74,15 @@ def parse_action(
     action_type = payload.get("type")
     if action_type == "bash":
         return _parse_bash(payload, text, default_timeout_sec, max_timeout_sec)
+    if action_type == "skill":
+        return _parse_skill(payload, text)
     if action_type == "ask":
         return _parse_ask(payload, text)
     if action_type == "final":
         return _parse_final(payload, text)
 
     raise ProtocolError(
-        "Action type must be one of: bash, ask, final.",
+        "Action type must be one of: bash, skill, ask, final.",
         raw_text=text,
     )
 
@@ -148,6 +156,16 @@ def _parse_ask(payload: dict[str, Any], raw_text: str) -> AskAction:
     if not isinstance(question, str) or not question.strip():
         raise ProtocolError("ask.question must be a non-empty string.", raw_text=raw_text)
     return AskAction(question=question.strip())
+
+
+def _parse_skill(payload: dict[str, Any], raw_text: str) -> SkillAction:
+    name = payload.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ProtocolError("skill.name must be a non-empty string.", raw_text=raw_text)
+    normalized = name.strip().lower()
+    if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", normalized) is None:
+        raise ProtocolError("skill.name is not a valid catalog name.", raw_text=raw_text)
+    return SkillAction(name=normalized)
 
 
 def _parse_final(payload: dict[str, Any], raw_text: str) -> FinalAction:
