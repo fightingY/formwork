@@ -17,6 +17,7 @@ def test_windows_maven_commands_use_native_shell(monkeypatch) -> None:
 
 
 def test_maven_inside_bash_sequence_is_delegated_to_cmd(monkeypatch) -> None:
+    monkeypatch.setattr(local_runner.shutil, "which", lambda name: "/usr/bin/bash")
     monkeypatch.setattr(local_runner.sys, "platform", "win32")
 
     args = local_runner._local_shell_args("mkdir -p target && mvn -q test")
@@ -72,6 +73,7 @@ def test_windows_simple_python_actions_use_current_interpreter(monkeypatch) -> N
 
 
 def test_windows_python_pipeline_keeps_shell_semantics(monkeypatch) -> None:
+    monkeypatch.setattr(local_runner.shutil, "which", lambda name: "/usr/bin/bash")
     monkeypatch.setattr(assertions.sys, "platform", "win32")
     monkeypatch.setattr(local_runner.sys, "platform", "win32")
 
