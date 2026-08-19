@@ -4,9 +4,12 @@ import hashlib
 import json
 import os
 import shutil
+import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 from uuid import uuid4
 
@@ -289,9 +292,21 @@ def apply_cleanup_plan(plan: CleanupPlan, *, apply: bool = False) -> CleanupResu
         if target.parent != root or target.name != candidate.run_id:
             raise ValueError(f"Cleanup candidate escapes runs root: {target}")
         if target.is_dir():
-            shutil.rmtree(target)
+            shutil.rmtree(target, onerror=_retry_readonly_removal)
             deleted.append(candidate.run_id)
     return CleanupResult(candidate_ids, deleted, False)
+
+
+def _retry_readonly_removal(
+    operation: Callable[..., object],
+    path: str,
+    error_info: tuple[type[BaseException], BaseException, TracebackType | None],
+) -> None:
+    error = error_info[1]
+    if not isinstance(error, PermissionError):
+        raise error
+    os.chmod(path, os.stat(path).st_mode | stat.S_IWRITE)
+    operation(path)
 
 
 def _referenced_run_ids(root: Path, *, pattern: str) -> set[str]:

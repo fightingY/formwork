@@ -1,9 +1,14 @@
 import json
 import os
+import shutil
+import stat
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
+from minicc.core import ledger
 from minicc.core.ledger import (
     LEDGER_SCHEMA_VERSION,
     apply_cleanup_plan,
@@ -200,3 +205,46 @@ def test_cleanup_plan_and_apply_share_selection_and_protect_indexed_acceptance(t
     assert not (runs_root / "delete-me").exists()
     assert (runs_root / "indexed-run").exists()
     assert (runs_root / "accepted-run").exists()
+
+
+def test_cleanup_retries_readonly_files_without_hiding_other_errors(tmp_path, monkeypatch) -> None:
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / "delete-readonly"
+    git_object = run_dir / "workspace" / ".git" / "objects" / "aa" / "object"
+    git_object.parent.mkdir(parents=True)
+    git_object.write_text("content", encoding="utf-8")
+    os.chmod(git_object, stat.S_IREAD)
+    plan = ledger.CleanupPlan(
+        runs_root=runs_root,
+        protected_run_ids=(),
+        candidates=(
+            ledger.CleanupCandidate(
+                run_id=run_dir.name,
+                run_dir=run_dir,
+                reason="test",
+            ),
+        ),
+    )
+    real_rmtree = shutil.rmtree
+    retried: list[Path] = []
+
+    def fail_once_on_readonly(path, *, onerror=None):
+        assert onerror is not None
+
+        def remove(target: str) -> None:
+            retried.append(Path(target))
+            Path(target).unlink()
+
+        try:
+            raise PermissionError("read-only Git object")
+        except PermissionError:
+            onerror(remove, str(git_object), sys.exc_info())
+        real_rmtree(path)
+
+    monkeypatch.setattr(ledger.shutil, "rmtree", fail_once_on_readonly)
+
+    result = apply_cleanup_plan(plan, apply=True)
+
+    assert result.deleted_run_ids == ["delete-readonly"]
+    assert retried == [git_object]
+    assert not run_dir.exists()
