@@ -1042,6 +1042,27 @@ workspace retention、patch replay、跨 run 比较和更复杂的 judge。任�
 - 不新增上述范围以外的题型、实验变体或框架。任何新想法先记到 future work，不进入 V3.5。
 - 每阶段先运行 focused pytest，最终再运行 `ruff check`、`mypy`、全量 pytest coverage 和 package build。
 
+### Sandbox Runtime 生命周期治理（当前小步迭代）
+
+目标：在不引入 Compose、容器池、标签清理平台或多运行时的前提下，把现有“一次
+Agent run 对应一个临时 Docker 容器”的生命周期做成可解释、可回滚、可测试的最小闭环。
+
+当前范围：
+
+- 容器启动失败时按已知 run 名称立即回滚，避免 `docker run` 部分成功后遗留 `Created` 容器。
+- `docker exec` 超时后销毁整个容器，将 run 标记为失败并保留宿主机 workspace/artifacts。
+- 增加可跳过的真实 Docker 集成测试，覆盖启动、执行、只读/可写挂载、超时销毁和失败启动回滚。
+- 在首次容器启动前检查 Docker CLI 和 daemon；镜像解析与拉取仍由 `docker run` 负责。
+
+明确不纳入：容器标签和清理子命令、预热池、sidecar、execd、Firecracker/gVisor、Compose
+编排、远程控制平面和多租户调度。多个并发 run 继续依靠现有唯一 `run_id` 隔离。
+
+完成条件：focused 单元测试通过；Docker 可用的 CI 环境中真实集成测试通过；启动失败和命令
+超时均不留下由本次 run 创建的容器；Docker 不可用时在模型调用前返回明确错误。
+
+当前状态（2026-08-20）：实现与单元回归已完成（353 passed）；本机 Docker daemon 不可用，
+真实集成测试暂未执行，待 Docker Desktop 恢复后补跑。
+
 ## 5. 停止规则
 
 出现以下任一情况，立即停止扩大实验规模：

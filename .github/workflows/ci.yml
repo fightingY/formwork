@@ -42,5 +42,11 @@ jobs:
       - name: Test with coverage
         run: uv run pytest --cov=minicc --cov-report=term-missing --cov-report=xml
 
+      - name: Docker integration tests
+        if: matrix.python-version == '3.11'
+        env:
+          MINICC_DOCKER_INTEGRATION: "1"
+        run: uv run pytest tests/test_docker_runner_integration.py -q
+
       - name: Build distributions
         run: uv build

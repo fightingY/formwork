@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -9,6 +10,10 @@ from minicc.core.protocol import BashAction
 from minicc.core.state import Observation, RunState
 from minicc.sandbox.artifact_store import ArtifactStore
 from minicc.sandbox.observation import CommandResult, observation_from_command_result
+
+
+class DockerSandboxError(RuntimeError):
+    """Raised when the Docker runtime cannot be used for a sandbox run."""
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,7 @@ class DockerSandboxRunner:
         writable_paths: tuple[str, ...] | None = None,
     ) -> str:
         container_name = f"minicc-{run_id}"
+        check_docker_ready()
         if artifacts_dir is not None:
             # The workspace root may be mounted read-only. Docker cannot create
             # a nested mountpoint inside it during container initialization, so
@@ -86,15 +92,24 @@ class DockerSandboxRunner:
             "infinity",
             ]
         )
-        subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
-            check=True,
-        )
+        try:
+            subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                check=True,
+            )
+        except Exception:
+            # Docker may create the container before failing during runtime
+            # initialization. Roll back by name so a failed start is atomic.
+            try:
+                self.cleanup(container_name)
+            except Exception:
+                pass
+            raise
         return container_name
 
     def exec(self, *, container_name: str, action: BashAction) -> CommandResult:
@@ -119,6 +134,7 @@ class DockerSandboxRunner:
                 timeout=action.timeout_sec,
             )
         except subprocess.TimeoutExpired as exc:
+            self.cleanup(container_name)
             return CommandResult(
                 exit_code=None,
                 stdout=_decode_timeout_output(exc.stdout),
@@ -171,6 +187,12 @@ class DockerCommandExecutor:
             )
 
         result = self.runner.exec(container_name=state.container_name, action=action)
+        if result.timed_out:
+            state.container_name = None
+            state.status = "failed"
+            state.state_summary = (
+                "Run failed because the Docker sandbox was terminated after a command timeout."
+            )
         return observation_from_command_result(
             result,
             state=state,
@@ -186,6 +208,36 @@ def _decode_timeout_output(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def check_docker_ready(*, timeout_sec: int = 10) -> None:
+    """Fail before model execution when the Docker CLI or daemon is unavailable."""
+    if shutil.which("docker") is None:
+        raise DockerSandboxError("Docker CLI was not found. Install Docker Desktop and try again.")
+    try:
+        subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_sec,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise DockerSandboxError(
+            "Docker CLI was not found. Install Docker Desktop and try again."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise DockerSandboxError(
+            "Docker daemon did not respond in time. Start or restart Docker Desktop."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        suffix = f": {detail}" if detail else ""
+        raise DockerSandboxError(
+            f"Docker daemon is unavailable{suffix}. Start Docker Desktop and try again."
+        ) from exc
 
 
 def _prepare_writable_mount(workspace_dir: Path, relative_path: str) -> Path:
