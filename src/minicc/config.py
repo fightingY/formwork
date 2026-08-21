@@ -75,6 +75,13 @@ class WorkspaceSettings:
 
 
 @dataclass(frozen=True)
+class ToolingSettings:
+    profile: str = "baseline-bash"
+    max_parallel_tool_calls: int = 4
+    max_tool_calls_per_step: int = 16
+
+
+@dataclass(frozen=True)
 class Settings:
     provider: ProviderSettings
     sandbox: SandboxSettings
@@ -83,6 +90,7 @@ class Settings:
     policy: PolicySettings
     project: ProjectSettings = field(default_factory=ProjectSettings)
     workspace: WorkspaceSettings = field(default_factory=WorkspaceSettings)
+    tooling: ToolingSettings = field(default_factory=ToolingSettings)
 
     @property
     def base_url(self) -> str | None:
@@ -112,6 +120,7 @@ def load_settings() -> Settings:
     policy_config = _dict_at(config, "policy")
     project_config = _dict_at(config, "project")
     workspace_config = _dict_at(config, "workspace")
+    tooling_config = _dict_at(config, "tooling")
 
     return Settings(
         provider=ProviderSettings(
@@ -202,6 +211,11 @@ def load_settings() -> Settings:
         ),
         workspace=WorkspaceSettings(
             ignored_allowlist=_str_tuple_config(workspace_config, "ignored_allowlist"),
+        ),
+        tooling=ToolingSettings(
+            profile=_str_config(tooling_config, "profile", "baseline-bash"),
+            max_parallel_tool_calls=_int_config(tooling_config, "max_parallel_tool_calls", 4),
+            max_tool_calls_per_step=_int_config(tooling_config, "max_tool_calls_per_step", 16),
         ),
     )
 

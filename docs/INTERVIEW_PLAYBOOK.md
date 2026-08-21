@@ -63,6 +63,8 @@ bash action 先经过 Policy Middleware，再进入 Docker Sandbox 执行。
 执行结果被标准化成 Observation：成功、空输出、错误、超时、策略拒绝、大输出 artifact 等。
 Observation 进入 trace，同时以 preview 的形式回到上下文。
 上下文超过预算时，把旧轨迹压缩成 state_summary，大结果只保留 artifact 引用。
+跨 run 的事实不会自动从完整 trajectory 继承；只有模型在 final.memory 中显式声明的
+workspace 文件行区间，经过文件哈希和项目快照校验后，才会作为 working memory 交接给 follow-up run。
 任务结束后销毁容器，但保留 trace、diff、artifact 和 metrics。
 ```
 
@@ -159,7 +161,9 @@ state_summary
 回答：
 
 ```text
-临时任务状态属于 RunState，不属于 Memory。Memory 只存长期稳定的用户反馈规则。这样可以避免 memory 污染，也让任务恢复和 eval 复现更确定。
+临时任务状态属于 RunState，不属于 durable Memory。当前项目把三类信息分开：运行态
+context 负责本次任务连续性，working memory 负责经过哈希验证的跨 run 事实交接，Feedback
+Memory 负责长期稳定的项目反馈规则。这样可以避免把临时猜测自动升级成长期记忆，也让任务恢复和 eval 复现更确定。
 ```
 
 ### L04 Minimal Agent Loop
@@ -482,7 +486,7 @@ Skill 和工具有什么区别？
 这一层解决：
 
 ```text
-Memory 如果什么都存，会变成噪声和幻觉来源。
+项目级反馈如果什么都存，会变成噪声和幻觉来源。miniCC 另外有独立的 working memory，用于经过验证的跨 run 文件事实交接；本节只讨论项目级行为规则。
 ```
 
 只存：
@@ -500,6 +504,7 @@ caution: 做 Y 时注意 Z
 Git 历史，git log 更权威
 调试方案，修复已在代码里
 临时任务状态，用 RunState
+跨 run 文件事实，用显式 `final.memory` 引用并经过 working-memory 完整性校验
 ```
 
 追问：
@@ -511,7 +516,7 @@ Memory 遇到上下文压缩怎么办？
 回答：
 
 ```text
-Feedback Memory 不属于 trajectory，不应该被压缩掉。压缩只处理旧轨迹，memory 由 prompt builder 每轮按关键词筛选后重新注入，所以不会因为 compact 丢失。
+Feedback Memory 和 working memory 都不属于 trajectory，不应该被压缩掉。压缩只处理旧轨迹；Feedback Memory 每轮按目标筛选，working memory 则在 follow-up attach 时先完成哈希和项目快照校验，再由 prompt builder 注入，所以不会因为 compact 丢失。
 ```
 
 ### L15 Trace / Metrics

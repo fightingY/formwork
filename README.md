@@ -51,6 +51,11 @@ M6: Eval runner、Web trace viewer、文档与面试示例
 所有 claim 均携带配置、run ID、原始 artifact 和复跑命令。归档见 `acceptance/stable-v3.0/`，
 七层能力与诚实边界见 `docs/ETCLOVG_CAPABILITY_MATRIX.md`。
 
+上下文与记忆采用分层设计：运行态 trajectory/state summary 只服务当前 run；显式
+working memory 通过 `final.memory` 声明文件行区间，并在 follow-up 时校验文件、哈希和项目快照；
+Feedback Memory 只提供项目级 `never`/`prefer`/`caution` 规则选择。完整边界见
+[`docs/CONTEXT_MEMORY_GUIDE.md`](docs/CONTEXT_MEMORY_GUIDE.md)。
+
 Stable V3.1 新增显式触发的离线
 Meta Review：`minicc meta-review <run_id>` 读取已结束 run 的不可变证据，在独立
 `.minicc/meta-reviews/` 目录生成带来源哈希和模型调用指标的审查结果，不修改源 run，也不自动
@@ -607,7 +612,9 @@ src/minicc/
   skills/
     registry.py       # SkillRegistry：多来源 catalog、YAML 校验、哈希冻结与按需加载
   memory/
-    feedback.py       # FeedbackMemory：读取反馈规则
+    feedback.py       # FeedbackMemory：读取并选择项目反馈规则
+    working.py        # 显式 working memory：ground、snapshot、attach 与完整性校验
+    compaction.py     # deterministic / semantic context compaction
   trace/
     recorder.py       # TraceRecorder：JSONL event 记录
     metrics.py        # metrics.json 快照落盘

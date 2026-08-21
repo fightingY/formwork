@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "entity_type": "v3.6_m4_report",
+  "milestone": "v3.6",
+  "stage": "M4",
+  "status": "PASS",
+  "passed": true,
+  "provider_calls": 0,
+  "profile": "hybrid-v3.6",
+  "evidence": "evidence.json",
+  "replay_command": "uv run python tools/run_v36_offline_evidence.py --output acceptance/stable-v3.6-replay",
+  "m5": {
+    "status": "EXPLORATORY_ONLY",
+    "formal_ab_runs": 0,
+    "reason": "Formal two-round baseline/hybrid A/B remains a separate provider-budgeted stage."
+  }
+}

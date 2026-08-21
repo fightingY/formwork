@@ -1042,6 +1042,94 @@ workspace retention、patch replay、跨 run 比较和更复杂的 judge。任�
 - 不新增上述范围以外的题型、实验变体或框架。任何新想法先记到 future work，不进入 V3.5。
 - 每阶段先运行 focused pytest，最终再运行 `ruff check`、`mypy`、全量 pytest coverage 和 package build。
 
+### V3.6：Hybrid FS/Shell Tools 与有界多工具调度（M0-M4 implementation archive）
+
+目标：参考 DeepSeek Harness、PI、Claude Code 和 Codex 的共同结构，把文件读写从 Bash 字符串中拆出为 `read`、`edit`、`write`，保留 `bash` 作为通用 shell，并允许一个模型响应包含多个工具调用。详细设计合同见 [`docs/V3_6_HYBRID_TOOLING_DESIGN.md`](docs/V3_6_HYBRID_TOOLING_DESIGN.md)。
+
+进入条件：
+
+- Sandbox Runtime 生命周期治理的真实 Docker 集成测试已在可用 Docker daemon 上补跑并通过发布门；仅有 `353 passed` 的单元结果、跳过集成测试或“待 Docker Desktop 恢复”不满足进入条件。
+- `stable-v3.5` tag 已完成并作为 V3.6 分支基线；V3.6 从该 tag 创建独立分支，不从夹带未验收 Sandbox Runtime 变更的工作区开工。
+- 开工工作区不包含 Sandbox Runtime 生命周期治理的未提交变更；V3.6 失败归因不得同时混入 Sandbox Runtime、Context、Memory 和多工具调度修改。
+
+上述进入条件已满足：`stable-v3.5` 已补标至已提交的 V3.5 内容，且真实 Docker 集成门禁已通过。
+M0-M4 的实现与离线 evidence 已归档；M5 真实模型 A/B 仍需独立冻结 provider budget 后产生正式结论。
+
+V3.6 不改写 V3.5 的公开题库、Context A/B 和 Recovery 结论；它新增两个显式 profile：
+
+- `baseline-bash`：现有单调用 `bash/skill/ask/final`，用于回退和对照；
+- `hybrid-v3.6`：`read/edit/write/bash` 加上 `ask/skill/final`，使用有界多调用调度。
+
+#### V3.6-M0：协议和行为合同冻结
+
+- 冻结 `tool_calls` envelope、单调用结果、未知工具/重复 id/非法参数、最大调用数和 schema 版本。
+- 冻结 capability 边界：`read/edit/write` 属于 FS，`bash` 属于 Shell；控制动作不进入 tool-call pool。
+- 冻结结果顺序、abort、timeout、scheduler failure、policy/approval 和 checkpoint 语义。
+- 冻结模型可观察的响应边界：一个响应只能是 `tool_calls` 或一个 `ask`/`skill`/`final` 控制 action，不能混合；tool calls 提交后，模型必须在下一 turn 决定控制 action。Prompt、parser、trajectory 和 A/B 指标都必须遵守该合同。
+- provider 继续支持当前 JSON mode；原生 tool-call provider 只作为后续 adapter，不改变 scheduler 合同。
+
+验收：协议单元测试、旧 Bash-only 回归和 `git diff --check` 全部通过；默认 profile 仍为 `baseline-bash`。
+
+#### V3.6-M1a：FS `read` capability
+
+- 只实现分页、有界、带行号和版本指纹的 `read`。
+- 复用现有 workspace/policy/trace/checkpoint 适配层，不在本子阶段引入新的 CompletionVerifier 语义或并发行为。
+- 本子阶段必须是独立提交，新增生产文件和能力域受 §5 停止规则约束；focused pytest 通过后才能进入 M1b。
+
+验收：`read` 的路径边界、分页、截断、hash、trace/result 回放确定性测试通过；旧 V3.5 运行和 Bash policy 不下降。
+
+#### V3.6-M1b：FS `edit` capability
+
+- 只实现精确替换、显式 `replace_all`、必填 `expected_hash`、版本冲突拒绝和结构化 diff 的 `edit`。
+- 缺失 `expected_hash` 必须结构化拒绝；不得用“同一 run 内先 read”替代版本检查。
+- 独立提交并运行 focused pytest；不得同时修改 `write`、多工具调度或 Sandbox Runtime。
+
+验收：唯一匹配、重复匹配、replace_all、hash 缺失/冲突、diff、越界和 checkpoint 不重复 edit 全部通过。
+
+#### V3.6-M1c：FS `write` capability
+
+- 只实现新建/完整重写、原子写入、hash/diff 摘要的 `write`。
+- 新文件无需 `expected_hash`；已有文件必须提供并通过 `expected_hash`，缺失或冲突均结构化拒绝。
+- 独立提交并运行 focused pytest；不得同时修改多工具调度、Context 或 Sandbox Runtime。
+
+验收：新建、已有文件 hash 校验、原子写入失败清理、diff、越界和 checkpoint 不重复 write 全部通过。
+
+#### V3.6-M2：多工具解析和 ordered result
+
+- 一个模型响应允许多个 `tool_calls`，保持模型原始顺序。
+- 调度器写入 `tool/call` 与 `tool/result` 成对事件；结果按模型顺序回填，即使 dispatch 完成顺序不同。
+- 先以 `max_parallel_tool_calls=1` 上线，完成 provider/protocol、abort、超时和 scheduler failure 回归。
+
+验收：多调用确定性测试通过；resume 不重复已提交的 edit/write/bash；baseline profile 行为不变。
+
+#### V3.6-M3：只读并行和 exclusive barrier
+
+- 连续 `read` 默认声明 parallel；`edit`、`write`、`bash` 默认 exclusive。
+- 实现 DeepSeek Harness 风格 rolling pool 和 exclusive barrier；只有明确 parallel 才允许并行，异常分类 fail-closed。
+- 记录 `max_parallel_tool_calls`，V3.6 初始默认 `4`，`1` 表示完全串行；该配置必须可覆盖，未来可用 A/B 评估是否提升到 DSH 的 `10`。
+- abort 停止补充新调用并 drain 已启动调用；未启动调用写结构化 aborted result。
+
+验收：并行确实发生、结果严格有序、文件内容无竞态、资源峰值在阈值内；V1.3/V2.0 checkpoint/resume 回归不下降。
+
+#### V3.6-M4：证据链和回归
+
+- 将 profile、并发上限、工具调用明细、policy/approval、耗时和 artifact locator 写入 state、trace、metrics、suite manifest 和报告。
+- 只使用离线 trace/replay、合成 fixture 和确定性回归，准备 baseline/hybrid 所需的 schema、manifest、metrics、report 和证据定位；本阶段不调用 Provider，不消耗真实模型预算。
+- 明确 baseline/hybrid A/B 的唯一真实运行归属为 M5；M4 产物不得被计入正式任务通过率或效率结论。
+- 明确区分 task、agent、infrastructure、policy、protocol 和 tool runtime failure。
+
+验收：离线 evidence replay、全量 pytest、`ruff`、`mypy`、package build、V3.5 固定回归和恢复回归不下降；报告无 dangling pointer、无覆盖旧 suite；Provider 调用数为 0。
+
+#### V3.6-M5：真实模型 A/B 与默认值决策
+
+- 在 M4 离线证据链通过后，冻结 source/case/verifier/provider/budget/sandbox/profile/并发上限，至少进行两轮独立 baseline/hybrid A/B；本阶段是 V3.6 唯一产生正式真实模型 A/B 的阶段。
+- 报告任务通过率、turns、tool calls、Bash calls、只读并发、wall-clock、tokens、重复 I/O、失败/审批/timeout 和 diff 范围。
+- 分别报告 tool-call step、control-action step 和总 turn；不能把 `tool_calls` 后下一 turn 的协议要求误算成工具能力差异。
+- 只有 hybrid 通过率不下降、并发确实发生、审计和恢复完整且两轮结论同方向时，才考虑将 hybrid 设为默认。
+- 若只减少 turns 或延迟而未提高任务成功率，只声明效率变化；任何能力提升必须有固定任务和报告路径支撑。
+
+失败回退：回到上一个已验收 tag，保留 `baseline-bash`；不得同时修改 Context、Memory、Sandbox Runtime 和多工具调度来掩盖归因。
+
 ### Sandbox Runtime 生命周期治理（当前小步迭代）
 
 目标：在不引入 Compose、容器池、标签清理平台或多运行时的前提下，把现有“一次
@@ -1091,7 +1179,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                             |
                                       |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
                                       |                                                        |
-                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments
+                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |

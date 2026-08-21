@@ -38,6 +38,7 @@ from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
+from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
 from minicc.core.verification import CommandCompletionVerifier, CompletionVerifier
 from minicc.evals.cache_ab import (
     build_cache_ab_report,
@@ -1011,6 +1012,18 @@ def _build_loop(
             feedback_memory = FeedbackMemory(
                 state.workspace_host_path / str(state.metrics["guidance_feedback_path"])
             )
+    profile = settings.tooling.profile
+    scheduler = (
+        ToolCallScheduler(
+            HybridToolRunner(executor),
+            max_parallel_tool_calls=settings.tooling.max_parallel_tool_calls,
+        )
+        if profile == "hybrid-v3.6"
+        else None
+    )
+    if state is not None:
+        state.metrics["profile"] = profile
+        state.metrics["max_parallel_tool_calls"] = settings.tooling.max_parallel_tool_calls
     return AgentLoop(
         provider,
         executor,
@@ -1034,6 +1047,7 @@ def _build_loop(
         trace=trace,
         checkpoint_manager=checkpoint_manager,
         completion_verifier=completion_verifier,
+        tool_scheduler=scheduler,
         config=LoopConfig(
             max_turns=settings.budget.max_turns if max_turns is None else max_turns,
             max_action_timeout_sec=settings.budget.max_action_timeout_sec,
@@ -1045,6 +1059,9 @@ def _build_loop(
                 max_tokens=settings.provider.max_completion_tokens,
             ),
             interrupt_after_steps=interrupt_after_steps,
+            profile=profile,
+            max_parallel_tool_calls=settings.tooling.max_parallel_tool_calls,
+            max_tool_calls_per_step=settings.tooling.max_tool_calls_per_step,
         ),
     )
 

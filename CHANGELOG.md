@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-08-21
+
+### Added
+
+- Structured `read`, `edit`, `write`, and `bash` hybrid tooling with strict workspace and version contracts.
+- Ordered multi-tool protocol, bounded read parallelism, exclusive barriers, abort handling, durable tool trace, and explicit `baseline-bash` / `hybrid-v3.6` profiles.
+- Deterministic V3.6 M4 offline evidence archive with zero provider calls.
+
+### Validated
+
+- V3.5 Docker integration gate: 3 passed.
+- Full CI-equivalent quality gate: 367 passed, 2 skipped, 78.46% coverage, Ruff, mypy, and package build passed.
+
+### Boundaries
+
+- Formal M5 real-model A/B is not claimed by the offline archive; the default profile remains `baseline-bash`.
+
 ### Added
 
 - V3.4 最小真实项目评测闭环：初始失败验证、独立最终 verify、verdict、验证 artifact、自动 workspace 清理。

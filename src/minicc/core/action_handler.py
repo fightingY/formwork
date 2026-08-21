@@ -5,7 +5,14 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from minicc.core.context import state_snapshot_text
-from minicc.core.protocol import Action, AskAction, BashAction, FinalAction, SkillAction
+from minicc.core.protocol import (
+    Action,
+    AskAction,
+    BashAction,
+    FinalAction,
+    SkillAction,
+    ToolCallsAction,
+)
 from minicc.core.session import (
     SessionManager,
     begin_execution,
@@ -109,6 +116,9 @@ class ActionHandler:
 
         if isinstance(action, SkillAction):
             return self._handle_skill(action, state)
+
+        if isinstance(action, ToolCallsAction):
+            raise TypeError("ToolCallsAction must be handled by ToolCallScheduler")
 
         return self._handle_bash(action, state)
 

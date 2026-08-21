@@ -16,6 +16,7 @@ class ModelTurnConfig:
     max_protocol_errors: int = 2
     max_action_timeout_sec: int = 120
     model_options: CompletionOptions = CompletionOptions()
+    max_tool_calls_per_step: int = 16
 
 
 @dataclass
@@ -70,6 +71,7 @@ class ModelTurnRunner:
             action = parse_action(
                 response.text,
                 max_timeout_sec=self.config.max_action_timeout_sec,
+                max_tool_calls=self.config.max_tool_calls_per_step,
             )
             self.protocol_errors = 0
             if self.trace is not None:

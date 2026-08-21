@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -7,11 +8,12 @@ from minicc.core.action_handler import ActionHandler
 from minicc.core.checkpoint import CheckpointManager
 from minicc.core.context import ContextBuilder, state_snapshot_text
 from minicc.core.lifecycle import RunLifecycle
-from minicc.core.protocol import BashAction
+from minicc.core.protocol import BashAction, ToolCallsAction
 from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
 from minicc.core.runner import ModelTurnConfig, ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.core.tooling import ToolCallScheduler
 from minicc.core.verification import CompletionVerifier
 from minicc.policy.base import PolicyChain
 from minicc.trace.recorder import TraceRecorder
@@ -29,6 +31,9 @@ class LoopConfig:
     max_action_timeout_sec: int = 120
     model_options: CompletionOptions = field(default_factory=CompletionOptions)
     interrupt_after_steps: int | None = None
+    profile: str = "baseline-bash"
+    max_parallel_tool_calls: int = 4
+    max_tool_calls_per_step: int = 16
 
 
 @dataclass
@@ -50,6 +55,7 @@ class AgentLoop:
         config: LoopConfig | None = None,
         checkpoint_manager: CheckpointManager | None = None,
         completion_verifier: CompletionVerifier | None = None,
+        tool_scheduler: ToolCallScheduler | None = None,
     ) -> None:
         self.config = config or LoopConfig()
         self.session = session or SessionManager()
@@ -64,6 +70,7 @@ class AgentLoop:
                 max_protocol_errors=self.config.max_protocol_errors,
                 max_action_timeout_sec=self.config.max_action_timeout_sec,
                 model_options=self.config.model_options,
+                max_tool_calls_per_step=self.config.max_tool_calls_per_step,
             ),
             trace=self.trace,
         )
@@ -75,6 +82,11 @@ class AgentLoop:
             completion_verifier=completion_verifier,
             skill_registry=self.context_builder.skill_registry,
         )
+        self.tool_scheduler = tool_scheduler
+        if self.tool_scheduler is not None:
+            runner = self.tool_scheduler.runner
+            if hasattr(runner, "action_handler"):
+                runner.action_handler = self.action_handler
 
     def run(
         self,
@@ -84,6 +96,9 @@ class AgentLoop:
         resumed = trajectory is not None
         trajectory = list(trajectory or [])
         state.metrics["max_turns"] = self.config.max_turns
+        state.metrics["profile"] = self.config.profile
+        state.metrics["max_parallel_tool_calls"] = self.config.max_parallel_tool_calls
+        state.metrics["max_tool_calls_per_step"] = self.config.max_tool_calls_per_step
         if resumed:
             self.lifecycle.resume(state, len(trajectory))
         else:
@@ -120,6 +135,70 @@ class AgentLoop:
                 break
 
             if turn.action is None:
+                continue
+
+            if isinstance(turn.action, ToolCallsAction):
+                if self.tool_scheduler is None or self.config.profile != "hybrid-v3.6":
+                    observation = Observation(
+                        kind="protocol_error",
+                        message="tool_calls require the hybrid-v3.6 profile.",
+                    )
+                    trajectory.append(
+                        TrajectoryStep(
+                            action=turn.action,
+                            observation=observation,
+                            state_snapshot=state_snapshot_text(state),
+                        )
+                    )
+                    state.metrics["protocol_errors"] = state.metrics.get("protocol_errors", 0) + 1
+                    self.trace.observation_created(state, observation)
+                    continue
+                for model_order, call in enumerate(turn.action.calls):
+                    self.trace.tool_call(
+                        state,
+                        call_id=call.id,
+                        tool=call.tool,
+                        arguments=dict(call.arguments),
+                        model_order=model_order,
+                        execution_mode="parallel" if call.tool == "read" else "exclusive",
+                    )
+                results = self.tool_scheduler.dispatch(turn.action, state)
+                state.metrics["tool_call_steps"] = state.metrics.get("tool_call_steps", 0) + 1
+                state.metrics["tool_calls"] = state.metrics.get("tool_calls", 0) + len(results)
+                state.metrics["max_parallel_tool_calls"] = self.config.max_parallel_tool_calls
+                ordered_payload = []
+                for result in results:
+                    self.trace.tool_result(state, result)
+                    ordered_payload.append(
+                        {
+                            "call_id": result.call_id,
+                            "tool": result.tool,
+                            "model_order": result.model_order,
+                            "is_error": result.is_error,
+                            "content": result.content,
+                        }
+                    )
+                    metric = f"{result.tool}_tool_calls"
+                    state.metrics[metric] = state.metrics.get(metric, 0) + 1
+                observation = Observation(
+                    kind=(
+                        "command_error" if any(result.is_error for result in results) else "command_result"
+                    ),
+                    exit_code=(None if any(result.is_error for result in results) else 0),
+                    stdout_preview=json.dumps(ordered_payload, ensure_ascii=False),
+                    message="Ordered tool results.",
+                    duration_ms=sum(result.duration_ms for result in results),
+                )
+                trajectory.append(
+                    TrajectoryStep(
+                        action=turn.action,
+                        observation=observation,
+                        state_snapshot=state_snapshot_text(state),
+                    )
+                )
+                state.last_observation = observation
+                self.session.save(state)
+                self._checkpoint(state, trajectory, "tool_calls_completed")
                 continue
 
             outcome = self.action_handler.handle(turn.action, state)

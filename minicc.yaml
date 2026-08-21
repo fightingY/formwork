@@ -5,10 +5,15 @@ provider:
   max_retries: 2
 
 project:
-  milestone: stable-v3.2
+  milestone: v3.6
 
 workspace:
   ignored_allowlist: []
+
+tooling:
+  profile: baseline-bash
+  max_parallel_tool_calls: 4
+  max_tool_calls_per_step: 16
 
 sandbox:
   image: python@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0

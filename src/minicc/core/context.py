@@ -52,6 +52,17 @@ Observation contract:
 - verification_error means a pre-bound completion verifier rejected the previous final request.
 """
 
+HYBRID_PREFIX_SUFFIX = """
+
+This run uses the hybrid-v3.6 profile. A response may be either one control action
+(`ask`, `skill`, or `final`) or one `tool_calls` object, never both. Tool calls preserve
+the listed order:
+{"type":"tool_calls","calls":[{"id":"r1","tool":"read","arguments":{"path":"src/app.py","offset":1,"limit":160}}]}
+Available tools are `read`, `edit`, `write`, and `bash`. `read` is bounded and returns a
+version hash. Existing-file `edit` and `write` require the current `expected_hash`.
+After tool results, use the next turn to choose the next tool call or a control action.
+"""
+
 EPOCH_COMPACTION_TARGET_RATIO = 0.65
 CompactionStrategy = Literal["disabled", "deterministic", "semantic"]
 PromptLayout = Literal["rebuild", "append", "epoch", "append_until_compaction"]
@@ -481,7 +492,7 @@ class ContextBuilder:
         trajectory: list[TrajectoryStep],
     ) -> list[dict[str, str]]:
         return [
-            {"role": "system", "content": STABLE_PREFIX},
+            {"role": "system", "content": self._system_prefix(state)},
             {"role": "user", "content": "\n\n".join(self._dynamic_context(state, trajectory))},
         ]
 
@@ -491,7 +502,7 @@ class ContextBuilder:
         trajectory: list[TrajectoryStep],
     ) -> tuple[list[dict[str, str]], int]:
         messages = [
-            {"role": "system", "content": STABLE_PREFIX},
+            {"role": "system", "content": self._system_prefix(state)},
             {"role": "user", "content": "\n\n".join(self._stable_run_context(state))},
         ]
         stable_prefix_messages = len(messages)
@@ -509,6 +520,11 @@ class ContextBuilder:
                 ]
             )
         return messages, stable_prefix_messages
+
+    def _system_prefix(self, state: RunState) -> str:
+        if state.metrics.get("profile") == "hybrid-v3.6":
+            return STABLE_PREFIX + HYBRID_PREFIX_SUFFIX
+        return STABLE_PREFIX
 
     def _build_messages_with_trajectory(
         self,

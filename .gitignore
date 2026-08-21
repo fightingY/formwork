@@ -29,6 +29,7 @@ coverage.xml
 .minicc/
 .tmp-v35-recovery/
 .tmp-v35-check/
+.tmp-v36-replay/
 artifacts/
 
 # Editor and OS files

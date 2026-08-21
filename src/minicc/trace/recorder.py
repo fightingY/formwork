@@ -9,6 +9,7 @@ from typing import Any
 from minicc.core.protocol import Action, action_to_dict
 from minicc.core.provider import ModelUsage
 from minicc.core.state import Observation, RunState
+from minicc.core.tooling import ToolResult
 from minicc.policy.base import PolicyDecision
 
 
@@ -117,6 +118,57 @@ class TraceRecorder:
 
     def action_started(self, state: RunState, action: Action) -> None:
         self.record("action_started", state, action=action_to_dict(action))
+
+    def tool_call(
+        self,
+        state: RunState,
+        result: ToolResult | None = None,
+        *,
+        call_id: str | None = None,
+        tool: str | None = None,
+        arguments: dict[str, Any] | None = None,
+        model_order: int | None = None,
+        execution_mode: str | None = None,
+    ) -> None:
+        if result is not None:
+            call_id = result.call_id
+            tool = result.tool
+            model_order = result.model_order
+            execution_mode = result.execution_mode
+        self.record(
+            "tool/call",
+            state,
+            schema_version=state.schema_version,
+            suite_id=state.suite_id,
+            milestone=state.milestone,
+            stage=state.stage,
+            turn=state.metrics.get("turns"),
+            call_id=call_id,
+            tool=tool,
+            arguments=_redact_arguments(arguments or {}),
+            model_order=model_order,
+            execution_mode=execution_mode,
+        )
+
+    def tool_result(self, state: RunState, result: ToolResult) -> None:
+        self.record(
+            "tool/result",
+            state,
+            schema_version=state.schema_version,
+            suite_id=state.suite_id,
+            milestone=state.milestone,
+            stage=state.stage,
+            turn=state.metrics.get("turns"),
+            call_id=result.call_id,
+            tool=result.tool,
+            model_order=result.model_order,
+            execution_mode=result.execution_mode,
+            is_error=result.is_error,
+            content=result.content,
+            started_at=result.started_at,
+            completed_at=result.completed_at,
+            duration_ms=result.duration_ms,
+        )
 
     def policy_decision(self, state: RunState, decision: PolicyDecision) -> None:
         self.record(
@@ -292,3 +344,16 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     return value
+
+
+def _redact_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    sensitive = {"api_key", "authorization", "password", "secret", "token"}
+    redacted: dict[str, Any] = {}
+    for key, value in arguments.items():
+        if any(marker in key.lower() for marker in sensitive):
+            redacted[key] = "<redacted>"
+        elif isinstance(value, dict):
+            redacted[key] = _redact_arguments(value)
+        else:
+            redacted[key] = value
+    return redacted

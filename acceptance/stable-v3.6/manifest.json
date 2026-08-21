@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "entity_type": "v3.6_m4_manifest",
+  "milestone": "v3.6",
+  "stage": "M4",
+  "status": "PASS",
+  "provider_calls": 0,
+  "artifacts": {
+    "evidence.json": {
+      "path": "evidence.json",
+      "bytes": 3249,
+      "sha256": "65ac2939eb0412bc2a99b053a67c1522e44cebd3223bfd39b75025fbd70a5d7e"
+    },
+    "report.json": {
+      "path": "report.json",
+      "bytes": 519,
+      "sha256": "0dea1267c5328676199b179ea2daef23079253c4c984d1afc5a9526dc023f669"
+    },
+    "report.md": {
+      "path": "report.md",
+      "bytes": 272,
+      "sha256": "7cfda0c797d7ba05c08fedec64e726315c79dd5d88b6b21cccf7049bb0f241a4"
+    }
+  }
+}
