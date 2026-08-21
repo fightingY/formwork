@@ -40,7 +40,12 @@ jobs:
         run: uv run mypy src/minicc
 
       - name: Test with coverage
+        if: matrix.python-version == '3.11'
         run: uv run pytest --cov=minicc --cov-report=term-missing --cov-report=xml
+
+      - name: Test
+        if: matrix.python-version == '3.12'
+        run: uv run pytest -q
 
       - name: Docker integration tests
         if: matrix.python-version == '3.11'
