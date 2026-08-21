@@ -1130,6 +1130,167 @@ V3.6 不改写 V3.5 的公开题库、Context A/B 和 Recovery 结论；它新�
 
 失败回退：回到上一个已验收 tag，保留 `baseline-bash`；不得同时修改 Context、Memory、Sandbox Runtime 和多工具调度来掩盖归因。
 
+### V4.0：可验证多 Agent Harness 重构（experimental）
+
+目标：在 V3.6 的 `read/edit/write/bash`、`ask/skill/final`、多工具调度、sandbox、policy、
+checkpoint、trace、metrics、diff 和 verifier 之上，增加低成本模型可用的多 Agent 编排层，
+将 miniCC 定位为：
+
+```text
+低成本模型上的可验证多 Agent Coding Harness
+```
+
+详细实施合同见本地不追踪文件
+[`docs/V4_MULTI_AGENT_REFACTOR_PLAN.md`](docs/V4_MULTI_AGENT_REFACTOR_PLAN.md)。该文件不属于
+当前 Stable 声明；路线图只冻结 V4 的设计、实施阶段和验收门，不把计划能力写成已实现能力。
+
+#### V4.0 设计边界
+
+V4 保留以下 profile：
+
+```text
+baseline-bash   V3.x 单 Agent 回退和历史对照
+hybrid-v3.6     四工具 + 有界多工具调度的单 Agent 对照
+multi-agent-v4  root + childrun + workflow + transcript，显式 opt-in
+```
+
+V4 必须支持：
+
+- 单个 child Agent、多个 child Agent 并行和有界链式工作；
+- 每个 child 独立 context、trajectory、metrics、checkpoint 和 trace namespace；
+- miniCC 自己的 `childrun` 子进程，通过 stdin/stdout JSONL 通信；
+- Provider、tool、child 和 transcript 的流式事件；
+- child/workflow 的 interrupt、cancel、timeout、orphan 和 resume；
+- `scout -> planner -> worker` 工作流；
+- `worker -> reviewer -> worker` 有界复查回路；
+- 同一 workflow 同时最多一个 workspace write lease holder。
+
+V4 不允许多个 Agent 同时写入同一 workspace，不依赖 Prompt 文字实现只读安全，不调用外部
+PI/Claude/Codex 进程作为自己的编排实现，也不展示或声称获取了模型隐藏 CoT。Transcript 中的
+`Thought` 只能表示模型显式提供的短 `intent` 或 Harness 生成的有限 action summary。
+
+#### V4.0 只读 child 安全合同
+
+并行 `scout`、`planner`、`reviewer` 默认只允许 `read` 和受限 `bash`，且必须同时满足：
+
+1. tool visibility 不暴露 `edit`、`write` 和 `delegate`；
+2. runtime `CapabilityPolicy` 在 dispatch 前拒绝手写的未授权 tool call；
+3. `ReadOnlyBashPolicy` 对已知重定向、写管道、删除/移动/复制、安装依赖和 Git 写操作保守拒绝；
+4. 正式 sandbox 以 read-only mount 暴露 workspace，并在结束前后比较 workspace fingerprint。
+
+只读 Bash 的字符串策略不是完整安全边界；`execute-local` 仅用于开发预检，不能作为只读安全
+验收环境。正式只读 child 必须使用具备只读挂载能力的 sandbox，否则结果只能标记为不合格或
+拒绝启动。`worker` 获取唯一 `WorkspaceWriteLease` 后才可使用 `edit/write` 和可能修改文件的
+`bash`；lease 不能替代 path policy、approval、sandbox 或 expected hash 检查。
+
+#### V4.0 Trace 与 Transcript 合同
+
+V4 保留不可变的 `trace.jsonl` 作为机器账本，新增：
+
+```text
+transcript.jsonl   root turn/child span 的稳定可读投影
+transcript.md      CLI/Web/面试演示的人类阅读版
+```
+
+一次 root 模型请求是一个 root `turn`。并行 child 是该 turn 内的 `delegate` step；每个 child
+仍有独立的 child turns。child 完成后，只有结构化 `workflow_summary_observation` 进入 root
+trajectory，child 完整细节通过 artifact/trace locator 查看。Transcript 至少展示：
+
+```text
+Thought/Intent -> Action -> Summary Observation
+```
+
+并明确标记 `model_intent` 与 `derived_summary`，不把隐藏推理当作可见 Thought。
+
+#### V4.0-M0：合同冻结与残留清点
+
+- 冻结 `delegate` schema、task dependency、role/profile、join、depth、预算、错误码和 output schema。
+- 冻结 root/parent/child/workflow/span ID、childrun JSONL protocol、退出码和 cancellation 语义。
+- 清点 `protocol.py`、`loop.py`、`state.py`、`checkpoint.py`、`cli.py`、eval runner、报告和旧文档中
+  的单 Agent 适配；形成 profile compatibility matrix。
+- 明确 `multi-agent-v4` 不改变旧 profile 默认值。
+
+验收：协议/状态/schema 设计审查完成；旧 profile focused pytest、`ruff`、`mypy` 通过；没有将
+未冻结字段先写入生产 state 或报告。
+
+#### V4.0-M1：Runtime Seam 与权限边界
+
+- 引入 `AgentRuntime`、`ChildCapabilities`、`CapabilityPolicy`、`ReadOnlyBashPolicy` 和
+  `WorkspaceWriteLease`。
+- 让 root、legacy single-agent 和 child 共用同一 tool/policy/sandbox/checkpoint pipeline，
+  不复制第二套 executor。
+- 增加 Docker read-only mount、workspace fingerprint 和 local executor 的明确降级语义。
+
+验收：scout/reviewer/planner 无法执行 `edit/write/delegate`；未授权请求不进入 executor；只读
+Docker child workspace 前后不变；两个 worker 不能同时取得 lease；V3.x 回归不下降。
+
+#### V4.0-M2：ChildRun 生命周期
+
+- 先实现 in-process child backend，用于确定性测试和开发；随后实现自己的 `minicc childrun`。
+- child 拥有独立 ContextBuilder、trajectory、metrics、trace namespace、checkpoint 和预算。
+- parent 只接收结构化 child result/evidence，不直接共享 trajectory。
+- 支持启动、流式事件、完成、失败、timeout、interrupt、cancel、process crash 和 cleanup。
+
+验收：单 child 3 次确定性运行结果结构一致；child 崩溃不会污染 parent state；子进程无残留；
+JSONL partial output、EOF、invalid event 和 non-zero exit 都有结构化归因。
+
+#### V4.0-M3：Delegate、并行与链式调度
+
+- 增加 `delegate` action 和 `WorkflowCoordinator`。
+- 支持单 child、只读 child 并行、依赖链、bounded `join=all/any` 和独立 child budget。
+- root turn 将 delegate 视为一个嵌套 step；child 内部仍单独计 turn。
+- workflow checkpoint 记录已提交 child result、未完成 task、process 状态和 lease epoch。
+
+验收：两个 scout 确实并行且按声明顺序汇总；依赖 child 不早于前置结果启动；中断/恢复不重复
+child 或已提交工具；并发上限、取消和未启动 task 的 aborted result 可从 trace 重放。
+
+#### V4.0-M4：标准工作流与 Reviewer 回路
+
+- 提供配置化 `scout -> planner -> worker` 模板。
+- 提供 `worker -> reviewer -> worker` 模板，reviewer 只读并返回 finding/evidence，worker
+  是唯一写入者。
+- 复查次数、verifier 次数和 lease epoch 必须有上限和指标。
+
+验收：固定 fixture 中 reviewer 可发现预置缺陷；worker 能根据 finding 修复；达到最大次数后
+明确失败而不是无限循环；最终成功必须由独立 CompletionVerifier 判定。
+
+#### V4.0-M5：Trace/Transcript、CLI 与 Viewer
+
+- 新增 transcript projector、`transcript.jsonl`、`transcript.md` 和事件订阅总线。
+- CLI 实时展示 root turn、intent、action、child start/progress/end、summary observation、
+  tool summary 和 verifier；完整 stdout/prompt/secret 仍落 artifact 或脱敏。
+- Web viewer 先消费 transcript，再按 locator 展开 trace/artifact；旧 trace 只读降级展示。
+
+验收：一项真实代码任务可以只看 transcript 理解主链路；并行 child 显示为 root turn 内嵌阶段；
+child 内部 turn 可展开；`model_intent`、`derived_summary`、tool arguments 和 artifact link 可验证。
+
+#### V4.0-M6：旧适配与真实任务评测
+
+- `baseline-bash`、`hybrid-v3.6` 保持原有入口和行为；旧 state/trace 按 legacy schema 只读读取。
+- 提供 `LegacyBashAdapter`，不把 Bash 字符串猜测成 `read/edit/write`。
+- 固定至少三类真实任务：失败测试修复、小功能+测试、陌生仓库/长日志调查。
+- 比较 `hybrid-v3.6`、`multi-agent-v4` 和标准 workflow；冻结 provider、model、temperature、
+  总 token budget、sandbox、case hash 和 repeat。
+
+验收：报告同时包含 verifier verdict、workflow status、root/child turns、child 数、并发、耗时、
+token、重复读取、policy/capability denial、write lease、diff 和失败归因；至少两轮独立 A/B；
+旧 V3.x 固定回归与 resume 不下降。
+
+#### V4.0-M7：发布门与声明边界
+
+V4 从 experimental 进入稳定声明必须同时满足：
+
+1. childrun 进程、流式、取消、恢复和清理均有确定性/集成证据；
+2. read-only child 的 visibility、runtime policy、sandbox mount、fingerprint 四层合同均有测试；
+3. 唯一 write lease 没有并发写入和未授权变更；
+4. 单 child、并行 child、链式 child、独立 context 和 reviewer 回路均有回归覆盖；
+5. transcript 能稳定呈现 `Thought/Intent -> Action -> Summary Observation`，但不声称隐藏 CoT；
+6. 至少两轮真实固定任务对照有 root/child trace、transcript、metrics、state、diff 和 verifier；
+7. 所有成功率、效率或质量数字都可以通过 run ID、artifact、报告和 verifier 复核。
+
+在 M7 之前，简历和 README 只能声明“experimental 多 Agent 编排和可验证执行合同”，不能把
+一次成功演示或计划中的 workflow 写成通用成功率。
+
 ### Sandbox Runtime 生命周期治理（当前小步迭代）
 
 目标：在不引入 Compose、容器池、标签清理平台或多运行时的前提下，把现有“一次
@@ -1179,7 +1340,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                             |
                                       |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
                                       |                                                        |
-                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling
+                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |
