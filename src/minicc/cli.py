@@ -93,7 +93,7 @@ from minicc.memory.compaction import SemanticCompactor
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.working import WorkingMemoryError, attach_working_memory
 from minicc.meta.reviewer import MetaReviewer, MetaReviewError, load_meta_review
-from minicc.multi_agent import childrun_main
+from minicc.multi_agent import SubprocessChildRunProvider, WorkflowCoordinator, childrun_main
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
 from minicc.sandbox.docker_runner import (
@@ -180,6 +180,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Override provider.stream to true.",
+    )
+    run_parser.add_argument(
+        "--profile",
+        choices=("baseline-bash", "hybrid-v3.6", "multi-agent-v4"),
+        default=None,
+        help="Override tooling profile for this run.",
     )
     run_parser.add_argument(
         "--follow-up-from",
@@ -596,6 +602,8 @@ def transcript_command(args: argparse.Namespace) -> int:
 
 def run_command(args: argparse.Namespace) -> int:
     settings = load_settings()
+    if getattr(args, "profile", None):
+        settings = replace(settings, tooling=replace(settings.tooling, profile=args.profile))
     milestone = _effective_milestone(settings, args)
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     source_arg = getattr(args, "source_dir", None)
@@ -1054,6 +1062,14 @@ def _build_loop(
     if state is not None:
         state.metrics["profile"] = profile
         state.metrics["max_parallel_tool_calls"] = settings.tooling.max_parallel_tool_calls
+        state.metrics["child_model"] = settings.child_model if profile == "multi-agent-v4" else None
+    workflow_coordinator = None
+    if profile == "multi-agent-v4":
+        child_settings = settings.child_provider or settings.provider
+        workflow_coordinator = WorkflowCoordinator(
+            SubprocessChildRunProvider(timeout_sec=child_settings.timeout_sec),
+            max_concurrent_children=settings.tooling.max_parallel_tool_calls,
+        )
     return AgentLoop(
         provider,
         executor,
@@ -1078,6 +1094,7 @@ def _build_loop(
         checkpoint_manager=checkpoint_manager,
         completion_verifier=completion_verifier,
         tool_scheduler=scheduler,
+        workflow_coordinator=workflow_coordinator,
         config=LoopConfig(
             max_turns=settings.budget.max_turns if max_turns is None else max_turns,
             max_action_timeout_sec=settings.budget.max_action_timeout_sec,

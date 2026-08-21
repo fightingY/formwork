@@ -1,8 +1,19 @@
 provider:
+  # Root/main agent model. Can also be set with MINICC_MODEL.
+  base_url: https://api.siliconflow.cn/v1
+  model: deepseek-ai/DeepSeek-V4-Pro
   json_mode: true
   max_completion_tokens: 2048
   timeout_sec: 300
   max_retries: 2
+
+child_provider:
+  # Child/scout/planner/reviewer model. Can also be set with MINICC_CHILD_MODEL.
+  # MINICC_FAST_MODEL is accepted as a backwards-compatible alias.
+  base_url: https://api.siliconflow.cn/v1
+  model: deepseek-ai/DeepSeek-V4-Flash
+  temperature: 0
+  json_mode: true
 
 project:
   milestone: v3.6

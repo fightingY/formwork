@@ -404,6 +404,7 @@ uv run pytest
 MINICC_BASE_URL=https://api.siliconflow.cn/v1
 MINICC_API_KEY=替换成你的_api_key
 MINICC_MODEL=deepseek-ai/DeepSeek-V4-Pro
+MINICC_CHILD_MODEL=deepseek-ai/DeepSeek-V4-Flash
 MINICC_TEMPERATURE=0
 ```
 
@@ -439,6 +440,12 @@ provider:
   stream: false
   include_usage: true
 
+child_provider:
+  base_url: https://api.siliconflow.cn/v1
+  model: deepseek-ai/DeepSeek-V4-Flash
+  temperature: 0
+  json_mode: true
+
 policy:
   require_approval_for_network: true
   deny_sudo: true
@@ -449,6 +456,8 @@ workspace:
 ```
 
 其中 `MINICC_BASE_URL`、`MINICC_MODEL`、`MINICC_TEMPERATURE` 可以通过环境变量覆盖 `minicc.yaml`；`MINICC_API_KEY` 只建议放在 `.env` 或系统环境变量里，不写入 `minicc.yaml`。
+
+V4 的主 Agent 使用 `provider.model`（或 `MINICC_MODEL`），子 Agent 使用 `child_provider.model`（或 `MINICC_CHILD_MODEL`）。未设置子模型时回退到主模型；历史变量 `MINICC_FAST_MODEL` 也可作为子模型别名。使用 `minicc run --profile multi-agent-v4` 才会启用真实 child 模型编排。
 
 `workspace.ignored_allowlist` 只用于确实需要进入普通 run 的 ignored 项目文件，例如
 `generated/runtime.json`。它不能放行 `.env`、`.minicc/`、`.workbuddy/`、虚拟环境、缓存或构建产物。

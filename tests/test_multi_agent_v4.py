@@ -64,7 +64,7 @@ def test_workflow_parallel_and_dependency_order() -> None:
 
 def test_subprocess_childrun_and_transcript(tmp_path: Path) -> None:
     task = parse_action('{"type":"delegate","tasks":[{"id":"s","role":"scout","goal":"inspect","capability_profile":"scout"}]}').tasks[0]  # type: ignore[union-attr]
-    result = SubprocessChildRunProvider(timeout_sec=10).run(task, parent_run_id="p", root_run_id="r", workflow_id="w")
+    result = SubprocessChildRunProvider(timeout_sec=10, use_model=False).run(task, parent_run_id="p", root_run_id="r", workflow_id="w")
     assert result.status == "completed"
     projector = TranscriptProjector(root_run_id="r")
     projector.project([

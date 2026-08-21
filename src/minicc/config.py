@@ -91,6 +91,7 @@ class Settings:
     project: ProjectSettings = field(default_factory=ProjectSettings)
     workspace: WorkspaceSettings = field(default_factory=WorkspaceSettings)
     tooling: ToolingSettings = field(default_factory=ToolingSettings)
+    child_provider: ProviderSettings | None = None
 
     @property
     def base_url(self) -> str | None:
@@ -108,6 +109,10 @@ class Settings:
     def temperature(self) -> float:
         return self.provider.temperature
 
+    @property
+    def child_model(self) -> str | None:
+        return (self.child_provider or self.provider).model
+
 
 def load_settings() -> Settings:
     load_dotenv_file(Path.cwd() / ".env")
@@ -122,8 +127,7 @@ def load_settings() -> Settings:
     workspace_config = _dict_at(config, "workspace")
     tooling_config = _dict_at(config, "tooling")
 
-    return Settings(
-        provider=ProviderSettings(
+    provider = ProviderSettings(
             base_url=_env_or_config("MINICC_BASE_URL", provider_config, "base_url"),
             api_key=os.getenv("MINICC_API_KEY"),
             model=_env_or_config("MINICC_MODEL", provider_config, "model"),
@@ -158,7 +162,33 @@ def load_settings() -> Settings:
                 "timeout_sec",
                 120.0,
             ),
+        )
+    child_config = _dict_at(config, "child_provider")
+    child_provider = ProviderSettings(
+        base_url=_env_or_config("MINICC_CHILD_BASE_URL", child_config, "base_url") or provider.base_url,
+        api_key=os.getenv("MINICC_CHILD_API_KEY") or provider.api_key,
+        model=(
+            os.getenv("MINICC_CHILD_MODEL")
+            or os.getenv("MINICC_FAST_MODEL")
+            or _str_config(child_config, "model", "")
+            or provider.model
         ),
+        temperature=_float_env_or_config(
+            "MINICC_CHILD_TEMPERATURE",
+            child_config,
+            "temperature",
+            float(os.getenv("MINICC_FAST_TEMPERATURE", str(provider.temperature))),
+        ),
+        stream=_bool_env_or_config("MINICC_CHILD_STREAM", child_config, "stream", provider.stream),
+        include_usage=_bool_env_or_config("MINICC_CHILD_INCLUDE_USAGE", child_config, "include_usage", provider.include_usage),
+        json_mode=_bool_env_or_config("MINICC_CHILD_JSON_MODE", child_config, "json_mode", provider.json_mode),
+        timeout_sec=_float_env_or_config("MINICC_CHILD_PROVIDER_TIMEOUT_SEC", child_config, "timeout_sec", provider.timeout_sec),
+        max_completion_tokens=_int_config(child_config, "max_completion_tokens", provider.max_completion_tokens),
+        max_retries=_int_config(child_config, "max_retries", provider.max_retries),
+    )
+
+    return Settings(
+        provider=provider,
         sandbox=SandboxSettings(
             image=_str_config(sandbox_config, "image", "python:3.11-slim"),
             mode=_str_config(sandbox_config, "mode", "locked"),
@@ -180,16 +210,8 @@ def load_settings() -> Settings:
             summary_max_chars=_int_config(context_config, "summary_max_chars", 12_000),
             field_preview_chars=_int_config(context_config, "field_preview_chars", 4_000),
             compaction_strategy=_compaction_strategy(context_config),
-            semantic_max_input_chars=_int_config(
-                context_config,
-                "semantic_max_input_chars",
-                60_000,
-            ),
-            semantic_max_completion_tokens=_int_config(
-                context_config,
-                "semantic_max_completion_tokens",
-                2_048,
-            ),
+            semantic_max_input_chars=_int_config(context_config, "semantic_max_input_chars", 60_000),
+            semantic_max_completion_tokens=_int_config(context_config, "semantic_max_completion_tokens", 2_048),
             retention_markers=_str_tuple_config(context_config, "retention_markers"),
             prompt_layout=_prompt_layout(context_config),
         ),
@@ -217,6 +239,7 @@ def load_settings() -> Settings:
             max_parallel_tool_calls=_int_config(tooling_config, "max_parallel_tool_calls", 4),
             max_tool_calls_per_step=_int_config(tooling_config, "max_tool_calls_per_step", 16),
         ),
+        child_provider=child_provider,
     )
 
 

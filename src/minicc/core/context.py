@@ -63,6 +63,15 @@ version hash. Existing-file `edit` and `write` require the current `expected_has
 After tool results, use the next turn to choose the next tool call or a control action.
 """
 
+MULTI_AGENT_PREFIX_SUFFIX = """
+
+This run uses the opt-in multi-agent-v4 profile. You may emit one `delegate` action per turn.
+Delegate tasks must use role/profile pairs scout/scout, planner/planner, reviewer/reviewer,
+or worker/worker. Read-only roles cannot edit, write, or delegate. Use bounded dependencies
+and return structured goals; child results arrive as workflow_summary_observation.
+{"type":"delegate","intent":"先并行调查实现和测试约束","join":"all","tasks":[{"id":"scout-1","role":"scout","goal":"inspect the implementation","capability_profile":"scout","max_turns":4,"timeout_sec":180,"output_schema":"investigation_report"}]}
+"""
+
 EPOCH_COMPACTION_TARGET_RATIO = 0.65
 CompactionStrategy = Literal["disabled", "deterministic", "semantic"]
 PromptLayout = Literal["rebuild", "append", "epoch", "append_until_compaction"]
@@ -524,6 +533,8 @@ class ContextBuilder:
     def _system_prefix(self, state: RunState) -> str:
         if state.metrics.get("profile") == "hybrid-v3.6":
             return STABLE_PREFIX + HYBRID_PREFIX_SUFFIX
+        if state.metrics.get("profile") == "multi-agent-v4":
+            return STABLE_PREFIX + MULTI_AGENT_PREFIX_SUFFIX
         return STABLE_PREFIX
 
     def _build_messages_with_trajectory(
