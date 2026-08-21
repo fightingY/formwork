@@ -991,7 +991,7 @@ workspace retention、patch replay、跨 run 比较和更复杂的 judge。任�
 
 #### V3.5-M0：任务与来源冻结
 
-- 建立 `source_lock.yaml` 和 `THIRD_PARTY_NOTICES.md`，记录 6 个任务的来源、commit、路径、许可证和摘要。
+- 建立 `THIRD_PARTY_NOTICES.md`，记录 6 个任务的许可证与来源摘要。
 - 固定 DeepSeek V4 Flash、temperature、预算、sandbox、执行顺序、3 次 repeat 和结果分母；`--execute-local`
   只用于开发预检，正式 18-run 使用现有 Docker sandbox。
 - 在正式运行前只允许做一次单次校准；若 6 题明显过难或存在基础设施问题，先停下来修合同并重新冻结，

@@ -5,6 +5,4 @@ public Exercism Python exercise family distributed under the MIT license.
 Only the task concepts and minimal fixture shape are included; no upstream
 test suite or reference implementation is copied into an agent workspace.
 
-The benchmark runner, verifier, workspace, and reports are original miniCC
-code. See `eval_cases/public_benchmark_v1/source_lock.yaml` for the immutable
-source and asset record.
+The benchmark runner, verifier, workspace, and reports are original miniCC code.

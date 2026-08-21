@@ -10,7 +10,6 @@ prompt: |
   line_start 3, and line_end 6 so an explicitly linked follow-up can reuse the
   source excerpt. Example shape: {"type":"final","answer":"...","memory":[{"path":"docs/SERVICE_CONTRACT.md","line_start":3,"line_end":6}]}
 budget:
-  max_turns: 5
   max_bash_actions: 4
 assertions:
   - type: run_status

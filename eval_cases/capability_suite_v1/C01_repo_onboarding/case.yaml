@@ -9,7 +9,6 @@ sandbox_mode: locked
 workspace:
   writable_paths: ["ONBOARDING.md"]
 budget:
-  max_turns: 8
   max_bash_actions: 20
 assertions:
   - type: file_exists

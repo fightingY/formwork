@@ -7,7 +7,6 @@ sandbox_mode: locked
 workspace:
   writable_paths: ["src/"]
 budget:
-  max_turns: 10
   max_bash_actions: 25
 assertions:
   - type: command

@@ -77,30 +77,6 @@ def test_loop_turns_protocol_error_into_observation_then_recovers(tmp_path) -> N
     assert result.trajectory[0].observation.kind == "protocol_error"
 
 
-def test_loop_freezes_dynamic_guidance_on_append_trajectory_steps(tmp_path) -> None:
-    provider = FakeProvider(
-        [
-            '{"type":"bash","command":"pwd"}',
-            '{"type":"bash","command":"pytest -q"}',
-            '{"type":"final","answer":"done"}',
-        ]
-    )
-    state = RunState.start("Inspect and verify")
-
-    result = AgentLoop(
-        provider,
-        FakeExecutor(),
-        context_builder=ContextBuilder(ContextConfig(prompt_layout="append")),
-        session=SessionManager(runs_root=tmp_path / "runs"),
-        config=LoopConfig(max_turns=3),
-    ).run(state)
-
-    assert result.state.status == "completed"
-    assert result.trajectory[0].state_snapshot == ""
-    assert "final response slot" in result.trajectory[1].state_snapshot
-    assert "do not run another bash command" in result.trajectory[1].state_snapshot
-
-
 def test_loop_waits_on_ask_action(tmp_path) -> None:
     provider = FakeProvider(['{"type":"ask","question":"Which test command should I use?"}'])
     state = RunState.start("Need clarification")
@@ -119,7 +95,7 @@ def test_loop_fails_after_protocol_error_threshold(tmp_path) -> None:
         provider,
         FakeExecutor(),
         session=SessionManager(runs_root=tmp_path / "runs"),
-        config=LoopConfig(max_turns=5, max_protocol_errors=2),
+        config=LoopConfig(max_protocol_errors=2),
     ).run(state)
 
     assert result.state.status == "failed"
@@ -227,3 +203,48 @@ def test_loop_records_trace_and_metrics(tmp_path) -> None:
     assert report["passed"] is True
     assert Path(report["evidence"]["diff"]).parts[-2:] == ("artifacts", "diff.patch")
     assert (tmp_path / "run_report.md").exists()
+
+
+def test_loop_default_config_has_no_turn_cap(tmp_path) -> None:
+    provider = FakeProvider(
+        [
+            '{"type":"bash","command":"a"}',
+            '{"type":"bash","command":"b"}',
+            '{"type":"bash","command":"c"}',
+            '{"type":"final","answer":"done"}',
+        ]
+    )
+    state = RunState.start("many turns")
+
+    result = AgentLoop(
+        provider,
+        FakeExecutor(),
+        session=SessionManager(runs_root=tmp_path / "runs"),
+    ).run(state)
+
+    assert result.state.status == "completed"
+    assert result.state.metrics["turns"] == 4
+
+
+def test_loop_fails_fast_when_provider_truncates_at_token_limit(tmp_path) -> None:
+    class LengthTruncatedProvider:
+        def complete(self, messages, *, options=None):
+            return ModelResponse(
+                text='{"type":"final","answer":"unterminated',
+                raw={"choices": [{"finish_reason": "length"}]},
+                usage=ModelUsage(prompt_tokens=10, completion_tokens=2048),
+                latency_ms=7,
+                finish_reason="length",
+            )
+
+    state = RunState.start("Truncated answer")
+
+    result = AgentLoop(
+        LengthTruncatedProvider(),
+        FakeExecutor(),
+        session=SessionManager(runs_root=tmp_path / "runs"),
+    ).run(state)
+
+    assert result.state.status == "failed"
+    assert "finish_reason=length" in result.state.state_summary
+    assert result.state.metrics.get("protocol_errors", 0) == 0

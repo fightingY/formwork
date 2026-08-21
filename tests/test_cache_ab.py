@@ -315,7 +315,6 @@ def _probe(variant: str, suffix: str, *, hit: int | None) -> dict:
             "model": "fixed",
             "temperature": 0,
             "json_mode": True,
-            "max_completion_tokens": 128,
             "git_commit": "abc123",
             "system_prefix_sha256": "system",
             "dynamic_sequence_sha256": fixed_probe_sequence_sha256(5, suffix),
@@ -396,7 +395,6 @@ def _suite(
             "model": "fixed",
             "temperature": 0,
             "json_mode": True,
-            "max_completion_tokens": 128,
             "git_commit": "abc123",
             "system_prefix_sha256": "system",
             "compaction_strategy": "deterministic",
@@ -417,9 +415,7 @@ def _suite(
             "sandbox_mode": "locked",
             "execute_local": False,
             "case_contexts": {
-                "C02_fix_failing_test": {
-                    "max_turns": 8,
-                }
+                "C02_fix_failing_test": {},
             },
             "feedback_memory_mode": "disabled",
         },

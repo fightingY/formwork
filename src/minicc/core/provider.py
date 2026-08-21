@@ -30,6 +30,7 @@ class ModelResponse:
     latency_ms: int
     attempt_count: int = 1
     retry_reasons: tuple[str, ...] = ()
+    finish_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,7 @@ class OpenAICompatibleProvider:
             latency_ms=latency_ms,
             attempt_count=attempt + 1,
             retry_reasons=tuple(retry_reasons),
+            finish_reason=extract_finish_reason(raw),
         )
 
     def _headers(self) -> dict[str, str]:
@@ -332,6 +334,23 @@ def extract_chat_text(raw: Mapping[str, Any]) -> str:
             return ""
         return str(content)
     return ""
+
+
+def extract_finish_reason(raw: Mapping[str, Any]) -> str | None:
+    chunks = raw.get("chunks")
+    if isinstance(chunks, list):
+        reason: str | None = None
+        for item in chunks:
+            if not isinstance(item, Mapping):
+                continue
+            for choice in item.get("choices") or []:
+                if isinstance(choice, Mapping) and choice.get("finish_reason") is not None:
+                    reason = choice.get("finish_reason")
+        return reason
+    choices = raw.get("choices") or []
+    if choices and isinstance(choices[0], Mapping):
+        return choices[0].get("finish_reason")
+    return None
 
 
 def parse_model_usage(raw_usage: Mapping[str, Any] | None) -> ModelUsage:

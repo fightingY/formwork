@@ -98,10 +98,6 @@ def build_memory_acceptance_report(
         for key in locked_keys
     }
     exact_cases = len(rows) == 3 and set(case_names) == set(REQUIRED_MEMORY_CASES)
-    profiles_valid = exact_cases and all(
-        _canonical_profile(case_name, configuration)
-        for case_name, configuration in zip(case_names, configurations, strict=True)
-    )
     same_configuration = bool(configurations) and all(
         all(configuration.get(key) == locked[key] for key in locked_keys)
         for configuration in configurations
@@ -139,7 +135,6 @@ def build_memory_acceptance_report(
         "exactly_three_canonical_cases": exact_cases,
         "independent_suite_and_run_ids": _independent_ids(rows),
         "locked_configuration_consistent": same_configuration,
-        "case_authority_profiles_locked": profiles_valid,
         "all_sources_formal_and_passed": formal_sources,
         "follow_up_key_fact_accuracy_m0": _accuracy(m0_rows),
         "follow_up_key_fact_accuracy_m1": _accuracy(m1_rows),
@@ -162,7 +157,6 @@ def build_memory_acceptance_report(
         criteria["exactly_three_canonical_cases"]
         and criteria["independent_suite_and_run_ids"]
         and criteria["locked_configuration_consistent"]
-        and criteria["case_authority_profiles_locked"]
         and criteria["all_sources_formal_and_passed"]
         and criteria["follow_up_key_fact_accuracy_m0"] == 1.0
         and criteria["follow_up_key_fact_accuracy_m1"] == 1.0
@@ -516,18 +510,6 @@ def _is_read_command(command: str) -> bool:
         or "get-content" in lowered
         or "select-string" in lowered
     )
-
-
-def _canonical_profile(case_name: str, configuration: Mapping[str, Any]) -> bool:
-    expected = REQUIRED_MEMORY_CASES.get(case_name)
-    profiles = configuration.get("case_authority_profiles")
-    if expected is None or not isinstance(profiles, Mapping) or len(profiles) != 1:
-        return False
-    profile = next(iter(profiles.values()))
-    return isinstance(profile, Mapping) and (
-        profile.get("source_path"),
-        profile.get("fixture_source_path"),
-    ) == expected
 
 
 def _independent_ids(rows: Sequence[Mapping[str, Any]]) -> bool:

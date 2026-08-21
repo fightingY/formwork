@@ -14,7 +14,6 @@ from uuid import uuid4
 
 from minicc.evals.assertions import assertion_spec_sha256
 from minicc.evals.cache_probe_runner import fixed_probe_profile_sha256
-from minicc.evals.case import case_authority_bundle_sha256
 
 SHORT_CASE = "C02_fix_failing_test"
 LONG_CASE = "C07_large_log_debugging"
@@ -214,9 +213,6 @@ def build_cache_utilization_report(
         "all_rounds_passed": all(round_["passed"] for round_ in round_reports),
     }
     locked_configuration = _archived_configuration(all_payloads[0])
-    locked_configuration["case_authority_bundle_sha256"] = _configuration(
-        suite_payloads[0]
-    ).get("case_authority_bundle_sha256")
     passed = all(global_criteria.values())
     return {
         "schema_version": 1,
@@ -364,8 +360,8 @@ def format_cache_utilization_markdown(report: Mapping[str, Any]) -> str:
     ]
     for name, profile in (report.get("case_authority_profiles") or {}).items():
         lines.append(
-            f"- `{name}`: case `{profile['case_definition_sha256']}`, "
-            f"fixture `{profile['fixture_content_sha256']}`"
+            f"- `{name}`: case `{profile['source_path']}`, "
+            f"fixture `{profile['fixture_source_path']}`"
         )
     lines.append("")
     for round_ in report["rounds"]:
@@ -1634,7 +1630,7 @@ def _configuration(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 def _case_authority_profiles(
     suites: Sequence[Mapping[str, Any]],
 ) -> dict[str, dict[str, str]]:
-    observed: dict[str, set[tuple[str, str, str, str]]] = {
+    observed: dict[str, set[tuple[str, str]]] = {
         name: set() for name in REQUIRED_CASES
     }
     for suite in suites:
@@ -1650,72 +1646,30 @@ def _case_authority_profiles(
                 continue
             source_path = str(case.get("case_source_path") or "")
             fixture_source_path = str(case.get("fixture_source_path") or "")
-            definition_sha256 = str(case.get("case_definition_sha256") or "")
-            fixture_sha256 = str(case.get("fixture_content_sha256") or "")
             if (
                 source_path != EXPECTED_CASE_SOURCE_PATHS[name]
                 or fixture_source_path
                 != EXPECTED_FIXTURE_SOURCE_PATHS[name]
-                or re.fullmatch(r"[0-9a-f]{64}", definition_sha256) is None
-                or re.fullmatch(r"[0-9a-f]{64}", fixture_sha256) is None
             ):
                 return {}
             profile = {
                 "source_path": source_path,
                 "fixture_source_path": fixture_source_path,
-                "case_definition_sha256": definition_sha256,
-                "fixture_content_sha256": fixture_sha256,
             }
             existing = suite_profiles.setdefault(name, profile)
             if existing != profile:
                 return {}
-            observed[name].add(
-                (
-                    source_path,
-                    fixture_source_path,
-                    definition_sha256,
-                    fixture_sha256,
-                )
-            )
-        configuration = _configuration(suite)
-        configured_profiles = configuration.get("case_authority_profiles")
-        configured_bundle = str(
-            configuration.get("case_authority_bundle_sha256") or ""
-        )
-        if (
-            set(suite_profiles) != set(REQUIRED_CASES)
-            or configured_profiles != suite_profiles
-            or re.fullmatch(r"[0-9a-f]{64}", configured_bundle) is None
-            or configured_bundle
-            != case_authority_bundle_sha256(suite_profiles)
-        ):
+            observed[name].add((source_path, fixture_source_path))
+        if set(suite_profiles) != set(REQUIRED_CASES):
             return {}
     if any(len(values) != 1 for values in observed.values()):
         return {}
     profiles: dict[str, dict[str, str]] = {}
     for name, values in observed.items():
-        (
-            source_path,
-            fixture_source_path,
-            definition_sha256,
-            fixture_sha256,
-        ) = next(iter(values))
-        canonical = json.dumps(
-            {
-                "source_path": source_path,
-                "fixture_source_path": fixture_source_path,
-                "case_definition_sha256": definition_sha256,
-                "fixture_content_sha256": fixture_sha256,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        source_path, fixture_source_path = next(iter(values))
         profiles[name] = {
             "source_path": source_path,
             "fixture_source_path": fixture_source_path,
-            "case_definition_sha256": definition_sha256,
-            "fixture_content_sha256": fixture_sha256,
-            "profile_sha256": hashlib.sha256(canonical).hexdigest(),
         }
     return profiles
 
@@ -1740,7 +1694,6 @@ def _configuration_errors(
         "stream",
         "include_usage",
         "json_mode",
-        "max_completion_tokens",
         "provider_max_retries",
         "provider_timeout_sec",
         "cache_scope_sha256",
@@ -1754,7 +1707,6 @@ def _configuration_errors(
         "release_gate",
         "sandbox_mode",
         "execute_local",
-        "semantic_max_completion_tokens",
         "system_prefix_sha256",
         "dynamic_sequence_sha256",
         "feedback_memory_mode",
@@ -1762,8 +1714,6 @@ def _configuration_errors(
         "long_evidence_source",
         "long_evidence_chars",
         "long_evidence_sha256",
-        "case_authority_profiles",
-        "case_authority_bundle_sha256",
         "git_preflight_verified",
         "git_postflight_verified",
     }
@@ -1785,7 +1735,6 @@ def _locked_configuration_consistent(
         "stream",
         "include_usage",
         "json_mode",
-        "max_completion_tokens",
         "provider_max_retries",
         "provider_timeout_sec",
         "cache_scope_sha256",
@@ -1848,19 +1797,6 @@ def _locked_configuration_consistent(
         or re.fullmatch(r".+@sha256:[0-9a-f]{64}", docker_images[0]) is None
     ):
         return False
-    authority_bundles = [
-        str(_configuration(payload).get("case_authority_bundle_sha256") or "")
-        for payload in suites
-    ]
-    if (
-        not authority_bundles
-        or any(
-            re.fullmatch(r"[0-9a-f]{64}", value) is None
-            for value in authority_bundles
-        )
-        or len(set(authority_bundles)) != 1
-    ):
-        return False
     return all(
         bool(_configuration(payload).get("release_gate"))
         and not bool(_configuration(payload).get("worktree_dirty"))
@@ -1881,7 +1817,6 @@ def _archived_configuration(payload: Mapping[str, Any]) -> dict[str, Any]:
         "stream",
         "include_usage",
         "json_mode",
-        "max_completion_tokens",
         "provider_max_retries",
         "provider_timeout_sec",
         "cache_scope_sha256",

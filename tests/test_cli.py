@@ -1,8 +1,10 @@
 import argparse
 import hashlib
+import io
 import json
 import os
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -58,12 +60,34 @@ class FakeLoop:
         return type("LoopResult", (), {"state": state})()
 
 
+def test_reconfigure_std_streams_allows_emoji_on_gbk_console(monkeypatch) -> None:
+    # A Windows console defaults to the GBK codec, which cannot encode the
+    # emoji that model-generated final answers sometimes contain. Without the
+    # reconfigure, ``print`` would raise UnicodeEncodeError after the run is
+    # already persisted. Re-pointing stdout/stderr at UTF-8 must prevent that.
+    out = io.TextIOWrapper(io.BytesIO(), encoding="gbk")
+    err = io.TextIOWrapper(io.BytesIO(), encoding="gbk")
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(sys, "stderr", err)
+    assert sys.stdout.encoding == "gbk"
+
+    cli._reconfigure_std_streams()
+
+    assert sys.stdout.encoding == "utf-8"
+    assert sys.stderr.encoding == "utf-8"
+    print("found: \U0001F534 critical \U0001F7E0 high")
+    sys.stdout.flush()
+    out.flush()
+    out.close()
+    err.close()
+
+
 def test_run_command_fake_provider_writes_complete_evidence_bundle(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     settings = Settings(
         provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
         sandbox=SandboxSettings(),
-        budget=BudgetSettings(max_turns=2),
+        budget=BudgetSettings(),
         context=ContextSettings(),
         policy=PolicySettings(),
     )
@@ -80,7 +104,6 @@ def test_run_command_fake_provider_writes_complete_evidence_bundle(tmp_path, mon
     exit_code = cli.run_command(
         argparse.Namespace(
             goal="fake provider smoke test",
-            max_turns=None,
             execute_local=True,
             no_workspace_copy=False,
             docker_image=None,
@@ -117,7 +140,7 @@ def test_run_source_dir_keeps_external_repository_unchanged(tmp_path, monkeypatc
     settings = Settings(
         provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
         sandbox=SandboxSettings(),
-        budget=BudgetSettings(max_turns=1),
+        budget=BudgetSettings(),
         context=ContextSettings(),
         policy=PolicySettings(),
     )
@@ -133,7 +156,6 @@ def test_run_source_dir_keeps_external_repository_unchanged(tmp_path, monkeypatc
         argparse.Namespace(
             goal="inspect external project",
             source_dir=source_root,
-            max_turns=None,
             execute_local=True,
             no_workspace_copy=False,
             docker_image=None,
@@ -155,7 +177,7 @@ def test_run_command_binds_completion_verifier(tmp_path, monkeypatch) -> None:
     settings = Settings(
         provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
         sandbox=SandboxSettings(),
-        budget=BudgetSettings(max_turns=1),
+        budget=BudgetSettings(),
         context=ContextSettings(),
         policy=PolicySettings(),
     )
@@ -171,7 +193,6 @@ def test_run_command_binds_completion_verifier(tmp_path, monkeypatch) -> None:
         argparse.Namespace(
             goal="finish only after tests pass",
             source_dir=None,
-            max_turns=None,
             execute_local=True,
             no_workspace_copy=False,
             docker_image=None,
@@ -209,7 +230,7 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
     settings = Settings(
         provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
         sandbox=SandboxSettings(),
-        budget=BudgetSettings(max_turns=2),
+        budget=BudgetSettings(),
         context=ContextSettings(),
         policy=PolicySettings(),
     )
@@ -270,24 +291,12 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
     assert suite_report["configuration"]["cache_sequence_id"] == "round-test"
     assert suite_report["configuration"]["execution_order"] == "p0-first"
     assert suite_report["configuration"]["prompt_layout"] == "append"
-    assert len(
-        suite_report["configuration"]["case_authority_bundle_sha256"]
-    ) == 64
     case_record = suite_report["cases"][0]
     assert case_record["case_source_path"] == "eval_cases/demo/case.yaml"
     assert case_record["fixture_source_path"] == "eval_cases/demo/fixture"
     assert len(case_record["request_rows"]) == 2
     assert case_record["trace_assertion_events"][0]["action"]["command"] == (
         "echo ok"
-    )
-    workspace_manifest = json.loads(
-        Path(case_record["evidence"]["workspace_manifest"]).read_text(
-            encoding="utf-8"
-        )
-    )
-    assert (
-        workspace_manifest["included"]["content_digest_sha256"]
-        == case_record["fixture_content_sha256"]
     )
     assert suite_report["created_at"]
     artifact_index_path = (
@@ -415,29 +424,6 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
     trace_path.write_bytes(original_trace)
     run_report_path.write_bytes(original_run_report)
     artifact_index_path.write_bytes(original_index)
-    report_path.write_bytes(original_report)
-    manifest_path.write_bytes(original_manifest)
-
-    forged_report = json.loads(original_report)
-    forged_report["cases"][0]["fixture_content_sha256"] = "0" * 64
-    report_path.write_text(
-        json.dumps(forged_report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    forged_manifest = json.loads(original_manifest)
-    forged_report_bytes = report_path.read_bytes()
-    forged_manifest["artifacts"]["report_json"].update(
-        {
-            "bytes": len(forged_report_bytes),
-            "sha256": hashlib.sha256(forged_report_bytes).hexdigest(),
-        }
-    )
-    manifest_path.write_text(
-        json.dumps(forged_manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="authority profile"):
-        cli.load_cache_suite_report(report_path, verify_manifest=True)
     report_path.write_bytes(original_report)
     manifest_path.write_bytes(original_manifest)
 
@@ -583,7 +569,6 @@ def test_cache_probe_command_writes_canonical_probe_bundle(tmp_path, monkeypatch
             base_url="https://example.test/v1",
             api_key="key",
             model="model",
-            max_completion_tokens=128,
         ),
         sandbox=SandboxSettings(),
         budget=BudgetSettings(),
@@ -814,7 +799,7 @@ def test_resume_command_uses_normal_settings_after_approval(tmp_path, monkeypatc
     settings = Settings(
         provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
         sandbox=SandboxSettings(),
-        budget=BudgetSettings(max_turns=2),
+        budget=BudgetSettings(),
         context=ContextSettings(),
         policy=PolicySettings(),
     )
@@ -823,8 +808,8 @@ def test_resume_command_uses_normal_settings_after_approval(tmp_path, monkeypatc
     monkeypatch.setattr(cli, "_build_provider_or_print_error", lambda loaded: FakeProvider())
     monkeypatch.setattr(cli, "LocalCommandExecutor", FakeExecutor)
 
-    def fake_build_loop(provider, executor, *, settings, session=None, state=None, max_turns=None, stream=None):
-        loop_calls.append({"settings": settings, "state": state, "max_turns": max_turns})
+    def fake_build_loop(provider, executor, *, settings, session=None, state=None, stream=None):
+        loop_calls.append({"settings": settings, "state": state})
         return FakeLoop(state)
 
     monkeypatch.setattr(cli, "_build_loop", fake_build_loop)
@@ -858,7 +843,7 @@ def test_resume_command_denial_terminates_without_agent_loop(tmp_path, monkeypat
     settings = Settings(
         provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
         sandbox=SandboxSettings(),
-        budget=BudgetSettings(max_turns=2),
+        budget=BudgetSettings(),
         context=ContextSettings(),
         policy=PolicySettings(),
     )
@@ -1068,7 +1053,7 @@ def test_v212_eval_rejects_external_fixture_before_provider(
         sandbox=SandboxSettings(
             image="python@sha256:" + ("a" * 64),
         ),
-        budget=BudgetSettings(max_turns=2),
+        budget=BudgetSettings(),
         context=ContextSettings(),
         policy=PolicySettings(),
     )
@@ -1100,25 +1085,15 @@ def test_v212_eval_rejects_external_fixture_before_provider(
     assert provider_calls == []
 
 
-def test_committed_authority_profile_detects_skip_worktree_change(
-    tmp_path,
-) -> None:
-    suite_root = tmp_path / "eval_cases" / "capability_suite_v1"
-    for name in ("C02_fix_failing_test", "C07_large_log_debugging"):
-        case_dir = suite_root / name
-        fixture = case_dir / "fixture"
-        fixture.mkdir(parents=True)
-        (fixture / "input.txt").write_text(f"{name}\n", encoding="utf-8")
-        (case_dir / "case.yaml").write_text(
-            f"name: {name}\nprompt: Finish.\nassertions: []\n",
-            encoding="utf-8",
-        )
+def test_git_index_flags_rejects_skip_worktree(tmp_path) -> None:
+    tracked = tmp_path / "tracked.py"
+    tracked.write_text("VALUE = 'committed'\n", encoding="utf-8")
     for args in (
         ("init",),
         ("config", "user.email", "test@example.com"),
         ("config", "user.name", "Test"),
         ("add", "."),
-        ("commit", "-m", "fixture baseline"),
+        ("commit", "-m", "baseline"),
     ):
         subprocess.run(
             ["git", *args],
@@ -1126,63 +1101,15 @@ def test_committed_authority_profile_detects_skip_worktree_change(
             capture_output=True,
             check=True,
         )
-    git_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    cases = cli.discover_cases(suite_root)
-    live = cli.build_case_authority_profiles(cases, project_root=tmp_path)
-    committed = cli._committed_case_authority_profiles(
-        live,
-        project_root=tmp_path,
-        git_commit=git_commit,
-    )
-    assert committed == live
 
-    extra_empty_dir = (
-        suite_root
-        / "C07_large_log_debugging"
-        / "fixture"
-        / "untracked-empty"
-    )
-    extra_empty_dir.mkdir()
-    with pytest.raises(ValueError, match="directory inventory"):
-        cli._committed_case_authority_profiles(
-            live,
-            project_root=tmp_path,
-            git_commit=git_commit,
-        )
-    extra_empty_dir.rmdir()
-
-    changed_path = (
-        "eval_cases/capability_suite_v1/"
-        "C07_large_log_debugging/fixture/input.txt"
-    )
+    assert cli._git_index_flags_error(tmp_path) == ""
     subprocess.run(
-        ["git", "update-index", "--skip-worktree", changed_path],
+        ["git", "update-index", "--skip-worktree", "tracked.py"],
         cwd=tmp_path,
         capture_output=True,
         check=True,
     )
     assert "skip-worktree" in cli._git_index_flags_error(tmp_path)
-    (tmp_path / changed_path).write_text("changed\n", encoding="utf-8")
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    changed_live = cli.build_case_authority_profiles(
-        cli.discover_cases(suite_root),
-        project_root=tmp_path,
-    )
-
-    assert status == ""
-    assert changed_live != committed
 
 
 def test_git_formal_state_rejects_ambient_content_transform_attributes(

@@ -146,3 +146,42 @@ def test_runtime_authorization_and_fingerprint(tmp_path: Path) -> None:
     assert ChildCapabilities.for_profile("worker").can_delegate is False
     with pytest.raises(ValueError, match="Unknown capability"):
         ChildCapabilities.for_profile("unknown")
+
+
+def test_transcript_markdown_is_compact_and_collapses_repeated_errors(tmp_path: Path) -> None:
+    projector = TranscriptProjector(root_run_id="r")
+    events = [
+        {"event": "run_started", "run_id": "r", "goal": "inspect cache locking"},
+        {"event": "prompt_built", "run_id": "r"},
+        {
+            "event": "action_started",
+            "run_id": "r",
+            "action": {"type": "bash", "command": "cat Cache.java", "purpose": "Inspect locking"},
+        },
+        {"event": "sandbox_exec_finished", "run_id": "r", "observation": {"kind": "command_result"}},
+        {
+            "event": "observation_created",
+            "run_id": "r",
+            "observation": {"kind": "command_result", "stdout_preview": "x" * 5_000, "duration_ms": 12},
+        },
+    ]
+    for _ in range(3):
+        events.extend(
+            [
+                {"event": "prompt_built", "run_id": "r"},
+                {
+                    "event": "observation_created",
+                    "run_id": "r",
+                    "observation": {"kind": "protocol_error", "message": "truncated", "stderr_preview": "bad"},
+                },
+            ]
+        )
+    projector.project(events)
+    _, markdown_path = projector.write(tmp_path)
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "**Intent:** Inspect locking" in markdown
+    assert "5,000 chars" in markdown
+    assert "[truncated 3800 chars]" in markdown
+    assert "repeated 3 times" in markdown
+    assert "sandbox_exec_finished" not in markdown
+    assert len(markdown) < 3_000

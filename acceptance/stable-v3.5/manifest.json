@@ -2,7 +2,6 @@
   "schema_version": 1,
   "milestone": "v3.5",
   "status": "development_complete_formal_runs_pending",
-  "source_lock": "eval_cases/public_benchmark_v1/source_lock.yaml",
   "suite_manifest": "eval_cases/public_benchmark_v1/suite.yaml",
   "benchmark": {
     "status": "not_run",

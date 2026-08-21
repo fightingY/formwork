@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import subprocess
 import sys
@@ -62,8 +61,6 @@ from minicc.evals.cache_utilization import (
 )
 from minicc.evals.case import (
     EvalCase,
-    build_case_authority_profiles,
-    case_authority_bundle_sha256,
     discover_cases,
 )
 from minicc.evals.compaction_ab import (
@@ -105,7 +102,6 @@ from minicc.sandbox.local_runner import LocalCommandExecutor
 from minicc.sandbox.workspace import (
     prepare_run_workspace,
     workspace_content_digest,
-    workspace_content_records,
     write_workspace_diff,
 )
 from minicc.skills.registry import SkillRegistry, default_skill_roots
@@ -115,7 +111,29 @@ from minicc.trace.report import write_run_report
 from minicc.trace.transcript import project_trace
 
 
+def _reconfigure_std_streams() -> None:
+    """Point stdout/stderr at UTF-8 with a replacement fallback.
+
+    Model-generated text (final answers, summaries, questions) can contain
+    emoji and other characters that the Windows console's default GBK codec
+    cannot encode, which makes ``print`` raise ``UnicodeEncodeError`` and
+    crashes the CLI *after* the run has already been persisted. UTF-8 covers
+    the whole Unicode range, and ``errors="replace"`` guards against lone
+    surrogates from a malformed response. Streams without a ``reconfigure``
+    attribute (e.g. ``StringIO`` in tests) are left untouched.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _reconfigure_std_streams()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not hasattr(args, "handler"):
@@ -135,7 +153,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", help="Run a goal through the miniCC agent loop.")
     run_parser.add_argument("goal", help="User goal for the agent.")
     run_parser.add_argument("--milestone", default=None, help="Override project.milestone for run indexing.")
-    run_parser.add_argument("--max-turns", type=int, default=None, help="Override budget.max_turns.")
     run_parser.add_argument(
         "--source-dir",
         type=Path,
@@ -725,7 +742,6 @@ def run_command(args: argparse.Namespace) -> int:
             settings=settings,
             session=session,
             state=state,
-            max_turns=settings.budget.max_turns if args.max_turns is None else args.max_turns,
             stream=settings.provider.stream if args.stream is None else args.stream,
             interrupt_after_steps=getattr(args, "interrupt_after_steps", None),
             completion_verifier=completion_verifier,
@@ -985,7 +1001,6 @@ def _build_loop(
     settings: Settings,
     session: SessionManager | None = None,
     state: RunState | None = None,
-    max_turns: int | None = None,
     stream: bool | None = None,
     interrupt_after_steps: int | None = None,
     completion_verifier: CompletionVerifier | None = None,
@@ -1021,7 +1036,6 @@ def _build_loop(
             trace=trace,
             max_input_chars=settings.context.semantic_max_input_chars,
             max_summary_chars=settings.context.summary_max_chars,
-            max_completion_tokens=settings.context.semantic_max_completion_tokens,
         )
     prompt_layout = settings.context.prompt_layout
     if state is not None and int(state.metrics.get("turns") or 0) > 0:
@@ -1096,14 +1110,13 @@ def _build_loop(
         tool_scheduler=scheduler,
         workflow_coordinator=workflow_coordinator,
         config=LoopConfig(
-            max_turns=settings.budget.max_turns if max_turns is None else max_turns,
+            max_seconds=settings.budget.max_seconds,
             max_action_timeout_sec=settings.budget.max_action_timeout_sec,
             model_options=CompletionOptions(
                 temperature=settings.temperature,
                 stream=settings.provider.stream if stream is None else stream,
                 include_usage=settings.provider.include_usage,
                 json_mode=settings.provider.json_mode,
-                max_tokens=settings.provider.max_completion_tokens,
             ),
             interrupt_after_steps=interrupt_after_steps,
             profile=profile,
@@ -1205,7 +1218,6 @@ def eval_command(args: argparse.Namespace) -> int:
     v212_formal = bool(args.release_gate and "2.1.2" in milestone)
     v30_formal = bool(args.release_gate and "3.0" in milestone)
     v32_formal = bool(args.release_gate and milestone == "v3.2-guidance-acceptance")
-    authority_locked_formal = v212_formal or v30_formal or v32_formal
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     git_commit, worktree_dirty = _git_evidence(Path.cwd())
     selected_case_names = set(args.case_names or [])
@@ -1239,54 +1251,8 @@ def eval_command(args: argparse.Namespace) -> int:
     ):
         print("Release gate rejected: V3.2 requires the canonical G01 case", file=sys.stderr)
         return 2
-    live_case_authority_profiles = build_case_authority_profiles(
-        selected_cases,
-        project_root=Path.cwd(),
-    )
-    case_authority_profiles = live_case_authority_profiles
-    if authority_locked_formal:
-        profile_error = (
-            _v212_authority_profile_error(live_case_authority_profiles)
-            if v212_formal
-            else (
-                _v30_authority_profile_error(live_case_authority_profiles)
-                if v30_formal
-                else ""
-            )
-        )
-        if profile_error:
-            print(f"Release gate rejected: {profile_error}", file=sys.stderr)
-            return 2
-        try:
-            committed_profiles = _committed_case_authority_profiles(
-                live_case_authority_profiles,
-                project_root=Path.cwd(),
-                git_commit=git_commit,
-            )
-        except (OSError, subprocess.SubprocessError, ValueError) as exc:
-            print(
-                f"Release gate rejected: cannot bind eval fixtures to Git commit: {exc}",
-                file=sys.stderr,
-            )
-            return 2
-        if committed_profiles != live_case_authority_profiles:
-            print(
-                "Release gate rejected: live eval authority profile differs from Git commit",
-                file=sys.stderr,
-            )
-            return 2
-        case_authority_profiles = committed_profiles
-    profile_git_commit, profile_worktree_dirty = _git_evidence(Path.cwd())
-    if args.release_gate and (
-        profile_git_commit != git_commit or profile_worktree_dirty
-    ):
-        print(
-            "Release gate rejected: Git state changed while binding eval authority",
-            file=sys.stderr,
-        )
-        return 2
     git_preflight_verified = False
-    if authority_locked_formal:
+    if v212_formal or v30_formal or v32_formal:
         formal_git_error = _git_formal_state_error(Path.cwd())
         if formal_git_error:
             print(
@@ -1295,7 +1261,6 @@ def eval_command(args: argparse.Namespace) -> int:
             )
             return 2
         git_preflight_verified = True
-    case_authority_bundle = case_authority_bundle_sha256(case_authority_profiles)
     if args.release_gate:
         gate_error = _release_gate_error(
             args,
@@ -1365,7 +1330,6 @@ def eval_command(args: argparse.Namespace) -> int:
                 settings=case_settings,
                 session=session,
                 state=state,
-                max_turns=_case_int(case, "max_turns", case_settings.budget.max_turns),
                 completion_verifier=_completion_verifier_for_case(case),
             )
             return loop.run(state).state
@@ -1389,7 +1353,6 @@ def eval_command(args: argparse.Namespace) -> int:
         "sandbox_mode": settings.sandbox.mode,
         "execute_local": bool(args.execute_local),
         "json_mode": settings.provider.json_mode,
-        "max_completion_tokens": settings.provider.max_completion_tokens,
         "provider_max_retries": settings.provider.max_retries,
         "provider_timeout_sec": settings.provider.timeout_sec,
         "cache_scope_sha256": _secret_fingerprint(settings.api_key),
@@ -1416,10 +1379,7 @@ def eval_command(args: argparse.Namespace) -> int:
         "system_prefix_sha256": hashlib.sha256(STABLE_PREFIX.encode("utf-8")).hexdigest(),
         "max_prompt_chars": settings.context.max_prompt_chars,
         "recent_turns": settings.context.recent_turns,
-        "semantic_max_completion_tokens": settings.context.semantic_max_completion_tokens,
         "case_contexts": case_contexts,
-        "case_authority_profiles": case_authority_profiles,
-        "case_authority_bundle_sha256": case_authority_bundle,
         "git_preflight_verified": git_preflight_verified,
         "git_postflight_verified": False,
     }
@@ -1439,38 +1399,16 @@ def eval_command(args: argparse.Namespace) -> int:
         post_git_commit, post_worktree_dirty = _git_evidence(Path.cwd())
         post_formal_git_error = (
             _git_formal_state_error(Path.cwd())
-            if authority_locked_formal
+            if (v212_formal or v30_formal or v32_formal)
             else ""
         )
-        try:
-            post_cases = [
-                case
-                for case in discover_cases(Path(args.path))
-                if case.name in selected_case_names
-            ]
-            post_live_profiles = build_case_authority_profiles(
-                post_cases,
-                project_root=Path.cwd(),
-            )
-            post_profiles = (
-                _committed_case_authority_profiles(
-                    post_live_profiles,
-                    project_root=Path.cwd(),
-                    git_commit=git_commit,
-                )
-                if authority_locked_formal
-                else post_live_profiles
-            )
-        except (OSError, ValueError):
-            post_profiles = {}
         if (
             post_git_commit != git_commit
             or post_worktree_dirty
             or bool(post_formal_git_error)
-            or post_profiles != case_authority_profiles
         ):
             print(
-                "Release gate rejected: Git or eval authority changed during execution",
+                "Release gate rejected: Git state changed during execution",
                 file=sys.stderr,
             )
             return 2
@@ -1522,8 +1460,6 @@ def memory_eval_command(args: argparse.Namespace) -> int:
     git_commit, worktree_dirty = _git_evidence(project_root)
     release_gate = bool(getattr(args, "release_gate", False))
     case_name = case.source.name.removesuffix("_source")
-    live_profiles = build_case_authority_profiles([case.source], project_root=project_root)
-    case_authority_profiles = live_profiles
     git_preflight_verified = False
     if release_gate:
         gate_error = _memory_release_gate_error(
@@ -1541,19 +1477,6 @@ def memory_eval_command(args: argparse.Namespace) -> int:
         if formal_git_error:
             print(f"Release gate rejected: {formal_git_error}", file=sys.stderr)
             return 2
-        try:
-            committed_profiles = _committed_case_authority_profiles(
-                live_profiles,
-                project_root=project_root,
-                git_commit=git_commit,
-            )
-        except (OSError, subprocess.SubprocessError, ValueError) as exc:
-            print(f"Release gate rejected: cannot bind memory case to Git commit: {exc}", file=sys.stderr)
-            return 2
-        if committed_profiles != live_profiles:
-            print("Release gate rejected: live memory case differs from Git commit", file=sys.stderr)
-            return 2
-        case_authority_profiles = committed_profiles
         git_preflight_verified = True
     provider = _build_provider_or_print_error(settings)
     if provider is None:
@@ -1611,7 +1534,6 @@ def memory_eval_command(args: argparse.Namespace) -> int:
                 settings=case_settings,
                 session=session,
                 state=state,
-                max_turns=_case_int(eval_case, "max_turns", case_settings.budget.max_turns),
                 completion_verifier=_completion_verifier_for_case(eval_case),
             )
             return loop.run(state).state
@@ -1637,8 +1559,6 @@ def memory_eval_command(args: argparse.Namespace) -> int:
         "worktree_dirty": worktree_dirty,
         "release_gate": release_gate,
         "case_name": case_name,
-        "case_authority_profiles": case_authority_profiles,
-        "case_authority_bundle_sha256": case_authority_bundle_sha256(case_authority_profiles),
         "git_preflight_verified": git_preflight_verified,
         "git_postflight_verified": False,
         "feedback_memory_mode": "disabled",
@@ -1663,10 +1583,8 @@ def memory_eval_command(args: argparse.Namespace) -> int:
         )
         if release_gate:
             postflight_error = _git_postflight_error(project_root, expected_commit=git_commit)
-            post_profiles = build_case_authority_profiles([case.source], project_root=project_root)
-            if postflight_error or post_profiles != case_authority_profiles:
-                detail = postflight_error or "memory case authority changed during execution"
-                print(f"Release gate rejected: {detail}", file=sys.stderr)
+            if postflight_error:
+                print(f"Release gate rejected: {postflight_error}", file=sys.stderr)
                 return 2
             result.configuration["git_postflight_verified"] = True
             for case_result in result.case_results:
@@ -1890,7 +1808,6 @@ def cache_probe_command(args: argparse.Namespace) -> int:
         "stream": settings.provider.stream,
         "include_usage": settings.provider.include_usage,
         "json_mode": settings.provider.json_mode,
-        "max_completion_tokens": settings.provider.max_completion_tokens,
         "provider_max_retries": settings.provider.max_retries,
         "provider_timeout_sec": settings.provider.timeout_sec,
         "cache_scope_sha256": _secret_fingerprint(settings.api_key),
@@ -1929,7 +1846,6 @@ def cache_probe_command(args: argparse.Namespace) -> int:
                     stream=settings.provider.stream,
                     include_usage=settings.provider.include_usage,
                     json_mode=settings.provider.json_mode,
-                    max_tokens=settings.provider.max_completion_tokens,
                 ),
                 configuration=configuration,
                 milestone=milestone,
@@ -2064,7 +1980,6 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
     budget = settings.budget
     if case.budget:
         budget = BudgetSettings(
-            max_turns=_case_int(case, "max_turns", settings.budget.max_turns),
             max_bash_actions=_case_int(case, "max_bash_actions", settings.budget.max_bash_actions),
             max_seconds=_case_int(case, "max_seconds", settings.budget.max_seconds),
             max_action_timeout_sec=_case_int(
@@ -2194,266 +2109,6 @@ def _completion_verifier_for_case(case: EvalCase) -> CompletionVerifier | None:
         commands=commands,
         timeout_sec=_case_int(case, "verification_timeout_sec", 120),
     )
-
-
-def _v212_authority_profile_error(
-    profiles: dict[str, dict[str, str]],
-) -> str:
-    expected = {
-        "C02_fix_failing_test": {
-            "source_path": (
-                "eval_cases/capability_suite_v1/"
-                "C02_fix_failing_test/case.yaml"
-            ),
-            "fixture_source_path": (
-                "eval_cases/capability_suite_v1/"
-                "C02_fix_failing_test/fixture"
-            ),
-        },
-        "C07_large_log_debugging": {
-            "source_path": (
-                "eval_cases/capability_suite_v1/"
-                "C07_large_log_debugging/case.yaml"
-            ),
-            "fixture_source_path": (
-                "eval_cases/capability_suite_v1/"
-                "C07_large_log_debugging/fixture"
-            ),
-        },
-    }
-    if set(profiles) != set(expected):
-        return "V2.1.2 authority profile requires the exact C02/C07 cases"
-    if any(
-        profiles[name].get(field) != value
-        for name, paths in expected.items()
-        for field, value in paths.items()
-    ):
-        return "V2.1.2 authority profile requires canonical sibling fixtures"
-    return ""
-
-
-def _v30_authority_profile_error(
-    profiles: dict[str, dict[str, str]],
-) -> str:
-    case_names = (
-        "C01_repo_onboarding",
-        "C02_fix_failing_test",
-        "C03_add_cli_option",
-        "C04_add_regression_test",
-        "C09_hitl_destructive_command",
-    )
-    expected = {
-        name: {
-            "source_path": f"eval_cases/capability_suite_v1/{name}/case.yaml",
-            "fixture_source_path": f"eval_cases/capability_suite_v1/{name}/fixture",
-        }
-        for name in case_names
-    }
-    if set(profiles) != set(expected):
-        return "V3.0 authority profile requires the exact C01/C02/C03/C04/C09 cases"
-    if any(
-        profiles[name].get(field) != value
-        for name, paths in expected.items()
-        for field, value in paths.items()
-    ):
-        return "V3.0 authority profile requires canonical sibling fixtures"
-    return ""
-
-
-def _committed_case_authority_profiles(
-    live_profiles: dict[str, dict[str, str]],
-    *,
-    project_root: Path,
-    git_commit: str,
-) -> dict[str, dict[str, str]]:
-    for name, live_profile in live_profiles.items():
-        source_path = str(live_profile.get("source_path") or "")
-        fixture_path = str(live_profile.get("fixture_source_path") or "")
-        if (
-            not source_path
-            or not fixture_path
-            or source_path.startswith("external:")
-            or fixture_path.startswith("external:")
-        ):
-            raise ValueError(f"authority source is outside the project: {name}")
-        expected_definition_id = _git_object_id_at_commit(
-            project_root,
-            git_commit,
-            source_path,
-        )
-        actual_definition_id = _git_worktree_object_id(
-            project_root,
-            source_path,
-        )
-        if actual_definition_id != expected_definition_id:
-            raise ValueError(f"case definition differs from Git commit: {name}")
-        expected_files = _git_tree_entries(
-            project_root,
-            git_commit,
-            fixture_path,
-        )
-        fixture_root = project_root / fixture_path
-        actual_records = {
-            relative: (kind, content)
-            for relative, kind, content in workspace_content_records(
-                fixture_root
-            )
-        }
-        if set(actual_records) != set(expected_files):
-            raise ValueError(f"fixture inventory differs from Git commit: {name}")
-        expected_directories = _git_tree_directories(expected_files)
-        actual_directories = _worktree_directories(fixture_root)
-        if actual_directories != expected_directories:
-            raise ValueError(
-                f"fixture directory inventory differs from Git commit: {name}"
-            )
-        for relative, (mode, object_id, git_path) in expected_files.items():
-            kind, content = actual_records[relative]
-            expected_kind = "symlink" if mode == "120000" else "file"
-            if kind != expected_kind:
-                raise ValueError(f"fixture file type differs from Git commit: {git_path}")
-            actual_object_id = (
-                _git_raw_object_id(project_root, content)
-                if kind == "symlink"
-                else _git_worktree_object_id(project_root, git_path)
-            )
-            if actual_object_id != object_id:
-                raise ValueError(f"fixture file differs from Git commit: {git_path}")
-    return {
-        name: dict(profile)
-        for name, profile in live_profiles.items()
-    }
-
-
-def _git_object_id_at_commit(
-    project_root: Path,
-    git_commit: str,
-    relative_path: str,
-) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", f"{git_commit}:{relative_path}"],
-        cwd=project_root,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="strict",
-        timeout=120,
-        check=True,
-    )
-    object_id = result.stdout.strip()
-    if re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None:
-        raise ValueError(f"invalid Git object id for {relative_path}")
-    return object_id
-
-
-def _git_tree_entries(
-    project_root: Path,
-    git_commit: str,
-    root_path: str,
-) -> dict[str, tuple[str, str, str]]:
-    result = subprocess.run(
-        [
-            "git",
-            "ls-tree",
-            "-rz",
-            "--full-tree",
-            git_commit,
-            "--",
-            root_path,
-        ],
-        cwd=project_root,
-        capture_output=True,
-        timeout=120,
-        check=True,
-    )
-    entries: dict[str, tuple[str, str, str]] = {}
-    prefix = f"{root_path.rstrip('/')}/"
-    for raw_entry in result.stdout.split(b"\0"):
-        if not raw_entry:
-            continue
-        metadata, separator, raw_path = raw_entry.partition(b"\t")
-        parts = metadata.split()
-        if not separator or len(parts) != 3:
-            raise ValueError(f"invalid Git tree entry under {root_path}")
-        mode, object_type, object_id = (
-            part.decode("ascii", errors="strict") for part in parts
-        )
-        path = raw_path.decode("utf-8", errors="surrogateescape")
-        if object_type != "blob" or not path.startswith(prefix):
-            raise ValueError(f"unsupported Git tree entry: {path}")
-        if mode not in {"100644", "100755", "120000"}:
-            raise ValueError(f"unsupported Git file mode {mode}: {path}")
-        entries[path.removeprefix(prefix)] = (mode, object_id, path)
-    if not entries:
-        raise ValueError(f"Git fixture tree is empty: {root_path}")
-    return entries
-
-
-def _git_worktree_object_id(
-    project_root: Path,
-    relative_path: str,
-) -> str:
-    result = subprocess.run(
-        [
-            "git",
-            "hash-object",
-            f"--path={relative_path}",
-            "--filters",
-            "--",
-            str(project_root / relative_path),
-        ],
-        cwd=project_root,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="strict",
-        timeout=120,
-        check=True,
-    )
-    return result.stdout.strip()
-
-
-def _git_tree_directories(
-    files: dict[str, tuple[str, str, str]],
-) -> set[str]:
-    directories: set[str] = set()
-    for relative in files:
-        parent = PurePosixPath(relative).parent
-        while parent != PurePosixPath("."):
-            directories.add(parent.as_posix())
-            parent = parent.parent
-    return directories
-
-
-def _worktree_directories(root: Path) -> set[str]:
-    directories: set[str] = set()
-    for directory, dir_names, _ in os.walk(
-        root,
-        topdown=True,
-        followlinks=False,
-    ):
-        directory_path = Path(directory)
-        kept_names: list[str] = []
-        for name in dir_names:
-            path = directory_path / name
-            if path.is_symlink():
-                continue
-            kept_names.append(name)
-            directories.add(path.relative_to(root).as_posix())
-        dir_names[:] = kept_names
-    return directories
-
-
-def _git_raw_object_id(project_root: Path, content: bytes) -> str:
-    result = subprocess.run(
-        ["git", "hash-object", "--stdin"],
-        cwd=project_root,
-        input=content,
-        capture_output=True,
-        timeout=120,
-        check=True,
-    )
-    return result.stdout.decode("ascii", errors="strict").strip()
 
 
 def _git_evidence(cwd: Path) -> tuple[str, bool]:

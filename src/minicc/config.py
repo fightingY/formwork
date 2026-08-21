@@ -21,7 +21,6 @@ class ProviderSettings:
     include_usage: bool = True
     json_mode: bool = True
     timeout_sec: float = 120.0
-    max_completion_tokens: int = 2_048
     max_retries: int = 2
 
 
@@ -37,7 +36,6 @@ class SandboxSettings:
 
 @dataclass(frozen=True)
 class BudgetSettings:
-    max_turns: int = 12
     max_bash_actions: int = 30
     max_seconds: int = 900
     max_action_timeout_sec: int = 120
@@ -52,7 +50,6 @@ class ContextSettings:
     field_preview_chars: int = 4_000
     compaction_strategy: CompactionStrategy = "deterministic"
     semantic_max_input_chars: int = 60_000
-    semantic_max_completion_tokens: int = 2_048
     retention_markers: tuple[str, ...] = ()
     prompt_layout: PromptLayout = "rebuild"
 
@@ -150,11 +147,6 @@ def load_settings() -> Settings:
                 "json_mode",
                 True,
             ),
-            max_completion_tokens=_int_config(
-                provider_config,
-                "max_completion_tokens",
-                2_048,
-            ),
             max_retries=_int_config(provider_config, "max_retries", 2),
             timeout_sec=_float_env_or_config(
                 "MINICC_PROVIDER_TIMEOUT_SEC",
@@ -183,7 +175,6 @@ def load_settings() -> Settings:
         include_usage=_bool_env_or_config("MINICC_CHILD_INCLUDE_USAGE", child_config, "include_usage", provider.include_usage),
         json_mode=_bool_env_or_config("MINICC_CHILD_JSON_MODE", child_config, "json_mode", provider.json_mode),
         timeout_sec=_float_env_or_config("MINICC_CHILD_PROVIDER_TIMEOUT_SEC", child_config, "timeout_sec", provider.timeout_sec),
-        max_completion_tokens=_int_config(child_config, "max_completion_tokens", provider.max_completion_tokens),
         max_retries=_int_config(child_config, "max_retries", provider.max_retries),
     )
 
@@ -198,7 +189,6 @@ def load_settings() -> Settings:
             network=_str_config(sandbox_config, "network", "none"),
         ),
         budget=BudgetSettings(
-            max_turns=_int_config(budget_config, "max_turns", 12),
             max_bash_actions=_int_config(budget_config, "max_bash_actions", 30),
             max_seconds=_int_config(budget_config, "max_seconds", 900),
             max_action_timeout_sec=_int_config(budget_config, "max_action_timeout_sec", 120),
@@ -211,7 +201,6 @@ def load_settings() -> Settings:
             field_preview_chars=_int_config(context_config, "field_preview_chars", 4_000),
             compaction_strategy=_compaction_strategy(context_config),
             semantic_max_input_chars=_int_config(context_config, "semantic_max_input_chars", 60_000),
-            semantic_max_completion_tokens=_int_config(context_config, "semantic_max_completion_tokens", 2_048),
             retention_markers=_str_tuple_config(context_config, "retention_markers"),
             prompt_layout=_prompt_layout(context_config),
         ),

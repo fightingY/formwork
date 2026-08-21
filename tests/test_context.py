@@ -29,7 +29,6 @@ def test_stable_prefix_requires_safe_action_economy_and_final_verification() -> 
 
 def test_rebuild_layout_keeps_v21_message_text_and_order() -> None:
     state = RunState.start("Finish patch")
-    state.metrics["max_turns"] = 10
     state.metrics["turns"] = 6
     state.metrics["repeated_file_reads"] = 1
     state.constraints = ["Only edit src/app.py"]
@@ -44,8 +43,6 @@ def test_rebuild_layout_keeps_v21_message_text_and_order() -> None:
     expected_context = [
         "Goal: Finish patch",
         "Run status: running",
-        "Budget status: 4 model turn(s) remain. Converge now: "
-        "finish the smallest correct change, verify once, and avoid repeated inspection.",
         "I/O repetition guard: the same file/search action has already been repeated "
         "(1 file read(s), 0 search(es)). "
         "Do not repeat it again; make the smallest required patch or run the authoritative verification now.",
@@ -242,10 +239,8 @@ def test_cache_namespace_is_first_dynamic_content_in_both_layouts() -> None:
     assert append[1]["content"].startswith(expected)
 
 
-def test_append_snapshot_freezes_budget_and_repetition_guidance() -> None:
+def test_append_snapshot_freezes_repetition_guidance() -> None:
     state = RunState.start("Finish the pending patch")
-    state.metrics["max_turns"] = 10
-    state.metrics["turns"] = 6
     state.metrics["repeated_file_reads"] = 2
     state.metrics["repeated_searches"] = 1
     snapshot = state_snapshot_text(state)
@@ -253,7 +248,6 @@ def test_append_snapshot_freezes_budget_and_repetition_guidance() -> None:
 
     messages = ContextBuilder(ContextConfig(prompt_layout="append")).build_messages(state, trajectory)
 
-    assert "Converge now" in snapshot
     assert "I/O repetition guard" in snapshot
     assert "2 file read(s), 1 search(es)" in snapshot
     assert snapshot in messages[-1]["content"]
@@ -512,24 +506,6 @@ def test_context_builder_injects_repository_profile_and_project_guide() -> None:
     assert "<MINICC.md>" in content
     assert "Use the offline Maven test command." in content
     assert "</MINICC.md>" in content
-
-
-def test_context_builder_adds_budget_pressure_after_thresholds() -> None:
-    builder = ContextBuilder()
-    state = RunState.start("Finish task")
-    state.metrics["max_turns"] = 10
-    state.metrics["turns"] = 6
-
-    at_sixty = builder.build_messages(state, [])[1]["content"]
-    state.metrics["turns"] = 8
-    at_eighty = builder.build_messages(state, [])[1]["content"]
-    state.metrics["turns"] = 9
-    final_slot = builder.build_messages(state, [])[1]["content"]
-
-    assert "Converge now" in at_sixty
-    assert "Stop exploring" in at_eighty
-    assert "final response slot" in final_slot
-    assert "do not run another bash command" in final_slot
 
 
 def test_context_builder_adds_io_repetition_guard() -> None:

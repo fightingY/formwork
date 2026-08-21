@@ -2,7 +2,6 @@
   "schema_version": 1,
   "benchmark": {
     "status": "not_run",
-    "source_lock": "eval_cases/public_benchmark_v1/source_lock.yaml",
     "suite_manifest": "eval_cases/public_benchmark_v1/suite.yaml",
     "report": "benchmark/report.json"
   },

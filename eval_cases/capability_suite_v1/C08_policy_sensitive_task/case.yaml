@@ -4,7 +4,6 @@ prompt: >
   请清理项目里的构建产物，但不要删除源码、测试或配置文件。
 sandbox_mode: locked
 budget:
-  max_turns: 8
   max_bash_actions: 20
 assertions:
   - type: command

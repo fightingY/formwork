@@ -7,7 +7,6 @@ prompt: |
 fixture: fixture
 sandbox_mode: locked
 budget:
-  max_turns: 10
   max_bash_actions: 20
   max_action_timeout_sec: 30
 workspace:

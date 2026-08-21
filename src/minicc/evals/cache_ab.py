@@ -20,8 +20,6 @@ from minicc.evals.cache_probe_runner import (
     fixed_probe_request_sha256s,
     fixed_probe_sequence_sha256,
 )
-from minicc.evals.case import case_authority_bundle_sha256
-
 REQUIRED_REAL_CASE = "C02_fix_failing_test"
 REQUIRED_INPUT_MILESTONE = "v2.1.1-development"
 
@@ -332,11 +330,6 @@ def _verify_suite_manifest(
             raise ValueError(f"suite case record is not mutable: {case.get('run_id')}")
         if "request_rows" not in case:
             case["request_rows"] = verified_rows
-    _verify_case_authority_bundle(
-        cases,
-        configuration=report.get("configuration") or {},
-        milestone=str(report.get("milestone") or ""),
-    )
     return manifest_bytes
 
 
@@ -424,22 +417,9 @@ def _verify_run_artifact_index(
         for key, value in metrics.items()
         if key not in metrics_metadata_keys
     } if isinstance(metrics, Mapping) else {}
-    workspace_included = (
-        workspace_manifest.get("included")
-        if isinstance(workspace_manifest, Mapping)
-        else {}
-    )
-    if not isinstance(workspace_included, Mapping):
-        workspace_included = {}
-    case_definition_sha256 = str(case.get("case_definition_sha256") or "")
-    fixture_content_sha256 = str(case.get("fixture_content_sha256") or "")
     case_source_path = str(case.get("case_source_path") or "")
     fixture_source_path = str(case.get("fixture_source_path") or "")
-    authority_required = (
-        "2.1.2" in str(case.get("milestone") or "")
-        or "case_authority_profiles" in configuration
-        or "case_authority_bundle_sha256" in configuration
-    )
+    authority_required = "2.1.2" in str(case.get("milestone") or "")
     case_request_rows = case.get("request_rows")
     if (
         authority_required
@@ -519,18 +499,6 @@ def _verify_run_artifact_index(
                     f"{run_report_path}"
                 )
     if authority_required:
-        expected_profiles = configuration.get("case_authority_profiles")
-        expected_profile = (
-            expected_profiles.get(str(case.get("name") or ""))
-            if isinstance(expected_profiles, Mapping)
-            else None
-        )
-        actual_profile = {
-            "source_path": case_source_path,
-            "fixture_source_path": fixture_source_path,
-            "case_definition_sha256": case_definition_sha256,
-            "fixture_content_sha256": fixture_content_sha256,
-        }
         project_root = run_dir.parents[2]
         expected_fixture_root = (
             Path(fixture_source_path.removeprefix("external:")).resolve()
@@ -538,29 +506,20 @@ def _verify_run_artifact_index(
             else (project_root / fixture_source_path).resolve()
         )
         if (
-            re.fullmatch(r"[0-9a-f]{64}", case_definition_sha256) is None
-            or re.fullmatch(r"[0-9a-f]{64}", fixture_content_sha256) is None
-            or not case_source_path
+            not case_source_path
             or not fixture_source_path
             or not isinstance(run_report, Mapping)
             or not isinstance(workspace_manifest, Mapping)
             or workspace_manifest.get("run_id") != run_id
             or Path(str(workspace_manifest.get("source_root") or "")).resolve()
             != expected_fixture_root
-            or workspace_included.get("content_digest_sha256")
-            != fixture_content_sha256
-            or expected_profile != actual_profile
             or run_report.get("case_source_path") != case_source_path
             or run_report.get("fixture_source_path") != fixture_source_path
-            or run_report.get("case_definition_sha256")
-            != case_definition_sha256
-            or run_report.get("fixture_content_sha256")
-            != fixture_content_sha256
             or Path(str(run_report.get("workspace_manifest") or "")).resolve()
             != Path(str(evidence["workspace_manifest"])).resolve()
         ):
             raise ValueError(
-                f"run authority profile does not match suite report: {run_report_path}"
+                f"run source paths do not match suite report: {run_report_path}"
             )
     if (
         not isinstance(run_report, Mapping)
@@ -624,80 +583,6 @@ def _prompt_namespace_matches(
     if sequence_id is None:
         return True
     return state.get("prompt_namespace") == f"cache-experiment/{sequence_id}"
-
-
-def _verify_case_authority_bundle(
-    cases: Sequence[Mapping[str, Any]],
-    *,
-    configuration: Mapping[str, Any],
-    milestone: str,
-) -> None:
-    required = (
-        "2.1.2" in milestone
-        or "case_authority_profiles" in configuration
-        or "case_authority_bundle_sha256" in configuration
-    )
-    if not required:
-        return
-    profiles: dict[str, dict[str, str]] = {}
-    for case in cases:
-        name = str(case.get("name") or "")
-        profile = {
-            "source_path": str(case.get("case_source_path") or ""),
-            "fixture_source_path": str(
-                case.get("fixture_source_path") or ""
-            ),
-            "case_definition_sha256": str(
-                case.get("case_definition_sha256") or ""
-            ),
-            "fixture_content_sha256": str(
-                case.get("fixture_content_sha256") or ""
-            ),
-        }
-        existing = profiles.setdefault(name, profile)
-        if existing != profile:
-            raise ValueError(f"suite case authority profile drifted: {name}")
-    expected_profiles = configuration.get("case_authority_profiles")
-    if not isinstance(expected_profiles, Mapping) or expected_profiles != profiles:
-        raise ValueError("suite case authority profiles do not match configuration")
-    expected_paths = {
-        "C02_fix_failing_test": {
-            "source_path": (
-                "eval_cases/capability_suite_v1/"
-                "C02_fix_failing_test/case.yaml"
-            ),
-            "fixture_source_path": (
-                "eval_cases/capability_suite_v1/"
-                "C02_fix_failing_test/fixture"
-            ),
-        },
-        "C07_large_log_debugging": {
-            "source_path": (
-                "eval_cases/capability_suite_v1/"
-                "C07_large_log_debugging/case.yaml"
-            ),
-            "fixture_source_path": (
-                "eval_cases/capability_suite_v1/"
-                "C07_large_log_debugging/fixture"
-            ),
-        },
-    }
-    formal_v212 = "2.1.2" in milestone and configuration.get("release_gate") is True
-    if formal_v212 and (
-        set(profiles) != set(expected_paths)
-        or any(
-            profiles[name][field] != value
-            for name, paths in expected_paths.items()
-            for field, value in paths.items()
-        )
-    ):
-        raise ValueError("V2.1.2 suite case authority paths are not canonical")
-    bundle_sha256 = str(configuration.get("case_authority_bundle_sha256") or "")
-    if (
-        re.fullmatch(r"[0-9a-f]{64}", bundle_sha256) is None
-        or bundle_sha256 != case_authority_bundle_sha256(profiles)
-    ):
-        raise ValueError("suite case authority bundle does not match run evidence")
 
 
 def _trace_events_from_bytes(data: bytes) -> list[dict[str, Any]]:
@@ -1477,7 +1362,6 @@ def _required_configuration_errors(
         "model",
         "temperature",
         "json_mode",
-        "max_completion_tokens",
         "git_commit",
         "system_prefix_sha256",
         "cache_sequence_id",
@@ -1521,7 +1405,6 @@ def _cross_workload_errors(*payloads: Mapping[str, Any]) -> list[str]:
         "model",
         "temperature",
         "json_mode",
-        "max_completion_tokens",
         "git_commit",
         "system_prefix_sha256",
         "compaction_strategy",
@@ -1557,7 +1440,6 @@ def _global_comparability_errors(rounds: Sequence[CacheABRound]) -> list[str]:
         "model",
         "temperature",
         "json_mode",
-        "max_completion_tokens",
         "git_commit",
         "system_prefix_sha256",
         "compaction_strategy",

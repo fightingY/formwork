@@ -3,7 +3,6 @@ provider:
   base_url: https://api.siliconflow.cn/v1
   model: deepseek-ai/DeepSeek-V4-Pro
   json_mode: true
-  max_completion_tokens: 2048
   timeout_sec: 300
   max_retries: 2
 
@@ -35,7 +34,6 @@ sandbox:
   network: none
 
 budget:
-  max_turns: 12
   max_bash_actions: 30
   max_seconds: 900
   max_action_timeout_sec: 120
@@ -48,7 +46,6 @@ context:
   field_preview_chars: 4000
   compaction_strategy: deterministic
   semantic_max_input_chars: 60000
-  semantic_max_completion_tokens: 2048
   # Keep the full append-only history until the prompt budget triggers one compaction.
   prompt_layout: append_until_compaction
 

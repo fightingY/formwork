@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import re
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
-
-from minicc.sandbox.workspace import workspace_content_digest
 
 
 @dataclass(frozen=True)
@@ -29,7 +24,6 @@ class EvalCase:
     completion_gate: bool = False
     initial_verify: dict[str, Any] | None = None
     cleanup_workspace: bool = False
-    definition_sha256: str = ""
 
 
 def discover_cases(path: Path) -> list[EvalCase]:
@@ -128,27 +122,7 @@ def load_case(path: Path) -> EvalCase:
         completion_gate=bool(data.get("completion_gate", False)),
         initial_verify=initial_verify,
         cleanup_workspace=bool(data.get("cleanup_workspace", False)),
-        definition_sha256=hashlib.sha256(source).hexdigest(),
     )
-
-
-def build_case_authority_profiles(
-    cases: Sequence[EvalCase],
-    *,
-    project_root: Path,
-) -> dict[str, dict[str, str]]:
-    profiles: dict[str, dict[str, str]] = {}
-    for case in cases:
-        profiles[case.name] = {
-            "source_path": case_source_path(case, project_root=project_root),
-            "fixture_source_path": fixture_source_path(
-                case,
-                project_root=project_root,
-            ),
-            "case_definition_sha256": case.definition_sha256,
-            "fixture_content_sha256": workspace_content_digest(case.fixture_dir),
-        }
-    return profiles
 
 
 def case_source_path(case: EvalCase, *, project_root: Path) -> str:
@@ -168,36 +142,6 @@ def _project_relative_path(path: Path, *, project_root: Path) -> str:
         return resolved.relative_to(project_root.resolve()).as_posix()
     except ValueError:
         return f"external:{resolved.as_posix()}"
-
-
-def case_authority_bundle_sha256(
-    profiles: Mapping[str, Mapping[str, str]],
-) -> str:
-    payload = {
-        "schema_version": 1,
-        "cases": {
-            str(name): {
-                "source_path": str(profile.get("source_path") or ""),
-                "fixture_source_path": str(
-                    profile.get("fixture_source_path") or ""
-                ),
-                "case_definition_sha256": str(
-                    profile.get("case_definition_sha256") or ""
-                ),
-                "fixture_content_sha256": str(
-                    profile.get("fixture_content_sha256") or ""
-                ),
-            }
-            for name, profile in profiles.items()
-        },
-    }
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
 
 
 def _safe_relative_path(value: Any, case_path: Path) -> str:

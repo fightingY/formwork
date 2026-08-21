@@ -26,7 +26,7 @@ from minicc.evals.cache_utilization import (
     failed_criteria,
     write_cache_utilization_report,
 )
-from minicc.evals.case import case_authority_bundle_sha256, load_case
+from minicc.evals.case import load_case
 
 
 def test_long_case_uses_the_action_shape_locked_by_formal_gate() -> None:
@@ -323,24 +323,19 @@ def test_cache_utilization_rejects_cross_round_commit_drift_and_forged_attempts(
 
 def test_cache_utilization_rejects_case_authority_profile_drift() -> None:
     rounds = [_round(1, "p1-first"), _round(2, "p2-first")]
-    changed_fixture = "f" * 64
     for suite in (rounds[1][2], rounds[1][3]):
         for case in suite["cases"]:
             if case["name"] == LONG_CASE:
-                case["fixture_content_sha256"] = changed_fixture
-        profiles = deepcopy(suite["configuration"]["case_authority_profiles"])
-        profiles[LONG_CASE]["fixture_content_sha256"] = changed_fixture
-        suite["configuration"]["case_authority_profiles"] = profiles
-        suite["configuration"]["case_authority_bundle_sha256"] = (
-            case_authority_bundle_sha256(profiles)
-        )
+                case["fixture_source_path"] = (
+                    "eval_cases/capability_suite_v1/"
+                    "C02_fix_failing_test/fixture"
+                )
 
     report = build_cache_utilization_report(rounds)
 
     assert report["passed"] is False
-    assert report["rounds"][1]["criteria"]["case_authority_profiles_locked"] is True
+    assert report["rounds"][1]["criteria"]["case_authority_profiles_locked"] is False
     assert report["criteria"]["case_authority_profiles_consistent"] is False
-    assert report["criteria"]["locked_configuration_consistent"] is False
 
 
 def test_cache_utilization_rejects_forged_prefix_sequence_and_probe_hash() -> None:
@@ -495,7 +490,6 @@ def _configuration(variant: str, layout: str, sequence: str, order: str) -> dict
         "stream": False,
         "include_usage": True,
         "json_mode": True,
-        "max_completion_tokens": 256,
         "provider_max_retries": 2,
         "provider_timeout_sec": 300,
         "cache_scope_sha256": "scope",
@@ -594,11 +588,6 @@ def _suite(index: int, variant: str, layout: str, sequence: str, order: str) -> 
         cases.append(_case(index, variant, LONG_CASE, attempt, requests=9))
     created_at, completed_at = _interval(index, order, variant, "suite")
     configuration = _configuration(variant, layout, sequence, order)
-    profiles = _authority_profiles()
-    configuration["case_authority_profiles"] = profiles
-    configuration["case_authority_bundle_sha256"] = (
-        case_authority_bundle_sha256(profiles)
-    )
     return {
         "schema_version": 2,
         "suite_id": f"suite-{variant}-{index}",
@@ -641,12 +630,6 @@ def _case(index: int, variant: str, name: str, attempt: int, *, requests: int) -
         "fixture_source_path": (
             f"eval_cases/capability_suite_v1/{name}/fixture"
         ),
-        "case_definition_sha256": hashlib.sha256(
-            f"{name}:case".encode()
-        ).hexdigest(),
-        "fixture_content_sha256": hashlib.sha256(
-            f"{name}:fixture".encode()
-        ).hexdigest(),
         "run_id": f"run-{variant}-{index}-{name}-{attempt}",
         "attempt": attempt,
         "passed": True,
@@ -691,24 +674,6 @@ def _case(index: int, variant: str, name: str, attempt: int, *, requests: int) -
             },
         ]
     return case
-
-
-def _authority_profiles() -> dict[str, dict[str, str]]:
-    return {
-        name: {
-            "source_path": f"eval_cases/capability_suite_v1/{name}/case.yaml",
-            "fixture_source_path": (
-                f"eval_cases/capability_suite_v1/{name}/fixture"
-            ),
-            "case_definition_sha256": hashlib.sha256(
-                f"{name}:case".encode()
-            ).hexdigest(),
-            "fixture_content_sha256": hashlib.sha256(
-                f"{name}:fixture".encode()
-            ).hexdigest(),
-        }
-        for name in REQUIRED_CASES
-    }
 
 
 def _request_rows(

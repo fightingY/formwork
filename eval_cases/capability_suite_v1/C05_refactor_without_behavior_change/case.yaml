@@ -5,7 +5,6 @@ prompt: >
   请确保测试通过，并避免扩大改动范围。
 sandbox_mode: locked
 budget:
-  max_turns: 10
   max_bash_actions: 25
 assertions:
   - type: command

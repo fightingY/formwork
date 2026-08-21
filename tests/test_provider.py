@@ -6,6 +6,7 @@ from minicc.core.provider import (
     OpenAICompatibleProvider,
     ProviderError,
     extract_chat_text,
+    extract_finish_reason,
     parse_model_usage,
 )
 
@@ -318,3 +319,52 @@ def test_provider_discards_broken_persistent_client_before_retry(monkeypatch) ->
     assert response.text == '{"type":"final","answer":"done"}'
     assert len(clients) == 2
     assert clients[0].closed is True
+
+
+def test_extract_finish_reason_non_stream() -> None:
+    reason = extract_finish_reason(
+        {"choices": [{"message": {"content": "..."}, "finish_reason": "length"}]}
+    )
+
+    assert reason == "length"
+
+
+def test_extract_finish_reason_missing() -> None:
+    assert extract_finish_reason({}) is None
+    assert extract_finish_reason({"choices": []}) is None
+
+
+def test_extract_finish_reason_stream_takes_last_non_null() -> None:
+    reason = extract_finish_reason(
+        {
+            "chunks": [
+                {"choices": [{"finish_reason": None}]},
+                {"choices": [{"finish_reason": "length"}]},
+            ]
+        }
+    )
+
+    assert reason == "length"
+
+
+def test_provider_surfaces_finish_reason(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+    )
+
+    monkeypatch.setattr(
+        provider,
+        "_post_json",
+        lambda payload: {
+            "choices": [
+                {"message": {"content": '{"type":"final","answer":"done"}'}, "finish_reason": "stop"}
+            ],
+            "usage": {},
+        },
+    )
+
+    response = provider.complete([])
+
+    assert response.finish_reason == "stop"

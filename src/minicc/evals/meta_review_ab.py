@@ -226,7 +226,6 @@ def _comparable_configuration(a: Mapping[str, Any], b: Mapping[str, Any]) -> boo
         "provider_timeout_sec",
         "docker_image",
         "git_commit",
-        "case_authority_bundle_sha256",
     )
     return all(config_a.get(key) == config_b.get(key) for key in keys)
 

@@ -42,7 +42,6 @@ sandbox_mode: locked
 workspace:
   writable_paths: ["src/validator.py"]
 budget:
-  max_turns: 12
   max_bash_actions: 30
 context:
   artifact_preview_chars: 1200

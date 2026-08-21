@@ -261,7 +261,7 @@ def test_hybrid_loop_commits_ordered_tool_results_and_next_control_turn(tmp_path
         NoopBashExecutor(),
         session=SessionManager(runs_root=tmp_path / "runs"),
         trace=trace,
-        config=LoopConfig(max_turns=2, profile="hybrid-v3.6"),
+        config=LoopConfig(profile="hybrid-v3.6"),
         tool_scheduler=ToolCallScheduler(runner, max_parallel_tool_calls=2),
     )
 

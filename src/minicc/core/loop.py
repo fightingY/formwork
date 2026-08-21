@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -27,7 +28,7 @@ class BashExecutor(Protocol):
 
 @dataclass(frozen=True)
 class LoopConfig:
-    max_turns: int = 8
+    max_seconds: int = 0
     max_protocol_errors: int = 2
     max_action_timeout_sec: int = 120
     model_options: CompletionOptions = field(default_factory=CompletionOptions)
@@ -99,7 +100,6 @@ class AgentLoop:
     ) -> AgentLoopResult:
         resumed = trajectory is not None
         trajectory = list(trajectory or [])
-        state.metrics["max_turns"] = self.config.max_turns
         state.metrics["profile"] = self.config.profile
         state.metrics["max_parallel_tool_calls"] = self.config.max_parallel_tool_calls
         state.metrics["max_tool_calls_per_step"] = self.config.max_tool_calls_per_step
@@ -111,9 +111,10 @@ class AgentLoop:
         if self._should_interrupt(trajectory):
             self._interrupt(state, trajectory)
 
+        started_at = time.monotonic()
         while state.status == "running":
-            if state.metrics["turns"] >= self.config.max_turns:
-                self.session.fail(state, "Run failed because max_turns was exhausted.")
+            if self.config.max_seconds > 0 and (time.monotonic() - started_at) >= self.config.max_seconds:
+                self.session.fail(state, "Run failed because max_seconds was exhausted.")
                 break
 
             self.context_builder.maybe_compact(state, trajectory)

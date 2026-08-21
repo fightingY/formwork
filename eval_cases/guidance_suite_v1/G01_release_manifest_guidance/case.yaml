@@ -7,7 +7,6 @@ sandbox_mode: locked
 workspace:
   writable_paths: ["src/release_manifest.py"]
 budget:
-  max_turns: 10
   max_bash_actions: 20
 assertions:
   - type: command

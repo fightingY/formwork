@@ -422,7 +422,6 @@ sandbox:
   network: none
 
 budget:
-  max_turns: 12
   max_bash_actions: 30
   max_seconds: 900
   max_action_timeout_sec: 120

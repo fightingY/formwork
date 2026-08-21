@@ -10,7 +10,6 @@ sandbox_mode: local
 workspace:
   writable_paths: ["ShopCacheKeyBuilder.java"]
 budget:
-  max_turns: 12
   max_bash_actions: 25
 completion_gate: true
 cleanup_workspace: true

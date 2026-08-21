@@ -42,7 +42,6 @@ class DelegateTask:
     goal: str
     capability_profile: str
     depends_on: tuple[str, ...] = ()
-    max_turns: int = 4
     timeout_sec: int = 180
     output_schema: str = "investigation_report"
 
@@ -182,7 +181,6 @@ def action_to_dict(action: Action) -> dict[str, Any]:
                     "goal": task.goal,
                     "capability_profile": task.capability_profile,
                     "depends_on": list(task.depends_on),
-                    "max_turns": task.max_turns,
                     "timeout_sec": task.timeout_sec,
                     "output_schema": task.output_schema,
                 }
@@ -280,7 +278,7 @@ def _parse_delegate(payload: dict[str, Any], raw_text: str) -> DelegateAction:
             raise ProtocolError("Each delegate task must be an object.", raw_text=raw_text)
         task_allowed = {
             "id", "role", "goal", "capability_profile", "depends_on",
-            "max_turns", "timeout_sec", "output_schema",
+            "timeout_sec", "output_schema",
         }
         unknown = set(item) - task_allowed
         if unknown:
@@ -307,16 +305,13 @@ def _parse_delegate(payload: dict[str, Any], raw_text: str) -> DelegateAction:
         deps = item.get("depends_on", [])
         if not isinstance(deps, list) or any(not isinstance(dep, str) or not dep.strip() for dep in deps):
             raise ProtocolError("delegate task depends_on must be an array of non-empty strings.", raw_text=raw_text)
-        max_turns = item.get("max_turns", 4)
         timeout_sec = item.get("timeout_sec", 180)
-        if isinstance(max_turns, bool) or not isinstance(max_turns, int) or not 1 <= max_turns <= 100:
-            raise ProtocolError("delegate task max_turns must be an integer between 1 and 100.", raw_text=raw_text)
         if isinstance(timeout_sec, bool) or not isinstance(timeout_sec, int) or not 1 <= timeout_sec <= 86400:
             raise ProtocolError("delegate task timeout_sec must be an integer between 1 and 86400.", raw_text=raw_text)
         output_schema = item.get("output_schema", "investigation_report")
         if not isinstance(output_schema, str) or output_schema not in {"investigation_report", "plan", "worker_result", "review_report"}:
             raise ProtocolError(f"Unsupported delegate output_schema: {output_schema!r}.", raw_text=raw_text)
-        parsed.append(DelegateTask(task_id, role, goal.strip(), profile, tuple(deps), max_turns, timeout_sec, output_schema))
+        parsed.append(DelegateTask(task_id, role, goal.strip(), profile, tuple(deps), timeout_sec, output_schema))
     ids = {task.id for task in parsed}
     for task in parsed:
         if task.id in task.depends_on or any(dep not in ids for dep in task.depends_on):

@@ -4,7 +4,6 @@ fixture: ../../capability_suite_v1/C07_large_log_debugging/fixture
 prompt: "测试会产生很长日志。请定位第一个真正的失败原因并修复。"
 sandbox_mode: locked
 budget:
-  max_turns: 12
   max_bash_actions: 30
 context:
   max_prompt_chars: 1

@@ -323,7 +323,6 @@ def _complete_child_model(task: dict[str, Any], child_run_id: str) -> dict[str, 
             options=CompletionOptions(
                 temperature=child.temperature, stream=child.stream,
                 include_usage=child.include_usage, json_mode=child.json_mode,
-                max_tokens=child.max_completion_tokens,
             ),
         )
         try:

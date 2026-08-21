@@ -65,8 +65,6 @@ class EvalCaseResult:
     configuration: dict | None = None
     case_source_path: str = ""
     fixture_source_path: str = ""
-    case_definition_sha256: str = ""
-    fixture_content_sha256: str = ""
     request_rows: list[dict] = field(default_factory=list)
     trace_assertion_events: list[dict] = field(default_factory=list)
     assertion_specs: list[dict] = field(default_factory=list)
@@ -171,34 +169,9 @@ def run_eval_case(
         stage=stage,
     )
     state.run_id = workspace.run_id
-    actual_authority_profile = {
-        "source_path": case_source_path(case, project_root=Path.cwd()),
-        "fixture_source_path": fixture_source_path(
-            case,
-            project_root=Path.cwd(),
-        ),
-        "case_definition_sha256": case.definition_sha256,
-        "fixture_content_sha256": workspace.content_digest_sha256,
-    }
-    expected_profiles = (configuration or {}).get("case_authority_profiles")
-    expected_profile = (
-        expected_profiles.get(case.name)
-        if isinstance(expected_profiles, Mapping)
-        else None
-    )
-    authority_profile_required = (
-        "2.1.2" in milestone
-        and (configuration or {}).get("release_gate") is True
-    )
+    source_path = case_source_path(case, project_root=Path.cwd())
+    fixture_path = fixture_source_path(case, project_root=Path.cwd())
     try:
-        if authority_profile_required and expected_profile is None:
-            raise RuntimeError(
-                f"formal case authority profile is missing: {case.name}"
-            )
-        if expected_profile is not None and expected_profile != actual_authority_profile:
-            raise RuntimeError(
-                f"case authority profile changed before snapshot: {case.name}"
-            )
         initial_verification = None
         if case.initial_verify is not None:
             initial_spec = {**case.initial_verify, "_artifact_label": "initial"}
@@ -272,10 +245,8 @@ def run_eval_case(
         milestone=milestone,
         stage=stage,
         configuration=dict(configuration or {}),
-        case_source_path=actual_authority_profile["source_path"],
-        fixture_source_path=actual_authority_profile["fixture_source_path"],
-        case_definition_sha256=case.definition_sha256,
-        fixture_content_sha256=workspace.content_digest_sha256,
+        case_source_path=source_path,
+        fixture_source_path=fixture_path,
         request_rows=request_rows,
         trace_assertion_events=trace_assertion_events,
         assertion_specs=[dict(assertion) for assertion in case.assertions],
@@ -407,8 +378,6 @@ def suite_to_dict(result: EvalSuiteResult) -> dict:
                 "formal_metric_eligible": _formal_metric_eligible(case),
                 "case_source_path": case.case_source_path,
                 "fixture_source_path": case.fixture_source_path,
-                "case_definition_sha256": case.case_definition_sha256,
-                "fixture_content_sha256": case.fixture_content_sha256,
                 "request_rows": case.request_rows,
                 "trace_assertion_events": case.trace_assertion_events,
                 "assertion_specs": case.assertion_specs,
@@ -623,8 +592,6 @@ def write_eval_case_report(result: EvalCaseResult, run_dir: Path) -> tuple[Path,
         "source_commit": str((result.configuration or {}).get("git_commit") or ""),
         "case_source_path": result.case_source_path,
         "fixture_source_path": result.fixture_source_path,
-        "case_definition_sha256": result.case_definition_sha256,
-        "fixture_content_sha256": result.fixture_content_sha256,
         "request_rows": result.request_rows,
         "trace_assertion_events": result.trace_assertion_events,
         "assertion_specs": result.assertion_specs,

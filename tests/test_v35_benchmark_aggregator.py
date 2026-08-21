@@ -16,7 +16,6 @@ def _report() -> tuple[dict, dict]:
     )
     rows = []
     for name in manifest["execution_order"]:
-        frozen = manifest["cases"][name]
         for attempt in range(1, 4):
             rows.append(
                 {
@@ -25,9 +24,6 @@ def _report() -> tuple[dict, dict]:
                     "suite_id": "suite-test",
                     "passed": True,
                     "verdict": "passed",
-                    "case_definition_sha256": frozen["definition_sha256"],
-                    "fixture_content_sha256": frozen["fixture_sha256"],
-                    "assertion_specs": [{"type": "python_verifier", "sha256": frozen["verifier_sha256"]}],
                     "metrics": {"turns": 2, "bash_actions": 3, "timeouts": 0},
                 }
             )
@@ -49,7 +45,7 @@ def test_aggregator_recomputes_eighteen_run_denominator() -> None:
     assert result["final_pass_rate"] == 1.0
 
 
-@pytest.mark.parametrize("mutation", ["drop", "duplicate", "hash"])
+@pytest.mark.parametrize("mutation", ["drop", "duplicate", "execute_local"])
 def test_aggregator_rejects_invalid_frozen_input(mutation: str) -> None:
     report, manifest = _report()
     if mutation == "drop":
@@ -57,6 +53,6 @@ def test_aggregator_rejects_invalid_frozen_input(mutation: str) -> None:
     elif mutation == "duplicate":
         report["cases"][1]["run_id"] = report["cases"][0]["run_id"]
     else:
-        report["cases"][0]["fixture_content_sha256"] = "0" * 64
+        report["configuration"]["execute_local"] = True
     with pytest.raises(ValueError):
         aggregate(report, manifest)

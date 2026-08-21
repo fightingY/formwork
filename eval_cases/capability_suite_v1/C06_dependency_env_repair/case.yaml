@@ -5,7 +5,6 @@ prompt: >
   让测试命令保持可运行，不要改业务代码。
 sandbox_mode: locked
 budget:
-  max_turns: 8
   max_bash_actions: 20
 assertions:
   - type: file_contains

@@ -892,7 +892,6 @@ def test_eval_case_budget_overrides_settings(tmp_path) -> None:
 name: demo
 prompt: Finish.
 budget:
-  max_turns: 3
   max_bash_actions: 4
   max_action_timeout_sec: 5
 context:
@@ -908,14 +907,13 @@ context:
     settings = Settings(
         provider=ProviderSettings(),
         sandbox=SandboxSettings(),
-        budget=BudgetSettings(max_turns=10, max_bash_actions=20, max_action_timeout_sec=30),
+        budget=BudgetSettings(max_bash_actions=20, max_action_timeout_sec=30),
         context=ContextSettings(),
         policy=PolicySettings(),
     )
 
     adjusted = _settings_for_eval_case(settings, load_case(case_dir / "case.yaml"))
 
-    assert adjusted.budget.max_turns == 3
     assert adjusted.budget.max_bash_actions == 4
     assert adjusted.budget.max_action_timeout_sec == 5
     assert adjusted.context.max_prompt_chars == 2000

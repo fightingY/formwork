@@ -26,6 +26,7 @@ Allowed actions:
 
 Behavior rules:
 - Use bash actions to inspect files, run tests, or make changes.
+- Write `purpose` as a concise user-readable intent (why the action is useful), not a copy of the command.
 - Use skill to load one catalog entry only when its instructions are relevant.
 - Use ask only when the task is blocked by missing user input.
 - Use final only when the task is complete or cannot continue.
@@ -69,7 +70,7 @@ This run uses the opt-in multi-agent-v4 profile. You may emit one `delegate` act
 Delegate tasks must use role/profile pairs scout/scout, planner/planner, reviewer/reviewer,
 or worker/worker. Read-only roles cannot edit, write, or delegate. Use bounded dependencies
 and return structured goals; child results arrive as workflow_summary_observation.
-{"type":"delegate","intent":"先并行调查实现和测试约束","join":"all","tasks":[{"id":"scout-1","role":"scout","goal":"inspect the implementation","capability_profile":"scout","max_turns":4,"timeout_sec":180,"output_schema":"investigation_report"}]}
+{"type":"delegate","intent":"先并行调查实现和测试约束","join":"all","tasks":[{"id":"scout-1","role":"scout","goal":"inspect the implementation","capability_profile":"scout","timeout_sec":180,"output_schema":"investigation_report"}]}
 """
 
 EPOCH_COMPACTION_TARGET_RATIO = 0.65
@@ -370,9 +371,6 @@ class ContextBuilder:
                 f"Run status: {state.status}",
             ]
         )
-        budget_guidance = _budget_guidance(state)
-        if budget_guidance:
-            dynamic_context.append(budget_guidance)
         repetition_guidance = _io_repetition_guidance(state)
         if repetition_guidance:
             dynamic_context.append(repetition_guidance)
@@ -887,32 +885,6 @@ def _trim_text(text: str, max_chars: int) -> str:
     return text[:head] + marker + tail_text
 
 
-def _budget_guidance(state: RunState) -> str:
-    max_turns = state.metrics.get("max_turns")
-    turns = state.metrics.get("turns", 0)
-    if not isinstance(max_turns, int) or max_turns <= 0:
-        return ""
-    ratio = turns / max_turns
-    remaining = max(max_turns - turns, 0)
-    if remaining <= 1:
-        return (
-            f"Budget status: {remaining} model turn(s) remain. This is the final response slot. "
-            "If the requested artifact or answer is already correct, return final now; do not run "
-            "another bash command or repeat verification."
-        )
-    if ratio >= 0.8:
-        return (
-            f"Budget status: {remaining} model turn(s) remain. Stop exploring. "
-            "Run only the minimum verification still needed, then return final immediately."
-        )
-    if ratio >= 0.6:
-        return (
-            f"Budget status: {remaining} model turn(s) remain. Converge now: "
-            "finish the smallest correct change, verify once, and avoid repeated inspection."
-        )
-    return ""
-
-
 def _io_repetition_guidance(state: RunState) -> str:
     repeated_reads = int(state.metrics.get("repeated_file_reads", 0) or 0)
     repeated_searches = int(state.metrics.get("repeated_searches", 0) or 0)
@@ -945,9 +917,6 @@ def state_snapshot_text(state: RunState) -> str:
     """Freeze mutable guidance at an immutable trajectory boundary."""
 
     parts: list[str] = []
-    budget_guidance = _budget_guidance(state)
-    if budget_guidance:
-        parts.append(budget_guidance)
     repetition_guidance = _io_repetition_guidance(state)
     if repetition_guidance:
         parts.append(repetition_guidance)

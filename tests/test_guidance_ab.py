@@ -18,7 +18,6 @@ def _suite(variant: str, *, suite_id: str, run_prefix: str) -> dict:
             "provider_max_retries": 2,
             "provider_timeout_sec": 300,
             "docker_image": "python@sha256:test",
-            "case_authority_bundle_sha256": "case-sha",
             "guidance_variant": variant,
             "guidance_sequence_id": "round-1",
             "guidance_execution_order": "a0-first",

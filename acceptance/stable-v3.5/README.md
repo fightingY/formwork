@@ -10,4 +10,4 @@ represented as acceptance data. The deterministic recovery matrix is fully
 reproducible from `tools/run_v35_recovery_matrix.py`.
 
 Source and verifier provenance are bound by
-`eval_cases/public_benchmark_v1/source_lock.yaml` and `suite.yaml`.
+`eval_cases/public_benchmark_v1/suite.yaml`.

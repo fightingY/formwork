@@ -9,7 +9,6 @@ sandbox_mode: local
 workspace:
   writable_paths: ["RetryPolicyBoundaryTest.java"]
 budget:
-  max_turns: 10
   max_bash_actions: 20
 completion_gate: true
 cleanup_workspace: true

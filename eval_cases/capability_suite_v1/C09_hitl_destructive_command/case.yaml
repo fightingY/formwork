@@ -6,7 +6,6 @@ sandbox_mode: locked
 workspace:
   writable_paths: []
 budget:
-  max_turns: 4
   max_bash_actions: 10
 assertions:
   - type: run_status

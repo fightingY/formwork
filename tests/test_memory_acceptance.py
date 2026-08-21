@@ -67,7 +67,6 @@ def test_memory_acceptance_rejects_configuration_drift(tmp_path) -> None:
 
 def _formal_suite(tmp_path: Path, case_name: str, index: int) -> dict:
     suite_id = f"suite-formal-{index}"
-    expected_case, expected_fixture = REQUIRED_MEMORY_CASES[case_name]
     expected_path = f"docs/CONTRACT_{index}.md"
     attempts: list[dict] = []
     results: list[EvalCaseResult] = []
@@ -155,14 +154,6 @@ def _formal_suite(tmp_path: Path, case_name: str, index: int) -> dict:
         "worktree_dirty": False,
         "release_gate": True,
         "case_name": case_name,
-        "case_authority_profiles": {
-            f"{case_name}_source": {
-                "source_path": expected_case,
-                "fixture_source_path": expected_fixture,
-                "case_definition_sha256": "b" * 64,
-                "fixture_content_sha256": "c" * 64,
-            }
-        },
         "git_preflight_verified": True,
         "git_postflight_verified": True,
         "feedback_memory_mode": "disabled",

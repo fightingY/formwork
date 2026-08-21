@@ -78,6 +78,20 @@ class ModelTurnRunner:
                 self.trace.action_parsed(state, action)
             return ModelTurn(action=action)
         except ProtocolError as exc:
+            if getattr(response, "finish_reason", None) == "length":
+                state.status = "failed"
+                state.state_summary = (
+                    "Run failed because the provider truncated the model response at its "
+                    "output limit (finish_reason=length)."
+                )
+                observation = Observation(
+                    kind="protocol_error",
+                    message=exc.message,
+                    stderr_preview=exc.raw_text[:4000],
+                )
+                if self.trace is not None:
+                    self.trace.observation_created(state, observation)
+                return ModelTurn(action=None, observation=observation, should_continue=False)
             self.protocol_errors += 1
             state.metrics["protocol_errors"] += 1
             observation = Observation(

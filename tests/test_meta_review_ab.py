@@ -35,7 +35,6 @@ def _suite(suite_id: str, run_ids: list[str]):
             "provider_timeout_sec": 300.0,
             "docker_image": "python@sha256:x",
             "git_commit": "abc",
-            "case_authority_bundle_sha256": "authority",
         },
         "cases": [
             {"name": "C02_fix_failing_test", "run_id": run_id, "passed": True}

@@ -44,13 +44,11 @@ class SemanticCompactor:
         trace: TraceRecorder | None = None,
         max_input_chars: int = 60_000,
         max_summary_chars: int = 12_000,
-        max_completion_tokens: int = 2_048,
     ) -> None:
         self.provider = provider
         self.trace = trace
         self.max_input_chars = max_input_chars
         self.max_summary_chars = max_summary_chars
-        self.max_completion_tokens = max_completion_tokens
 
     def compact(
         self,
@@ -96,7 +94,6 @@ class SemanticCompactor:
                     stream=False,
                     include_usage=True,
                     json_mode=True,
-                    max_tokens=self.max_completion_tokens,
                 ),
             )
             summary = _trim_text(_parse_summary(response.text), self.max_summary_chars)

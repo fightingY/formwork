@@ -4,6 +4,5 @@
   "status": "not_run",
   "denominator": 18,
   "reason": "formal Docker/DeepSeek execution requires local provider credentials and pinned image",
-  "source_lock": "../../../../eval_cases/public_benchmark_v1/source_lock.yaml",
   "suite_manifest": "../../../../eval_cases/public_benchmark_v1/suite.yaml"
 }

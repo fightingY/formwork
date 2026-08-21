@@ -78,7 +78,6 @@ def test_fixed_probe_p1_builds_nested_requests_and_writes_immutable_bundle(tmp_p
                 "model": "fixed-model",
                 "temperature": 0.0,
                 "json_mode": True,
-                "max_completion_tokens": 128,
                 "git_commit": "abc123",
                 "compaction_strategy": "deterministic",
             },

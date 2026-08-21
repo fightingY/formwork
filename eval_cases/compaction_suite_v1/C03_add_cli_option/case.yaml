@@ -9,7 +9,6 @@ sandbox_mode: locked
 workspace:
   writable_paths: ["src/demo_cli.py", "tests/test_cli.py"]
 budget:
-  max_turns: 12
   max_bash_actions: 30
 context:
   max_prompt_chars: 1

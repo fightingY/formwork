@@ -54,7 +54,6 @@ sandbox:
   pids_limit: 128
   network: bridge
 budget:
-  max_turns: 3
   max_action_timeout_sec: 9
 context:
   artifact_preview_chars: 42
@@ -62,14 +61,12 @@ context:
   field_preview_chars: 512
   compaction_strategy: semantic
   semantic_max_input_chars: 4096
-  semantic_max_completion_tokens: 1024
   retention_markers: [src/app.py, ROOT_CAUSE]
   prompt_layout: append
 provider:
   base_url: https://provider.test/v1
   model: test-model
   temperature: 0.7
-  max_completion_tokens: 1024
   max_retries: 4
   stream: true
   include_usage: false
@@ -95,21 +92,18 @@ workspace:
     assert settings.provider.stream is True
     assert settings.provider.include_usage is False
     assert settings.provider.json_mode is False
-    assert settings.provider.max_completion_tokens == 1024
     assert settings.provider.max_retries == 4
     assert settings.sandbox.image == "python:3.12-slim"
     assert settings.sandbox.cpus == "2"
     assert settings.sandbox.memory == "2g"
     assert settings.sandbox.pids_limit == 128
     assert settings.sandbox.network == "bridge"
-    assert settings.budget.max_turns == 3
     assert settings.budget.max_action_timeout_sec == 9
     assert settings.context.artifact_preview_chars == 42
     assert settings.context.summary_max_chars == 2048
     assert settings.context.field_preview_chars == 512
     assert settings.context.compaction_strategy == "semantic"
     assert settings.context.semantic_max_input_chars == 4096
-    assert settings.context.semantic_max_completion_tokens == 1024
     assert settings.context.retention_markers == ("src/app.py", "ROOT_CAUSE")
     assert settings.context.prompt_layout == "append"
     assert settings.policy.require_approval_for_network is False

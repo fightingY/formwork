@@ -88,7 +88,6 @@ class MetaReviewer:
                         stream=False,
                         include_usage=True,
                         json_mode=True,
-                        max_tokens=2_048,
                     ),
                 )
                 responses.append(response)
