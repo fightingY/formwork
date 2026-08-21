@@ -93,6 +93,7 @@ from minicc.memory.compaction import SemanticCompactor
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.working import WorkingMemoryError, attach_working_memory
 from minicc.meta.reviewer import MetaReviewer, MetaReviewError, load_meta_review
+from minicc.multi_agent import childrun_main
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
 from minicc.sandbox.docker_runner import (
@@ -111,6 +112,7 @@ from minicc.skills.registry import SkillRegistry, default_skill_roots
 from minicc.trace.metrics import write_metrics
 from minicc.trace.recorder import TraceRecorder, trace_path_for
 from minicc.trace.report import write_run_report
+from minicc.trace.transcript import project_trace
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -500,6 +502,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     traces_parser = subparsers.add_parser("traces", help="List runs that have trace or metrics files.")
     traces_parser.set_defaults(handler=traces_command)
+    transcript_parser = subparsers.add_parser("transcript", help="Project a trace.jsonl into transcript artifacts.")
+    transcript_parser.add_argument("trace", type=Path, help="Path to trace.jsonl.")
+    transcript_parser.add_argument("--output-dir", type=Path, default=None)
+    transcript_parser.set_defaults(handler=transcript_command)
 
     cleanup_parser = subparsers.add_parser(
         "cleanup",
@@ -568,7 +574,24 @@ def build_parser() -> argparse.ArgumentParser:
     web_parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
     web_parser.add_argument("--port", type=int, default=8765, help="Port to bind.")
     web_parser.set_defaults(handler=web_command)
+    childrun_parser = subparsers.add_parser("childrun", help="Run a V4 child over stdin/stdout JSONL.")
+    childrun_parser.set_defaults(handler=childrun_command)
     return parser
+
+
+def childrun_command(args: argparse.Namespace) -> int:
+    return childrun_main(sys.stdin, sys.stdout)
+
+
+def transcript_command(args: argparse.Namespace) -> int:
+    try:
+        json_path, markdown_path = project_trace(args.trace, args.output_dir)
+    except OSError as exc:
+        print(f"Transcript projection failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"transcript_jsonl: {json_path}")
+    print(f"transcript_md: {markdown_path}")
+    return 0
 
 
 def run_command(args: argparse.Namespace) -> int:
@@ -734,6 +757,13 @@ def run_command(args: argparse.Namespace) -> int:
         SessionManager().save(state)
         write_metrics(state)
         write_run_report(state)
+        if state.run_dir is not None:
+            trace_file = state.run_dir / "trace.jsonl"
+            if trace_file.exists():
+                try:
+                    project_trace(trace_file, state.run_dir)
+                except OSError as exc:
+                    print(f"Failed to finalize transcript: {exc}", file=sys.stderr)
         catalog.register_state(milestone, state, git_commit=_git_evidence(Path.cwd())[0])
 
     if result is None:

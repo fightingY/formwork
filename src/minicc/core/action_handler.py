@@ -9,6 +9,7 @@ from minicc.core.protocol import (
     Action,
     AskAction,
     BashAction,
+    DelegateAction,
     FinalAction,
     SkillAction,
     ToolCallsAction,
@@ -119,6 +120,9 @@ class ActionHandler:
 
         if isinstance(action, ToolCallsAction):
             raise TypeError("ToolCallsAction must be handled by ToolCallScheduler")
+
+        if isinstance(action, DelegateAction):
+            raise TypeError("DelegateAction must be handled by WorkflowCoordinator")
 
         return self._handle_bash(action, state)
 

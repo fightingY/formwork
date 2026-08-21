@@ -1,0 +1,25 @@
+{
+  "profile": "multi-agent-v4",
+  "status": "experimental-implemented",
+  "stable_promotion": false,
+  "pytest": {"passed": 370, "skipped": 3},
+  "focused_v4_tests": {"passed": 4},
+  "ruff": "pass",
+  "mypy": "pass",
+  "package_build": "pass",
+  "contracts": {
+    "delegate_protocol": true,
+    "capability_policy": true,
+    "readonly_bash_policy": true,
+    "workspace_write_lease": true,
+    "childrun_jsonl": true,
+    "parallel_dependency_workflow": true,
+    "transcript_projection": true,
+    "legacy_profile_default_unchanged": true
+  },
+  "limitations": [
+    "No real-provider A/B benchmark is claimed",
+    "Formal read-only mount evidence requires Docker integration environment",
+    "V4 remains experimental until M7 release gates are independently met"
+  ]
+}

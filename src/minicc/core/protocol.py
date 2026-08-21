@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-ActionType = Literal["bash", "skill", "ask", "final", "tool_calls"]
+ActionType = Literal["bash", "skill", "ask", "final", "tool_calls", "delegate"]
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,28 @@ class ToolCall:
 class ToolCallsAction:
     calls: tuple[ToolCall, ...]
     type: Literal["tool_calls"] = "tool_calls"
+
+
+@dataclass(frozen=True)
+class DelegateTask:
+    """A bounded child-run request emitted by a root model turn."""
+
+    id: str
+    role: str
+    goal: str
+    capability_profile: str
+    depends_on: tuple[str, ...] = ()
+    max_turns: int = 4
+    timeout_sec: int = 180
+    output_schema: str = "investigation_report"
+
+
+@dataclass(frozen=True)
+class DelegateAction:
+    tasks: tuple[DelegateTask, ...]
+    join: Literal["all", "any"] = "all"
+    intent: str = ""
+    type: Literal["delegate"] = "delegate"
 
 
 @dataclass(frozen=True)
@@ -59,7 +81,7 @@ class FinalAction:
     type: Literal["final"] = "final"
 
 
-Action = BashAction | SkillAction | AskAction | FinalAction | ToolCallsAction
+Action = BashAction | SkillAction | AskAction | FinalAction | ToolCallsAction | DelegateAction
 
 
 class ProtocolError(ValueError):
@@ -95,6 +117,8 @@ def parse_action(
         )
     if action_type == "tool_calls":
         return _parse_tool_calls(payload, text, default_timeout_sec, max_timeout_sec, max_tool_calls)
+    if action_type == "delegate":
+        return _parse_delegate(payload, text)
     if action_type == "bash":
         return _parse_bash(payload, text, default_timeout_sec, max_timeout_sec)
     if action_type == "skill":
@@ -105,7 +129,7 @@ def parse_action(
         return _parse_final(payload, text)
 
     raise ProtocolError(
-        "Action type must be one of: bash, skill, ask, final, tool_calls.",
+        "Action type must be one of: bash, skill, ask, final, tool_calls, delegate.",
         raw_text=text,
     )
 
@@ -144,6 +168,25 @@ def action_to_dict(action: Action) -> dict[str, Any]:
             "calls": [
                 {"id": call.id, "tool": call.tool, "arguments": dict(call.arguments)}
                 for call in action.calls
+            ],
+        }
+    if isinstance(action, DelegateAction):
+        return {
+            "type": "delegate",
+            "intent": action.intent,
+            "join": action.join,
+            "tasks": [
+                {
+                    "id": task.id,
+                    "role": task.role,
+                    "goal": task.goal,
+                    "capability_profile": task.capability_profile,
+                    "depends_on": list(task.depends_on),
+                    "max_turns": task.max_turns,
+                    "timeout_sec": task.timeout_sec,
+                    "output_schema": task.output_schema,
+                }
+                for task in action.tasks
             ],
         }
     data = asdict(action)
@@ -209,6 +252,97 @@ def _parse_tool_calls(
                     raise ProtocolError(f"bash.{key} must be a string when provided.", raw_text=raw_text)
         parsed.append(ToolCall(id=call_id, tool=tool, arguments=normalized))
     return ToolCallsAction(calls=tuple(parsed))
+
+
+def _parse_delegate(payload: dict[str, Any], raw_text: str) -> DelegateAction:
+    allowed = {"type", "tasks", "join", "intent"}
+    unexpected = set(payload) - allowed
+    if unexpected:
+        raise ProtocolError(
+            f"delegate contains unknown field(s): {', '.join(sorted(unexpected))}.",
+            raw_text=raw_text,
+        )
+    tasks = payload.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise ProtocolError("delegate.tasks must be a non-empty array.", raw_text=raw_text)
+    join = payload.get("join", "all")
+    if join not in {"all", "any"}:
+        raise ProtocolError("delegate.join must be 'all' or 'any'.", raw_text=raw_text)
+    intent = payload.get("intent", "")
+    if not isinstance(intent, str) or len(intent) > 500:
+        raise ProtocolError("delegate.intent must be a string of at most 500 characters.", raw_text=raw_text)
+    parsed: list[DelegateTask] = []
+    seen: set[str] = set()
+    known_roles = {"scout", "planner", "worker", "reviewer"}
+    known_profiles = {"root", "scout", "planner", "worker", "reviewer"}
+    for item in tasks:
+        if not isinstance(item, dict):
+            raise ProtocolError("Each delegate task must be an object.", raw_text=raw_text)
+        task_allowed = {
+            "id", "role", "goal", "capability_profile", "depends_on",
+            "max_turns", "timeout_sec", "output_schema",
+        }
+        unknown = set(item) - task_allowed
+        if unknown:
+            raise ProtocolError(
+                f"delegate task contains unknown field(s): {', '.join(sorted(unknown))}.",
+                raw_text=raw_text,
+            )
+        task_id = item.get("id")
+        role = item.get("role")
+        goal = item.get("goal")
+        profile = item.get("capability_profile", role)
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ProtocolError("delegate task id must be a non-empty string.", raw_text=raw_text)
+        task_id = task_id.strip()
+        if task_id in seen:
+            raise ProtocolError(f"Duplicate delegate task id: {task_id}.", raw_text=raw_text)
+        seen.add(task_id)
+        if role not in known_roles:
+            raise ProtocolError(f"Unknown delegate role: {role!r}.", raw_text=raw_text)
+        if profile not in known_profiles:
+            raise ProtocolError(f"Unknown capability profile: {profile!r}.", raw_text=raw_text)
+        if not isinstance(goal, str) or not goal.strip():
+            raise ProtocolError("delegate task goal must be a non-empty string.", raw_text=raw_text)
+        deps = item.get("depends_on", [])
+        if not isinstance(deps, list) or any(not isinstance(dep, str) or not dep.strip() for dep in deps):
+            raise ProtocolError("delegate task depends_on must be an array of non-empty strings.", raw_text=raw_text)
+        max_turns = item.get("max_turns", 4)
+        timeout_sec = item.get("timeout_sec", 180)
+        if isinstance(max_turns, bool) or not isinstance(max_turns, int) or not 1 <= max_turns <= 100:
+            raise ProtocolError("delegate task max_turns must be an integer between 1 and 100.", raw_text=raw_text)
+        if isinstance(timeout_sec, bool) or not isinstance(timeout_sec, int) or not 1 <= timeout_sec <= 86400:
+            raise ProtocolError("delegate task timeout_sec must be an integer between 1 and 86400.", raw_text=raw_text)
+        output_schema = item.get("output_schema", "investigation_report")
+        if not isinstance(output_schema, str) or output_schema not in {"investigation_report", "plan", "worker_result", "review_report"}:
+            raise ProtocolError(f"Unsupported delegate output_schema: {output_schema!r}.", raw_text=raw_text)
+        parsed.append(DelegateTask(task_id, role, goal.strip(), profile, tuple(deps), max_turns, timeout_sec, output_schema))
+    ids = {task.id for task in parsed}
+    for task in parsed:
+        if task.id in task.depends_on or any(dep not in ids for dep in task.depends_on):
+            raise ProtocolError(f"Invalid dependency for delegate task: {task.id}.", raw_text=raw_text)
+    _ensure_acyclic(parsed, raw_text)
+    if join == "any" and any(task.role == "worker" for task in parsed):
+        raise ProtocolError("delegate.join='any' is only allowed for read-only tasks.", raw_text=raw_text)
+    return DelegateAction(tuple(parsed), join, intent)
+
+
+def _ensure_acyclic(tasks: list[DelegateTask], raw_text: str) -> None:
+    edges = {task.id: set(task.depends_on) for task in tasks}
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    def visit(node: str) -> None:
+        if node in visiting:
+            raise ProtocolError("delegate dependencies must not contain a cycle.", raw_text=raw_text)
+        if node in visited:
+            return
+        visiting.add(node)
+        for dep in edges[node]:
+            visit(dep)
+        visiting.remove(node)
+        visited.add(node)
+    for node in edges:
+        visit(node)
 
 
 def _validate_tool_arguments(tool: str, arguments: dict[str, Any], raw_text: str) -> None:

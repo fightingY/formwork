@@ -87,6 +87,14 @@ class RunState:
     working_memory_source_run_id: str | None = None
     repository_profile: dict[str, Any] = field(default_factory=dict)
     project_guide: dict[str, Any] = field(default_factory=dict)
+    root_run_id: str | None = None
+    parent_run_id: str | None = None
+    workflow_id: str | None = None
+    task_id: str | None = None
+    role: str = "root"
+    capability_profile: str = "root"
+    depth: int = 0
+    lease_epoch: int | None = None
 
     @classmethod
     def start(
@@ -167,6 +175,14 @@ class RunState:
             working_memory_source_run_id=data.get("working_memory_source_run_id"),
             repository_profile=dict(data.get("repository_profile", {})),
             project_guide=dict(data.get("project_guide", {})),
+            root_run_id=data.get("root_run_id"),
+            parent_run_id=data.get("parent_run_id"),
+            workflow_id=data.get("workflow_id"),
+            task_id=data.get("task_id"),
+            role=str(data.get("role", "root")),
+            capability_profile=str(data.get("capability_profile", "root")),
+            depth=int(data.get("depth", 0)),
+            lease_epoch=data.get("lease_epoch"),
         )
 
 
@@ -184,6 +200,28 @@ def initial_metrics() -> dict[str, Any]:
         "write_tool_calls": 0,
         "bash_tool_calls": 0,
         "profile": "baseline-bash",
+        "root_turns": 0,
+        "child_runs_started": 0,
+        "child_runs_completed": 0,
+        "child_runs_failed": 0,
+        "child_runs_cancelled": 0,
+        "workflow_count": 0,
+        "workflow_depth": 0,
+        "max_concurrent_children": 0,
+        "delegate_steps": 0,
+        "parallel_read_groups": 0,
+        "actual_parallelism": 0,
+        "write_lease_acquire": 0,
+        "write_lease_denial": 0,
+        "write_lease_release": 0,
+        "capability_denials": 0,
+        "readonly_bash_denials": 0,
+        "workspace_mutation_violations": 0,
+        "review_iterations": 0,
+        "verifier_attempts": 0,
+        "verifier_passes": 0,
+        "trace_events": 0,
+        "transcript_records": 0,
         "max_parallel_tool_calls": 4,
         "max_tool_calls_per_step": 16,
         "protocol_errors": 0,

@@ -14,6 +14,7 @@ from typing import Any, Literal, Protocol
 
 from minicc.core.protocol import BashAction, ToolCall, ToolCallsAction
 from minicc.core.state import Observation, RunState
+from minicc.runtime import AgentRuntime
 
 ExecutionMode = Literal["parallel", "exclusive"]
 
@@ -183,16 +184,21 @@ class ToolInputError(ValueError):
 
 
 class HybridToolRunner:
-    def __init__(self, bash_executor: Any, fs: FileSystemCapability | None = None) -> None:
+    def __init__(self, bash_executor: Any, fs: FileSystemCapability | None = None, runtime: AgentRuntime | None = None) -> None:
         self.bash_executor = bash_executor
         self.fs = fs or FileSystemCapability()
         self.action_handler: Any | None = None
+        self.runtime = runtime
 
     def execution_mode(self, call: ToolCall) -> ExecutionMode:
         return "parallel" if call.tool == "read" else "exclusive"
 
     def run(self, call: ToolCall, state: RunState) -> ToolResult:
         mode: ExecutionMode = "parallel" if call.tool == "read" else "exclusive"
+        if self.runtime is not None:
+            decision = self.runtime.authorize(call, run_id=state.run_id, task_id=state.run_id)
+            if not decision.allowed:
+                return _error(call, 0, mode, decision.code, decision.reason)
         if call.tool in {"read", "edit", "write"}:
             result = self.fs.run(call, state)
             return ToolResult(result.call_id, result.tool, result.model_order, mode, result.content, result.is_error)

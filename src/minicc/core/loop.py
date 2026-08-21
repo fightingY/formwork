@@ -8,13 +8,14 @@ from minicc.core.action_handler import ActionHandler
 from minicc.core.checkpoint import CheckpointManager
 from minicc.core.context import ContextBuilder, state_snapshot_text
 from minicc.core.lifecycle import RunLifecycle
-from minicc.core.protocol import BashAction, ToolCallsAction
+from minicc.core.protocol import BashAction, DelegateAction, ToolCallsAction
 from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
 from minicc.core.runner import ModelTurnConfig, ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.core.tooling import ToolCallScheduler
 from minicc.core.verification import CompletionVerifier
+from minicc.multi_agent import WorkflowCoordinator
 from minicc.policy.base import PolicyChain
 from minicc.trace.recorder import TraceRecorder
 
@@ -34,6 +35,7 @@ class LoopConfig:
     profile: str = "baseline-bash"
     max_parallel_tool_calls: int = 4
     max_tool_calls_per_step: int = 16
+    max_concurrent_children: int = 4
 
 
 @dataclass
@@ -56,6 +58,7 @@ class AgentLoop:
         checkpoint_manager: CheckpointManager | None = None,
         completion_verifier: CompletionVerifier | None = None,
         tool_scheduler: ToolCallScheduler | None = None,
+        workflow_coordinator: WorkflowCoordinator | None = None,
     ) -> None:
         self.config = config or LoopConfig()
         self.session = session or SessionManager()
@@ -83,6 +86,7 @@ class AgentLoop:
             skill_registry=self.context_builder.skill_registry,
         )
         self.tool_scheduler = tool_scheduler
+        self.workflow_coordinator = workflow_coordinator
         if self.tool_scheduler is not None:
             runner = self.tool_scheduler.runner
             if hasattr(runner, "action_handler"):
@@ -199,6 +203,33 @@ class AgentLoop:
                 state.last_observation = observation
                 self.session.save(state)
                 self._checkpoint(state, trajectory, "tool_calls_completed")
+                continue
+
+            if isinstance(turn.action, DelegateAction):
+                if self.config.profile != "multi-agent-v4" or self.workflow_coordinator is None:
+                    observation = Observation(kind="protocol_error", message="delegate requires the multi-agent-v4 profile.")
+                    trajectory.append(TrajectoryStep(action=turn.action, observation=observation, state_snapshot=state_snapshot_text(state)))
+                    state.metrics["protocol_errors"] = state.metrics.get("protocol_errors", 0) + 1
+                    self.trace.observation_created(state, observation)
+                    continue
+                state.metrics["delegate_steps"] = state.metrics.get("delegate_steps", 0) + 1
+                state.metrics["workflow_count"] = state.metrics.get("workflow_count", 0) + 1
+                workflow = self.workflow_coordinator.execute(turn.action, parent_run_id=state.run_id, root_run_id=state.root_run_id or state.run_id)
+                state.metrics["child_runs_started"] = state.metrics.get("child_runs_started", 0) + len(turn.action.tasks)
+                state.metrics["child_runs_completed"] = state.metrics.get("child_runs_completed", 0) + sum(result.status == "completed" for result in workflow.results)
+                state.metrics["child_runs_failed"] = state.metrics.get("child_runs_failed", 0) + sum(result.status == "failed" for result in workflow.results)
+                state.metrics["child_runs_cancelled"] = state.metrics.get("child_runs_cancelled", 0) + sum(result.status in {"cancelled", "timeout"} for result in workflow.results)
+                state.metrics["max_concurrent_children"] = max(state.metrics.get("max_concurrent_children", 0), workflow.max_concurrent)
+                observation = Observation(
+                    kind="command_result" if workflow.status == "completed" else "command_error",
+                    stdout_preview=json.dumps(workflow.summary_observation(), ensure_ascii=False),
+                    message="Workflow summary observation.",
+                )
+                trajectory.append(TrajectoryStep(action=turn.action, observation=observation, state_snapshot=state_snapshot_text(state)))
+                state.last_observation = observation
+                self.trace.record("workflow_summary_observation", state, workflow_id=workflow.workflow_id, observation=workflow.summary_observation())
+                self.session.save(state)
+                self._checkpoint(state, trajectory, "workflow_completed")
                 continue
 
             outcome = self.action_handler.handle(turn.action, state)
