@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +75,12 @@ class DockerSandboxRunner:
                     f"type=bind,source={artifacts_dir.resolve()},target=/workspace/.minicc_artifacts,readonly",
                 ]
             )
+        if sys.platform != "win32":
+            # --cap-drop ALL removes CAP_DAC_OVERRIDE, so even root inside is
+            # bound by host ownership and cannot write owner-owned workspaces
+            # (verified on GitHub runners: root EACCES, owner works). Run as
+            # the invoking user so sandbox access matches the workspace owner.
+            command.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
         command.extend(
             [
             "--network",

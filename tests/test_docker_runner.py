@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -44,6 +45,11 @@ def test_docker_runner_start_uses_restricted_container_args(monkeypatch, tmp_pat
     assert "ALL" in command
     assert "--security-opt" in command
     assert "no-new-privileges" in command
+    if sys.platform != "win32":
+        # Sandbox must run as the workspace owner: with --cap-drop ALL even
+        # root is bound by host ownership (GitHub runners reproduced EACCES).
+        user_index = command.index("--user")
+        assert command[user_index + 1] == f"{os.getuid()}:{os.getgid()}"
     assert "python:test" in command
     assert any(str(tmp_path.resolve()) in item for item in command)
     assert any("target=/workspace/.minicc_artifacts,readonly" in item for item in command)
