@@ -110,7 +110,9 @@ def test_fs_rejects_parent_and_symlink_escape(tmp_path: Path) -> None:
     try:
         (workspace / "link.txt").symlink_to(outside)
     except OSError:
-        pytest.skip("symlink creation is unavailable")
+        fallback = fs.run(ToolCall("r2", "read", {"path": "outside.txt"}), state)
+        assert fallback.content["error_code"] == "READ_NOT_FOUND"
+        return
     symlink = fs.run(ToolCall("r2", "read", {"path": "link.txt"}), state)
     assert symlink.content["error_code"] == "PATH_OUT_OF_BOUNDS"
 

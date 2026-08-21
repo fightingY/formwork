@@ -41,7 +41,7 @@ M6: Eval runner、Web trace viewer、文档与面试示例
 
 ## 当前稳定版本：Stable V3.2
 
-当前发布版本为 `3.2.0`。V3.2 将目标相关 Skill catalog 与 commit-bound Feedback rules 的
+当前发布版本为 `3.6.0`。V3.2 将目标相关 Skill catalog 与 commit-bound Feedback rules 的
 确定性选择升格为 stable。Stable V3.1.1 的 CI、覆盖率、lint、类型检查、构建检查和发布治理继续
 生效。底层 Harness
 继续继承 Stable V3.0：固定 C01/C02/C03/C04/C09 系统矩阵在执行提交

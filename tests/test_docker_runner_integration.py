@@ -9,11 +9,6 @@ import pytest
 from minicc.core.protocol import BashAction
 from minicc.sandbox.docker_runner import DockerSandboxConfig, DockerSandboxRunner
 
-pytestmark = pytest.mark.skipif(
-    os.getenv("MINICC_DOCKER_INTEGRATION") != "1",
-    reason="set MINICC_DOCKER_INTEGRATION=1 to run real Docker tests",
-)
-
 
 def _docker_available() -> bool:
     if shutil.which("docker") is None:
@@ -30,10 +25,7 @@ def _docker_available() -> bool:
     return True
 
 
-pytestmark = [
-    pytestmark,
-    pytest.mark.skipif(not _docker_available(), reason="Docker daemon is unavailable"),
-]
+pytestmark = pytest.mark.skipif(not _docker_available(), reason="Docker daemon is unavailable")
 
 
 @pytest.fixture
