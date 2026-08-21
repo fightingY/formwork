@@ -1,3 +1,4 @@
+import os
 import subprocess
 
 import pytest
@@ -74,6 +75,10 @@ def test_docker_runner_mounts_readonly_root_and_only_declared_writable_paths(mon
     assert any("target=/workspace/src/" in mount and "readonly" not in mount for mount in mounts)
     assert any("target=/workspace/ONBOARDING.md" in mount and "readonly" not in mount for mount in mounts)
     assert (tmp_path / "ONBOARDING.md").exists()
+    # Declared writable paths must be writable for any container uid: the
+    # sandbox drops all capabilities, so host permission bits are enforced.
+    assert os.stat(tmp_path / "ONBOARDING.md").st_mode & 0o222 == 0o222
+    assert os.stat(tmp_path / "src").st_mode & 0o222 == 0o222
 
 
 def test_docker_runner_exec_uses_bash_lc(monkeypatch) -> None:

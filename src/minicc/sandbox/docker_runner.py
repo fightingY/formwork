@@ -246,10 +246,20 @@ def _prepare_writable_mount(workspace_dir: Path, relative_path: str) -> Path:
     if target != root and root not in target.parents:
         raise ValueError(f"Writable path escapes workspace: {relative_path}")
     if target.exists():
+        _grant_container_write_access(target)
         return target
     if relative_path.endswith("/"):
         target.mkdir(parents=True, exist_ok=True)
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.touch(exist_ok=True)
+    _grant_container_write_access(target)
     return target
+
+
+def _grant_container_write_access(path: Path) -> None:
+    # Containers run with --cap-drop ALL, so even root inside is bound by host
+    # permission bits. Linux bind mounts enforce them (GitHub runners), while
+    # Docker Desktop on Windows masks ownership — make declared writable paths
+    # writable for any container uid on both.
+    path.chmod(0o777 if path.is_dir() else 0o666)
