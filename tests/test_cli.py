@@ -15,7 +15,7 @@ from minicc.config import (
     BudgetSettings,
     ContextSettings,
     PolicySettings,
-    ProviderSettings,
+    ProviderRoute,
     SandboxSettings,
     Settings,
 )
@@ -60,6 +60,30 @@ class FakeLoop:
         return type("LoopResult", (), {"state": state})()
 
 
+def _settings(**overrides) -> Settings:
+    """Build V4.1-schema settings with one valid default route.
+
+    ``_build_loop`` reads ``settings.default_route`` (json_mode, child route) and
+    report commands read ``_provider_summary``, so the default route must resolve.
+    """
+    route = ProviderRoute(
+        name="default",
+        base_url="https://example.test/v1",
+        api_key="key",
+        model="model",
+    )
+    kwargs = {
+        "providers": {"default": route},
+        "default_provider": "default",
+        "sandbox": SandboxSettings(),
+        "budget": BudgetSettings(),
+        "context": ContextSettings(),
+        "policy": PolicySettings(),
+    }
+    kwargs.update(overrides)
+    return Settings(**kwargs)
+
+
 def test_reconfigure_std_streams_allows_emoji_on_gbk_console(monkeypatch) -> None:
     # A Windows console defaults to the GBK codec, which cannot encode the
     # emoji that model-generated final answers sometimes contain. Without the
@@ -84,13 +108,7 @@ def test_reconfigure_std_streams_allows_emoji_on_gbk_console(monkeypatch) -> Non
 
 def test_run_command_fake_provider_writes_complete_evidence_bundle(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    settings = Settings(
-        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
-        sandbox=SandboxSettings(),
-        budget=BudgetSettings(),
-        context=ContextSettings(),
-        policy=PolicySettings(),
-    )
+    settings = _settings()
     provider = FakeProvider(
         [
             '{"type":"bash","command":"echo ok","purpose":"smoke test"}',
@@ -137,13 +155,7 @@ def test_run_source_dir_keeps_external_repository_unchanged(tmp_path, monkeypatc
     (source_root / "pom.xml").write_text("<project />\n", encoding="utf-8")
     original = (source_root / "pom.xml").read_bytes()
     monkeypatch.chdir(harness_root)
-    settings = Settings(
-        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
-        sandbox=SandboxSettings(),
-        budget=BudgetSettings(),
-        context=ContextSettings(),
-        policy=PolicySettings(),
-    )
+    settings = _settings()
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(
         cli,
@@ -174,13 +186,7 @@ def test_run_source_dir_keeps_external_repository_unchanged(tmp_path, monkeypatc
 
 def test_run_command_binds_completion_verifier(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    settings = Settings(
-        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
-        sandbox=SandboxSettings(),
-        budget=BudgetSettings(),
-        context=ContextSettings(),
-        policy=PolicySettings(),
-    )
+    settings = _settings()
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(
         cli,
@@ -227,13 +233,7 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
         "        expect_exit_code: 0\n",
         encoding="utf-8",
     )
-    settings = Settings(
-        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
-        sandbox=SandboxSettings(),
-        budget=BudgetSettings(),
-        context=ContextSettings(),
-        policy=PolicySettings(),
-    )
+    settings = _settings()
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(
         cli,
@@ -536,17 +536,7 @@ def test_cache_utilization_parser_collects_exact_round_inputs(tmp_path) -> None:
 
 def test_cache_experiment_loop_disables_mutable_feedback_memory(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    settings = Settings(
-        provider=ProviderSettings(
-            base_url="https://example.test/v1",
-            api_key="key",
-            model="model",
-        ),
-        sandbox=SandboxSettings(),
-        budget=BudgetSettings(),
-        context=ContextSettings(prompt_layout="append"),
-        policy=PolicySettings(),
-    )
+    settings = _settings(context=ContextSettings(prompt_layout="append"))
     state = RunState.start(
         "cache experiment",
         prompt_namespace="cache-experiment/round-1",
@@ -564,17 +554,7 @@ def test_cache_experiment_loop_disables_mutable_feedback_memory(tmp_path, monkey
 
 def test_cache_probe_command_writes_canonical_probe_bundle(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    settings = Settings(
-        provider=ProviderSettings(
-            base_url="https://example.test/v1",
-            api_key="key",
-            model="model",
-        ),
-        sandbox=SandboxSettings(),
-        budget=BudgetSettings(),
-        context=ContextSettings(),
-        policy=PolicySettings(),
-    )
+    settings = _settings()
     provider = FakeProvider(['{"type":"bash","command":"true"}'] * 5)
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(cli, "_build_provider_or_print_error", lambda loaded: provider)
@@ -796,13 +776,7 @@ def test_resume_command_uses_normal_settings_after_approval(tmp_path, monkeypatc
     state.approvals.append({"status": "approved", "action": "echo ok"})
     save_run_state(state)
 
-    settings = Settings(
-        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
-        sandbox=SandboxSettings(),
-        budget=BudgetSettings(),
-        context=ContextSettings(),
-        policy=PolicySettings(),
-    )
+    settings = _settings()
     loop_calls = []
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(cli, "_build_provider_or_print_error", lambda loaded: FakeProvider())
@@ -840,13 +814,7 @@ def test_resume_command_denial_terminates_without_agent_loop(tmp_path, monkeypat
     state.approvals.append({"status": "denied", "reason": "too risky", "action": "rm -r tmp_build"})
     save_run_state(state)
 
-    settings = Settings(
-        provider=ProviderSettings(base_url="https://example.test/v1", api_key="key", model="model"),
-        sandbox=SandboxSettings(),
-        budget=BudgetSettings(),
-        context=ContextSettings(),
-        policy=PolicySettings(),
-    )
+    settings = _settings()
     loop_calls = []
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(cli, "_build_provider_or_print_error", lambda loaded: FakeProvider())
@@ -1044,18 +1012,10 @@ def test_v212_eval_rejects_external_fixture_before_provider(
             "assertions: []\n",
             encoding="utf-8",
         )
-    settings = Settings(
-        provider=ProviderSettings(
-            base_url="https://example.test/v1",
-            api_key="key",
-            model="model",
-        ),
+    settings = _settings(
         sandbox=SandboxSettings(
             image="python@sha256:" + ("a" * 64),
         ),
-        budget=BudgetSettings(),
-        context=ContextSettings(),
-        policy=PolicySettings(),
     )
     provider_calls = []
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
@@ -1166,5 +1126,6 @@ def test_cleanup_command_defaults_to_dry_run_and_apply_uses_same_candidate(tmp_p
     assert not run_dir.exists()
 
 
-def test_cli_version_matches_v36_package() -> None:
-    assert __version__ == "3.6.0"
+def test_cli_version_is_prerelease_dev() -> None:
+    # V4.1 开发期仍是 pre-release（.dev0），归档时再定正式版本号。
+    assert __version__ == "3.7.0.dev0"

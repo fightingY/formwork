@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -11,7 +12,7 @@ from minicc.core.context import ContextBuilder, state_snapshot_text
 from minicc.core.lifecycle import RunLifecycle
 from minicc.core.protocol import BashAction, DelegateAction, ToolCallsAction
 from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
-from minicc.core.runner import ModelTurnConfig, ModelTurnRunner
+from minicc.core.runner import ModelTurn, ModelTurnConfig, ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.core.tooling import ToolCallScheduler
@@ -24,6 +25,28 @@ from minicc.trace.recorder import TraceRecorder
 class BashExecutor(Protocol):
     def run(self, action: BashAction, state: RunState) -> Observation:
         ...
+
+
+class TurnProvider(Protocol):
+    """回合一层抽象：AgentLoop 只依赖这个接口，不关心重试/降级编排。
+
+    V4.1 把重试（core/retry.py）与最外层降级（core/failover.py）做成两个独立的
+    编排层，它们都满足本接口；没有编排时用 ``DirectTurnProvider`` 直连 runner 的
+    单次 attempt。
+    """
+
+    def next_turn(self, state: RunState, messages: list[dict[str, str]]) -> ModelTurn:
+        ...
+
+
+class DirectTurnProvider:
+    """默认 TurnProvider：单次 attempt 直连 runner，不做重试/降级。"""
+
+    def __init__(self, runner: ModelTurnRunner) -> None:
+        self._runner = runner
+
+    def next_turn(self, state: RunState, messages: list[dict[str, str]]) -> ModelTurn:
+        return self._runner.next_turn(state, messages)
 
 
 @dataclass(frozen=True)
@@ -60,6 +83,7 @@ class AgentLoop:
         completion_verifier: CompletionVerifier | None = None,
         tool_scheduler: ToolCallScheduler | None = None,
         workflow_coordinator: WorkflowCoordinator | None = None,
+        turn_provider_factory: Callable[[ModelTurnRunner], TurnProvider] | None = None,
     ) -> None:
         self.config = config or LoopConfig()
         self.session = session or SessionManager()
@@ -77,6 +101,13 @@ class AgentLoop:
                 max_tool_calls_per_step=self.config.max_tool_calls_per_step,
             ),
             trace=self.trace,
+        )
+        # 回合抽象：默认直连 runner；retry/failover 执行器经 ``turn_provider_factory``
+        # 在构造 runner 之后注入，仍复用同一个 runner 的协议解析/指标累计。
+        self.turn_provider: TurnProvider = (
+            turn_provider_factory(self.turn_runner)
+            if turn_provider_factory is not None
+            else DirectTurnProvider(self.turn_runner)
         )
         self.action_handler = ActionHandler(
             executor,
@@ -120,10 +151,11 @@ class AgentLoop:
             self.context_builder.maybe_compact(state, trajectory)
             messages = self.context_builder.build_messages(state, trajectory)
             try:
-                turn = self.turn_runner.next_turn(state, messages)
+                turn = self.turn_provider.next_turn(state, messages)
             except ProviderError as exc:
                 state.metrics["provider_errors"] = state.metrics.get("provider_errors", 0) + 1
-                self.trace.record("provider_error", state, error=str(exc))
+                state.metrics["provider_last_error_code"] = exc.failure.code
+                self.trace.record("provider_error", state, error=str(exc), code=exc.failure.code)
                 self.session.fail(state, f"Run failed because the model provider failed: {exc}")
                 break
             if turn.observation is not None:

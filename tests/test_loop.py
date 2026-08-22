@@ -4,7 +4,14 @@ from pathlib import Path
 
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.protocol import BashAction
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, ProviderError
+from minicc.core.provider import (
+    TIMEOUT,
+    CompletionOptions,
+    LlmFailure,
+    ModelResponse,
+    ModelUsage,
+    ProviderError,
+)
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState
 from minicc.policy.base import PolicyChain, PolicyDecision
@@ -106,7 +113,12 @@ def test_loop_fails_after_protocol_error_threshold(tmp_path) -> None:
 def test_loop_persists_provider_failure_instead_of_raising(tmp_path) -> None:
     class FailingProvider:
         def complete(self, messages, *, options=None):
-            raise ProviderError("Provider HTTP request failed: ReadTimeout")
+            raise ProviderError(
+                failure=LlmFailure(
+                    message="Provider HTTP request failed: ReadTimeout",
+                    code=TIMEOUT,
+                )
+            )
 
     state = RunState.start("Handle provider timeout")
     trace_path = tmp_path / "runs" / state.run_id / "trace.jsonl"

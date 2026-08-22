@@ -1,49 +1,37 @@
-from minicc.config import load_dotenv_file, load_settings, load_yaml_config
+import os
+
+import pytest
+
+from minicc.config import (
+    MisconfigurationError,
+    load_dotenv_file,
+    load_settings,
+    load_yaml_config,
+)
 
 
-def test_load_dotenv_file_sets_missing_values(tmp_path, monkeypatch) -> None:
-    monkeypatch.delenv("MINICC_BASE_URL", raising=False)
-    monkeypatch.delenv("MINICC_API_KEY", raising=False)
-    monkeypatch.delenv("MINICC_MODEL", raising=False)
-    monkeypatch.delenv("MINICC_TEMPERATURE", raising=False)
-    dotenv = tmp_path / ".env"
-    dotenv.write_text(
-        "\n".join(
-            [
-                "MINICC_BASE_URL=https://example.test/v1",
-                "MINICC_API_KEY='secret-key'",
-                'MINICC_MODEL="demo-model"',
-                "MINICC_TEMPERATURE=0.2",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    load_dotenv_file(dotenv)
-    settings = load_settings()
-
-    assert settings.base_url == "https://example.test/v1"
-    assert settings.api_key == "secret-key"
-    assert settings.model == "demo-model"
-    assert settings.temperature == 0.2
+def _minimal_providers() -> str:
+    return """
+providers:
+  primary:
+    base_url: https://provider.test/v1
+    model: test-model
+default_provider: primary
+"""
 
 
-def test_env_vars_override_dotenv_file(tmp_path, monkeypatch) -> None:
+def test_load_dotenv_file_does_not_override_existing_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("MINICC_API_KEY", "from-env")
     dotenv = tmp_path / ".env"
     dotenv.write_text("MINICC_API_KEY=from-file", encoding="utf-8")
 
     load_dotenv_file(dotenv)
 
-    assert load_settings().api_key == "from-env"
+    assert os.environ["MINICC_API_KEY"] == "from-env"
 
 
-def test_load_settings_reads_minicc_yaml(tmp_path, monkeypatch) -> None:
+def test_load_settings_reads_providers_and_sections(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("MINICC_BASE_URL", raising=False)
-    monkeypatch.delenv("MINICC_API_KEY", raising=False)
-    monkeypatch.delenv("MINICC_MODEL", raising=False)
-    monkeypatch.delenv("MINICC_TEMPERATURE", raising=False)
     (tmp_path / ".env").write_text("MINICC_API_KEY=from-dotenv\n", encoding="utf-8")
     (tmp_path / "minicc.yaml").write_text(
         """
@@ -63,18 +51,34 @@ context:
   semantic_max_input_chars: 4096
   retention_markers: [src/app.py, ROOT_CAUSE]
   prompt_layout: append
-provider:
-  base_url: https://provider.test/v1
-  model: test-model
-  temperature: 0.7
-  max_retries: 4
-  stream: true
-  include_usage: false
-  json_mode: false
+providers:
+  primary:
+    base_url: https://provider.test/v1
+    model: test-model
+    display_name: Primary Upstream
+    headers:
+      X-Trace: abc
+    json_mode: false
+    timeout_ms: 30000
+    retry_policy:
+      max_retries: 4
+      backoff:
+        initial_delay_ms: 250
+  backup:
+    base_url: https://backup.test/v1
+    model: backup-model
+default_provider: primary
+failover:
+  chain: [primary, backup]
+  on: [RATE_LIMIT, TIMEOUT]
+  max_hops: 1
+child:
+  provider: backup
+  model: child-model
 policy:
   require_approval_for_network: false
 project:
-  milestone: stable-v2.1
+  milestone: v4.1
 workspace:
   ignored_allowlist:
     - generated/runtime.json
@@ -85,14 +89,29 @@ workspace:
 
     settings = load_settings()
 
-    assert settings.api_key == "from-dotenv"
-    assert settings.provider.base_url == "https://provider.test/v1"
-    assert settings.provider.model == "test-model"
-    assert settings.provider.temperature == 0.7
-    assert settings.provider.stream is True
-    assert settings.provider.include_usage is False
-    assert settings.provider.json_mode is False
-    assert settings.provider.max_retries == 4
+    route = settings.default_route
+    assert settings.default_provider == "primary"
+    assert route.name == "primary"
+    assert route.base_url == "https://provider.test/v1"
+    assert route.model == "test-model"
+    assert route.api_key == "from-dotenv"
+    assert route.display_name == "Primary Upstream"
+    assert route.effective_display_name == "Primary Upstream"
+    assert route.headers == {"X-Trace": "abc"}
+    assert route.json_mode is False
+    assert route.timeout_ms == 30000
+    assert route.retry_policy.max_retries == 4
+    assert route.retry_policy.backoff.initial_delay_ms == 250
+
+    assert settings.providers["backup"].model == "backup-model"
+    assert settings.failover is not None
+    assert settings.failover.chain == ("primary", "backup")
+    assert settings.failover.on == ("RATE_LIMIT", "TIMEOUT")
+    assert settings.failover.max_hops == 1
+    assert settings.child is not None
+    assert settings.child.provider == "backup"
+    assert settings.child.model == "child-model"
+
     assert settings.sandbox.image == "python:3.12-slim"
     assert settings.sandbox.cpus == "2"
     assert settings.sandbox.memory == "2g"
@@ -107,33 +126,183 @@ workspace:
     assert settings.context.retention_markers == ("src/app.py", "ROOT_CAUSE")
     assert settings.context.prompt_layout == "append"
     assert settings.policy.require_approval_for_network is False
-    assert settings.project.milestone == "stable-v2.1"
+    assert settings.project.milestone == "v4.1"
     assert settings.workspace.ignored_allowlist == (
         "generated/runtime.json",
         "fixtures/*.db",
     )
 
 
-def test_env_overrides_minicc_yaml_provider_fields(tmp_path, monkeypatch) -> None:
+def test_load_settings_single_route_defaults_without_explicit_name(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MINICC_BASE_URL", "https://env.test/v1")
-    monkeypatch.setenv("MINICC_MODEL", "env-model")
-    monkeypatch.setenv("MINICC_TEMPERATURE", "0.1")
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
     (tmp_path / "minicc.yaml").write_text(
         """
-provider:
-  base_url: https://yaml.test/v1
-  model: yaml-model
-  temperature: 0.9
+providers:
+  only:
+    base_url: https://provider.test/v1
+    model: test-model
 """,
         encoding="utf-8",
     )
 
     settings = load_settings()
 
-    assert settings.provider.base_url == "https://env.test/v1"
-    assert settings.provider.model == "env-model"
-    assert settings.provider.temperature == 0.1
+    assert settings.default_provider == "only"
+    assert settings.default_route.name == "only"
+
+
+def test_load_settings_requires_default_provider_for_multiple_routes(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://a.test/v1
+    model: a
+  backup:
+    base_url: https://b.test/v1
+    model: b
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MisconfigurationError, match="default_provider"):
+        load_settings()
+
+
+def test_load_settings_env_override_default_route(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    monkeypatch.setenv("MINICC_MODEL", "env-model")
+    monkeypatch.setenv("MINICC_PROVIDER_TIMEOUT_SEC", "45")
+    monkeypatch.setenv("MINICC_PROVIDER", "backup")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://a.test/v1
+    model: yaml-model
+  backup:
+    base_url: https://b.test/v1
+    model: backup-model
+default_provider: primary
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.default_provider == "backup"
+    assert settings.default_route.model == "env-model"
+    assert settings.default_route.timeout_ms == 45000
+
+
+@pytest.mark.parametrize(
+    ("yaml_text", "message"),
+    [
+        (
+            "providers:\n  primary:\n    model: test-model\n",
+            "base_url",
+        ),
+        (
+            "providers:\n  primary:\n    base_url: https://a.test/v1\n    model: m\n    bogus: 1\n",
+            "unknown keys",
+        ),
+    ],
+)
+def test_load_settings_fail_fast_on_invalid_providers(
+    tmp_path, monkeypatch, yaml_text, message
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(yaml_text, encoding="utf-8")
+
+    with pytest.raises(MisconfigurationError, match=message):
+        load_settings()
+
+
+def test_load_settings_missing_model_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(
+        "providers:\n  primary:\n    base_url: https://a.test/v1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MisconfigurationError, match="model"):
+        load_settings()
+
+
+def test_load_settings_requires_api_key(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINICC_API_KEY", raising=False)
+    (tmp_path / "minicc.yaml").write_text(_minimal_providers(), encoding="utf-8")
+
+    with pytest.raises(MisconfigurationError, match="API key"):
+        load_settings()
+
+
+def test_load_settings_failover_unknown_route_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://a.test/v1
+    model: m
+default_provider: primary
+failover:
+  chain: [primary, ghost]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MisconfigurationError, match="unknown route"):
+        load_settings()
+
+
+def test_load_settings_failover_unknown_code_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://a.test/v1
+    model: m
+failover:
+  chain: [primary]
+  on: [NOT_A_CODE]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MisconfigurationError, match="unknown codes"):
+        load_settings()
+
+
+def test_load_settings_child_unknown_route_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://a.test/v1
+    model: m
+child:
+  provider: ghost
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MisconfigurationError, match="unknown route"):
+        load_settings()
 
 
 def test_load_yaml_config_rejects_non_mapping(tmp_path) -> None:
@@ -150,8 +319,9 @@ def test_load_yaml_config_rejects_non_mapping(tmp_path) -> None:
 
 def test_load_settings_rejects_unknown_prompt_layout(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
     (tmp_path / "minicc.yaml").write_text(
-        "context:\n  prompt_layout: typo\n",
+        _minimal_providers() + "context:\n  prompt_layout: typo\n",
         encoding="utf-8",
     )
 

@@ -15,7 +15,6 @@ from minicc.config import (
     BudgetSettings,
     ContextSettings,
     PolicySettings,
-    ProviderSettings,
     SandboxSettings,
     Settings,
 )
@@ -905,7 +904,6 @@ context:
         encoding="utf-8",
     )
     settings = Settings(
-        provider=ProviderSettings(),
         sandbox=SandboxSettings(),
         budget=BudgetSettings(max_bash_actions=20, max_action_timeout_sec=30),
         context=ContextSettings(),
@@ -932,7 +930,6 @@ def test_ordinary_eval_denies_network_instead_of_waiting_for_approval(tmp_path) 
         encoding="utf-8",
     )
     settings = Settings(
-        provider=ProviderSettings(),
         sandbox=SandboxSettings(),
         budget=BudgetSettings(),
         context=ContextSettings(),

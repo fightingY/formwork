@@ -46,16 +46,24 @@ class ModelTurnRunner:
         self,
         state: RunState,
         messages: list[dict[str, str]],
+        *,
+        provider: ModelProvider | None = None,
+        attempt_count: int = 1,
+        retry_reasons: tuple[str, ...] = (),
     ) -> ModelTurn:
-        state.metrics["provider_name"] = self.provider_name
-        response = self.provider.complete(messages, options=self.config.model_options)
+        # ``provider`` 是 retry/failover 执行器在重试不同 route 时注入的适配器；
+        # 缺省回落到构造时绑定的默认适配器。每次调用按实际适配器覆盖 provider 标识。
+        active_provider = provider or self.provider
+        state.metrics["provider_name"] = str(
+            getattr(active_provider, "provider_name", type(active_provider).__name__)
+        )
+        response = active_provider.complete(messages, options=self.config.model_options)
         state.metrics["turns"] += 1
         _accumulate_response_identity(state, response.raw)
         _accumulate_usage(
             state,
             response.usage,
             response.latency_ms,
-            attempt_count=response.attempt_count,
         )
         if self.trace is not None:
             self.trace.model_response(
@@ -63,8 +71,8 @@ class ModelTurnRunner:
                 response.text,
                 response.latency_ms,
                 response.usage,
-                attempt_count=response.attempt_count,
-                retry_reasons=response.retry_reasons,
+                attempt_count=attempt_count,
+                retry_reasons=retry_reasons,
             )
 
         try:
@@ -117,8 +125,6 @@ def _accumulate_usage(
     state: RunState,
     usage: ModelUsage,
     latency_ms: int,
-    *,
-    attempt_count: int = 1,
 ) -> None:
     metric_map = {
         "prompt_tokens": usage.prompt_tokens,
@@ -163,14 +169,8 @@ def _accumulate_usage(
             observed_prompt_tokens=observed_prompt_tokens,
         )
     state.metrics["latency_ms"] = state.metrics.get("latency_ms", 0) + latency_ms
-    normalized_attempts = max(int(attempt_count or 1), 1)
-    state.metrics["provider_request_attempts"] = (
-        int(state.metrics.get("provider_request_attempts", 0)) + normalized_attempts
-    )
-    if normalized_attempts > 1:
-        state.metrics["provider_retried_requests"] = (
-            int(state.metrics.get("provider_retried_requests", 0)) + 1
-        )
+    # attempt 计数（provider_request_attempts / provider_retried_requests）不再在这里累计：
+    # 传输重试上移到 core/retry.py 的成功返回处统计，此处只记录单次 attempt 的用量。
     _record_cache_request(state, usage, latency_ms=latency_ms)
 
 

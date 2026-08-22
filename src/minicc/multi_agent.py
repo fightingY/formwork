@@ -19,7 +19,11 @@ from uuid import uuid4
 
 from minicc.config import load_settings
 from minicc.core.protocol import DelegateAction, DelegateTask
-from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider, ProviderError
+from minicc.core.provider import (
+    CompletionOptions,
+    ProviderError,
+    ProviderRegistry,
+)
 from minicc.prompts.child_agent import child_agent_system_prompt
 from minicc.runtime import ChildCapabilities, WorkspaceWriteLease
 
@@ -297,19 +301,23 @@ def childrun_main(stdin: Any, stdout: Any) -> int:
 
 
 def _complete_child_model(task: dict[str, Any], child_run_id: str) -> dict[str, Any]:
-    """Execute one real child model turn using the configured child provider."""
+    """Execute one real child model turn using the configured child route.
+
+    ``settings.child`` 指向某个已注册 route（缺省为默认 route），并可选用
+    ``model`` 覆盖其模型。适配器由 ``ProviderRegistry`` 构造（单次 attempt）。
+    """
     settings = load_settings()
-    child = settings.child_provider or settings.provider
-    if not child.base_url or not child.api_key or not child.model:
-        return {
-            "task_id": str(task.get("id", "child")), "child_run_id": child_run_id,
-            "status": "failed", "role": str(task.get("role", "scout")),
-            "summary": "", "findings": [], "artifacts": [], "usage": {},
-            "failure": {"code": "CHILD_PROVIDER_CONFIG_MISSING"},
-        }
-    provider = OpenAICompatibleProvider(
-        base_url=child.base_url, api_key=child.api_key, model=child.model,
-        timeout_sec=child.timeout_sec, max_retries=child.max_retries,
+    route = settings.providers[settings.child.provider] if settings.child else settings.default_route
+    model = (settings.child.model if settings.child and settings.child.model else route.model)
+    provider = ProviderRegistry().build(
+        route_name=route.name,
+        base_url=route.base_url,
+        api_key=route.api_key,
+        model=model,
+        timeout_ms=route.timeout_ms,
+        headers=route.headers or None,
+        provider_name=route.effective_display_name,
+        stream_idle_timeout_ms=route.stream_idle_timeout_ms,
     )
     role = str(task.get("role", "scout"))
     goal = str(task.get("goal", ""))
@@ -318,8 +326,8 @@ def _complete_child_model(task: dict[str, Any], child_run_id: str) -> dict[str, 
         response = provider.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": goal}],
             options=CompletionOptions(
-                temperature=child.temperature, stream=child.stream,
-                include_usage=child.include_usage, json_mode=child.json_mode,
+                temperature=0.0, stream=False,
+                include_usage=True, json_mode=route.json_mode,
             ),
         )
         try:
@@ -341,7 +349,7 @@ def _complete_child_model(task: dict[str, Any], child_run_id: str) -> dict[str, 
         return {
             "task_id": str(task.get("id", "child")), "child_run_id": child_run_id,
             "status": "failed", "role": role, "summary": "", "findings": [], "artifacts": [], "usage": {},
-            "failure": {"code": "CHILD_PROVIDER_ERROR", "message": str(exc)},
+            "failure": {"code": "CHILD_PROVIDER_ERROR", "code_hint": exc.failure.code, "message": str(exc)},
         }
     finally:
         provider.close()

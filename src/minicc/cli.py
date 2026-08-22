@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import Any, cast
 
 from minicc import __version__
 from minicc.config import (
@@ -18,6 +18,7 @@ from minicc.config import (
     CompactionStrategy,
     PolicySettings,
     PromptLayout,
+    ProviderRoute,
     SandboxSettings,
     Settings,
     load_settings,
@@ -33,7 +34,7 @@ from minicc.core.ledger import (
 )
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.project_context import inspect_repository, write_repository_profile
-from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider
+from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider, ProviderRegistry
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
@@ -742,7 +743,7 @@ def run_command(args: argparse.Namespace) -> int:
             settings=settings,
             session=session,
             state=state,
-            stream=settings.provider.stream if args.stream is None else args.stream,
+            stream=args.stream,
             interrupt_after_steps=getattr(args, "interrupt_after_steps", None),
             completion_verifier=completion_verifier,
         )
@@ -936,32 +937,63 @@ def _print_run_result(state: RunState, run_dir: Path | None) -> None:
         print(state.state_summary, file=sys.stderr)
 
 
-def _build_provider_or_print_error(settings: Settings) -> OpenAICompatibleProvider | None:
-    missing = [
-        name
-        for name, value in {
-            "MINICC_BASE_URL": settings.base_url,
-            "MINICC_API_KEY": settings.api_key,
-            "MINICC_MODEL": settings.model,
-        }.items()
-        if not value
-    ]
-    if missing:
-        print(
-            "Missing provider configuration: "
-            + ", ".join(missing)
-            + "\nSet these values in .env / environment variables and minicc.yaml.",
-            file=sys.stderr,
-        )
-        return None
+def _route_provider(route: ProviderRoute) -> OpenAICompatibleProvider:
+    """Construct a single-attempt adapter for one route via the registry.
 
-    return OpenAICompatibleProvider(
-        base_url=settings.base_url or "",
-        api_key=settings.api_key or "",
-        model=settings.model or "",
-        timeout_sec=settings.provider.timeout_sec,
-        max_retries=settings.provider.max_retries,
+    The registry is the single factory surface for upstream adapters; route
+    fields become constructor arguments here, while per-route retry policy
+    stays on the route object for the retry executor to consume.
+    """
+    return ProviderRegistry().build(
+        route_name=route.name,
+        base_url=route.base_url,
+        api_key=route.api_key,
+        model=route.model,
+        timeout_ms=route.timeout_ms,
+        headers=route.headers or None,
+        provider_name=route.effective_display_name,
+        stream_idle_timeout_ms=route.stream_idle_timeout_ms,
     )
+
+
+def _build_provider_or_print_error(settings: Settings) -> OpenAICompatibleProvider | None:
+    route = settings.default_route
+    return _route_provider(route)
+
+
+def _child_route(settings: Settings) -> ProviderRoute:
+    child = settings.child
+    if child is None:
+        return settings.default_route
+    return settings.providers[child.provider]
+
+
+def _child_model(settings: Settings) -> str | None:
+    route = _child_route(settings)
+    if settings.child is not None and settings.child.model:
+        return settings.child.model
+    return route.model
+
+
+def _provider_summary(settings: Settings) -> dict[str, Any]:
+    """Aggregate the default route into the report-configuration contract keys.
+
+    V4.1 去掉扁平 provider 配置后，这些散落在多处 report configuration 里的
+    provider 元数据统一从默认 route 派生；temperature/stream/include_usage 不再有
+    配置字段，固定为 CompletionOptions 的缺省值。
+    """
+    route = settings.default_route
+    return {
+        "base_url": route.base_url,
+        "model": route.model,
+        "temperature": 0.0,
+        "stream": False,
+        "include_usage": True,
+        "json_mode": route.json_mode,
+        "provider_max_retries": route.retry_policy.max_retries,
+        "provider_timeout_sec": route.timeout_ms / 1000,
+        "cache_scope_sha256": _secret_fingerprint(route.api_key),
+    }
 
 
 def _attach_repository_context(
@@ -1076,12 +1108,12 @@ def _build_loop(
     if state is not None:
         state.metrics["profile"] = profile
         state.metrics["max_parallel_tool_calls"] = settings.tooling.max_parallel_tool_calls
-        state.metrics["child_model"] = settings.child_model if profile == "multi-agent-v4" else None
+        state.metrics["child_model"] = _child_model(settings) if profile == "multi-agent-v4" else None
     workflow_coordinator = None
     if profile == "multi-agent-v4":
-        child_settings = settings.child_provider or settings.provider
+        child_route = _child_route(settings)
         workflow_coordinator = WorkflowCoordinator(
-            SubprocessChildRunProvider(timeout_sec=child_settings.timeout_sec),
+            SubprocessChildRunProvider(timeout_sec=child_route.timeout_ms / 1000),
             max_concurrent_children=settings.tooling.max_parallel_tool_calls,
         )
     return AgentLoop(
@@ -1113,10 +1145,10 @@ def _build_loop(
             max_seconds=settings.budget.max_seconds,
             max_action_timeout_sec=settings.budget.max_action_timeout_sec,
             model_options=CompletionOptions(
-                temperature=settings.temperature,
-                stream=settings.provider.stream if stream is None else stream,
-                include_usage=settings.provider.include_usage,
-                json_mode=settings.provider.json_mode,
+                temperature=0.0,
+                stream=False if stream is None else stream,
+                include_usage=True,
+                json_mode=settings.default_route.json_mode,
             ),
             interrupt_after_steps=interrupt_after_steps,
             profile=profile,
@@ -1345,17 +1377,9 @@ def eval_command(args: argparse.Namespace) -> int:
         for case in selected_cases
     }
     configuration = {
-        "base_url": settings.base_url or "",
-        "model": settings.model or "",
-        "temperature": settings.temperature,
-        "stream": settings.provider.stream,
-        "include_usage": settings.provider.include_usage,
+        **_provider_summary(settings),
         "sandbox_mode": settings.sandbox.mode,
         "execute_local": bool(args.execute_local),
-        "json_mode": settings.provider.json_mode,
-        "provider_max_retries": settings.provider.max_retries,
-        "provider_timeout_sec": settings.provider.timeout_sec,
-        "cache_scope_sha256": _secret_fingerprint(settings.api_key),
         "docker_image": settings.sandbox.image,
         "git_commit": git_commit,
         "worktree_dirty": worktree_dirty,
@@ -1548,11 +1572,11 @@ def memory_eval_command(args: argparse.Namespace) -> int:
             + (" --execute-local" if args.execute_local else "")
             + (f" --milestone {milestone} --release-gate" if release_gate else "")
         ),
-        "base_url": settings.base_url or "",
-        "model": settings.model or "",
-        "temperature": settings.temperature,
-        "provider_timeout_sec": settings.provider.timeout_sec,
-        "provider_max_retries": settings.provider.max_retries,
+        "base_url": settings.default_route.base_url,
+        "model": settings.default_route.model,
+        "temperature": 0.0,
+        "provider_timeout_sec": settings.default_route.timeout_ms / 1000,
+        "provider_max_retries": settings.default_route.retry_policy.max_retries,
         "sandbox_mode": "local" if args.execute_local else settings.sandbox.mode,
         "docker_image": settings.sandbox.image,
         "git_commit": git_commit,
@@ -1802,15 +1826,7 @@ def cache_probe_command(args: argparse.Namespace) -> int:
         prompt_layout=prompt_layout,
     )
     configuration = {
-        "base_url": settings.base_url or "",
-        "model": settings.model or "",
-        "temperature": settings.temperature,
-        "stream": settings.provider.stream,
-        "include_usage": settings.provider.include_usage,
-        "json_mode": settings.provider.json_mode,
-        "provider_max_retries": settings.provider.max_retries,
-        "provider_timeout_sec": settings.provider.timeout_sec,
-        "cache_scope_sha256": _secret_fingerprint(settings.api_key),
+        **_provider_summary(settings),
         "git_commit": git_commit,
         "worktree_dirty": worktree_dirty,
         "release_gate": bool(args.release_gate),
@@ -1842,10 +1858,10 @@ def cache_probe_command(args: argparse.Namespace) -> int:
                 cache_sequence_id=args.cache_sequence_id,
                 context=context,
                 model_options=CompletionOptions(
-                    temperature=settings.temperature,
-                    stream=settings.provider.stream,
-                    include_usage=settings.provider.include_usage,
-                    json_mode=settings.provider.json_mode,
+                    temperature=0.0,
+                    stream=False,
+                    include_usage=True,
+                    json_mode=settings.default_route.json_mode,
                 ),
                 configuration=configuration,
                 milestone=milestone,
@@ -2020,7 +2036,10 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
 
     if case.sandbox_mode not in {"dev", "local"}:
         return Settings(
-            provider=settings.provider,
+            providers=settings.providers,
+            default_provider=settings.default_provider,
+            failover=settings.failover,
+            child=settings.child,
             sandbox=settings.sandbox,
             budget=budget,
             context=context,
@@ -2037,7 +2056,10 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
         network="bridge",
     )
     return Settings(
-        provider=settings.provider,
+        providers=settings.providers,
+        default_provider=settings.default_provider,
+        failover=settings.failover,
+        child=settings.child,
         sandbox=sandbox,
         budget=budget,
         context=context,
@@ -2531,7 +2553,7 @@ def meta_review_command(args: argparse.Namespace) -> int:
         implementation_commit, _ = _git_evidence(Path.cwd())
         result = MetaReviewer(
             provider,
-            model=settings.model or "",
+            model=settings.default_route.model,
             implementation_commit=implementation_commit,
         ).review_run(
             run_dir,

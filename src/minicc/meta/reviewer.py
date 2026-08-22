@@ -408,10 +408,8 @@ def _build_report(
             "schema_retry_count": len(schema_retry_reasons),
             "schema_retry_reasons": list(schema_retry_reasons),
             "latency_ms": sum(response.latency_ms for response in responses),
-            "attempt_count": sum(response.attempt_count for response in responses),
-            "retry_reasons": [
-                reason for response in responses for reason in response.retry_reasons
-            ],
+            "attempt_count": len(responses),
+            "retry_reasons": [],
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,

@@ -2,7 +2,6 @@ from minicc.config import (
     BudgetSettings,
     ContextSettings,
     PolicySettings,
-    ProviderSettings,
     SandboxSettings,
     Settings,
 )
@@ -157,7 +156,6 @@ def test_policy_chain_returns_first_blocking_decision() -> None:
 
 def test_policy_factory_always_includes_approval_policy() -> None:
     settings = Settings(
-        provider=ProviderSettings(),
         sandbox=SandboxSettings(),
         budget=BudgetSettings(),
         context=ContextSettings(),

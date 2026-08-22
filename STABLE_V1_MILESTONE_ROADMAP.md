@@ -1291,6 +1291,130 @@ V4 从 experimental 进入稳定声明必须同时满足：
 在 M7 之前，简历和 README 只能声明“experimental 多 Agent 编排和可验证执行合同”，不能把
 一次成功演示或计划中的 workflow 写成通用成功率。
 
+### V4.1：Provider 层重构与多上游降级契约（设计合同，尚未实现）
+
+目标：把单一 OpenAI 兼容适配器（`OpenAICompatibleProvider` + 扁平 `provider:` 块）重构为多
+route 注册表 + `LlmFailure` 归一化 + per-route `retryPolicy`（在失败步骤扩展点执行）+ 最外层
+降级链，解决「硅基流动额度不够 / 换上游成本高 / 失败不可归类 / 重试写死且隐藏在 adapter 内」。
+详细实施合同见本地不追踪文件
+[`docs/V4_1_PROVIDER_REFACTOR_PLAN.md`](docs/V4_1_PROVIDER_REFACTOR_PLAN.md)。路线图只冻结
+V4.1 的设计、实施阶段和验收门，不把计划能力写成已实现能力。
+
+#### V4.1 移植原则（对 deepseek-harness 的 `packages/llm` 设计）
+
+- **设计决策照搬，字段名不照抄**：留下 `dsh-llm`/`dsh-llm-pi-ai`/`dsh-llm-retry` 已经过论证与
+  测试的边界设计；字段名走 miniCC 自己的 snake_case，且只保留有消费方的子集。
+- **黄金参数矩阵照抄**：唯一照抄数值的是经测试的重试配置（2 次重试 / 500ms 初始延迟 / 10s
+  上限 / 10% 抖动 / 5 个暂时性 code），其出处为 dsh 笔记引用的 OpenCode / Pi / Codex。
+- **破坏性重构，不做兼容别名**：移除 `Settings.provider/base_url/api_key/model/temperature`
+  投影（不再保留为「默认 route 只读投影」），`cli.py` 约 15 处显示/指纹/指标填充显式改走
+  route 名与 registry。
+
+#### V4.1 设计边界
+
+- `complete()` 是**一次可见 attempt**；重试不在 adapter 内部完成（隐藏的 SDK 重试会成倍放大
+  预算，中间失败无法记进会话日志）。
+- `LlmFailure` 是 provider 无关、可 JSON 序列化的失败事实 `{message, code, status,
+  retry_after_ms, request_id}`，**不携带 `retryable`/`failover` 字段**——报事实的是适配器，
+  定动作的是策略。
+- `retryPolicy` 在 route 注册时**解析**、在 loop 的失败步骤扩展点（`loop.py:122` 的 `catch
+  ProviderError`）**执行**；每次重试由一个已关闭的失败步骤 + 持久 `llm/retry` 事件表示，
+  失败 attempt 不提交 assistant 消息、不虚增 turn 计数。
+- **跨 Provider 的路由选择权在最外层调度器**：框架通过 `LlmFailure` 提供标准降级契约；
+  `ProviderFailoverChain`（`core/failover.py`，可配置 `failover:` 块）消费该契约做跨 route 重路由，
+  而 `core/provider.py` 与 `ProviderRegistry` 内部**没有任何** routing/failover、不偷换模型
+  （一个 route = 一个 adapter 的不变量保留）。
+- 稳定 code 集合保持很小（`RATE_LIMIT/SERVER/TIMEOUT/TRANSPORT/EMPTY_RESPONSE` 为暂时性五码，
+  `AUTH/QUOTA/BAD_REQUEST/CONTEXT_OVERFLOW/ABORTED/UNKNOWN` 非暂时）；`QUOTA` 单列以稳定区分
+  「余额不足」与笼统 4xx。新增 code 需 fixture + 决策记录。
+
+#### V4.1-M0：合同冻结
+
+- 冻结 `LlmFailure` 稳定码清单与 HTTP/异常映射、`RetryPolicy` schema 与黄金默认、`providers`
+  dict + `failover` + `child` 的 schema 与加载期 fail-fast 错误语义（未知字段、空 `base_url`、
+  `default_provider`/`failover.chain` 指向不存在 route、顶层 `max_retries` 残留等一律点名报错）、
+  `minicc models <route>` 输出契约。
+- 验收：设计审查通过；不写未冻结生产字段；`ruff`/`mypy`/`pytest` 仍绿（尚无代码改动）。
+
+#### V4.1-M1：`LlmFailure` 与 `complete()` 单次 attempt
+
+- `provider.py` 引入 `LlmFailure`，`ProviderError` 改 `failure: LlmFailure`；删除 `complete()`
+  内部重试循环，回归一次 `_post_json`/`_complete_stream`。
+- HTTP 分支映射 401/403→`AUTH`、402/额度签名→`QUOTA`、429→`RATE_LIMIT`、5xx→`SERVER`、
+  413/context 签名→`CONTEXT_OVERFLOW`；`Retry-After` 秒/日期/ms 解析 `retry_after_ms`、读请求 id；
+  watchdog→`TIMEOUT`、`httpx.TransportError`→`TRANSPORT`、空正文→`EMPTY_RESPONSE`。
+- `ModelResponse` 移除 `attempt_count`/`retry_reasons`。
+- 验收：每码 ≥1 个 `httpx.MockTransport` 用例；`failure` 可 JSON 序列化且不含 `retryable`/
+  `failover`；`complete()` 对可重试码也只发 1 次线路请求。
+
+#### V4.1-M2：多 route 注册表与配置重构
+
+- `config.py`：`ProviderRoute`/`RetryPolicyConfig`/`BackoffConfig` + `providers` dict +
+  `default_provider`/`failover`/`child` 解析；移除两处扁平块与全部 `Settings.*` 投影；fail-fast。
+- `provider.py`：`ProviderRegistry.build(route)`；`provider_name` 用 route key 优先。
+- `cli.py`/`multi_agent.py` 两处构造点统一走 registry；约 15 处显示/指纹/指标填充改用 route 名。
+- 验收：`test_config.py` 覆盖 dict 解析、非法 route、`api_key_env` 与 `.env` 注入、fail-fast 点名；
+  主/子 route 可分别选上游；`ruff`/`mypy` 通过（投影已删，所有引用同步改）。
+
+#### V4.1-M3：失败步骤扩展点的重试执行
+
+- 新 `core/retry.py` 包裹 `loop.py:122`：读 `failure.code` 对 route `retry_policy`，有界退避 +
+  jitter、尊重 `Retry-After`（超上限时 normal 放弃、always 回退本地退避）。
+- 持久 `llm/retry` trace 事件（route、code、retry 序号、delay_ms、LlmFailure），wait 前落盘。
+- `provider_request_attempts`/`provider_retried_requests` 由重试执行器累计（从 `_accumulate_usage`
+  迁出）。
+- 验收：可重试码触发、非可重试码不触发、退避在 jitter 边界内、normal 耗尽、always 无界、json_mode
+  回退不计数、重试不虚增 turn/不提交 assistant 消息、注入 `random` 钩子确定性断言。
+
+#### V4.1-M4：最外层降级链
+
+- 新 `core/failover.py` 的 `ProviderFailoverChain`（`ModelProvider` 组合）消费 `LlmFailure` 契约；
+  `failover:` 配置解析 + 校验（chain 引用存在的 route、非空、无重复、`max_hops >= 0`）。
+- 组装点：存在 `failover` 时用链替换单一 route adapter，否则保持单一 adapter——降级链是可选最外层
+  调度器，非默认姿势。
+- 验收：`QUOTA/AUTH/SERVER/TIMEOUT/RATE_LIMIT` 耗尽触发切 route 且重发同 messages；`BAD_REQUEST/
+  CONTEXT_OVERFLOW/ABORTED` 不切；每 hop 的 route 重试从 0 计数；registry/adapter 内无 routing
+  分支（分层边界测试）。
+
+#### V4.1-M5：模型发现
+
+- 新 `core/discovery.py`：`GET {base_url}/models` 有界读取（4 MiB），解析 `data[].id` 与可选
+  context/max token；`401/403→AUTH`、非 2xx/非 JSON/无 `data` 数组给结构化失败。
+- 新 CLI `minicc models <route>` + `--probe-key`（临时试密钥不落地）。
+- 验收：`httpx.MockTransport` 覆盖正常列表、401、畸形 JSON、超大 body、无 `data`、带路径 base
+  的拼接；对目录外中转站能列模型。
+
+#### V4.1-M6：指标 / 文档 / 回归
+
+- `provider_name`→route key，补 `provider_failure_code`、`llm/retry`、failover hop 事件落点；
+  更新 `CLAUDE.md` 与 `minicc.yaml` 样例（硅基流动 + 百炼 + 中转站 + failover 示例），移除
+  `MINICC_FAST_MODEL`。
+- 验收：`test_provider.py` 用 `httpx.MockTransport` 重写后全绿；`minicc --help` 出现 `models`；
+  不触碰 `acceptance/`；`ruff`/`mypy`/`pytest --cov`/`uv build`/`git diff --check` 通过。
+
+#### V4.1 验收门与声明边界
+
+进入 Stable 声明必须同时满足：
+
+1. `providers:` 多 route + `default_provider` + `child.provider` 可用，主/子 Agent 可分别选上游，
+   换 provider = 改一行配置（`MINICC_PROVIDER` 或 `default_provider`）。
+2. 每个 provider 失败携带稳定 `LlmFailure`（无 `retryable`/`failover` 字段），`QUOTA` 区分
+   `AUTH`/4xx。
+3. `complete()` 单次 attempt；每 route 重试独立可配、在失败步骤扩展点执行，退避含 jitter、尊重
+   `Retry-After`、持久 `llm/retry` 事件。
+4. 最外层降级链消费 `LlmFailure` 契约做跨 route 重路由，adapter/registry 内无 routing/failover。
+5. `minicc models <route>` 对目录外中转站可列模型。
+6. `ruff`/`mypy`/全量 pytest coverage/`uv build`/`git diff --check` 通过，覆盖率不降
+   （`fail_under = 50`，补测试达成，不缩小统计范围）。
+7. 确定性验证全程用 `httpx.MockTransport`，不调 Provider；真实 smoke 仅可选、gitignored、需密钥，
+   不进 acceptance。
+8. `acceptance/` 与既有 run/suite 原始证据零改动；不覆盖任何 suite/report。
+
+在以上达成前，路线图只声明「provider 层重构为设计合同/experimental」，多上游、降级、发现能力
+均不写成已验收稳定能力。V4.1 与 V4.0 的多 Agent 编排正交（child 模型同走该 provider 层），因此
+从当前稳定基线建立独立实验分支即可开工，不必依赖 `stable-v4.0`；也不夹带未验收的 multi-agent
+变更一起归因。
+
 ### Sandbox Runtime 生命周期治理（当前小步迭代）
 
 目标：在不引入 Compose、容器池、标签清理平台或多运行时的前提下，把现有“一次
@@ -1340,7 +1464,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                             |
                                       |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
                                       |                                                        |
-                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness
+                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness -> V4.1 provider refactor with multi-upstream degradation contract (设计合同)
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |

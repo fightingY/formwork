@@ -144,8 +144,8 @@ def run_fixed_cache_probe(
                         "cache_miss_tokens": response.usage.cache_miss_tokens,
                     },
                     "latency_ms": response.latency_ms,
-                    "attempt_count": response.attempt_count,
-                    "retry_reasons": list(response.retry_reasons),
+                    "attempt_count": 1,
+                    "retry_reasons": [],
                     "response_sha256": _sha256_text(response.text),
                     **_response_metadata(response.raw),
                 }

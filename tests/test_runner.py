@@ -35,30 +35,50 @@ def test_model_turn_runner_parses_action_and_records_usage() -> None:
     assert state.metrics["turns"] == 1
     assert state.metrics["prompt_tokens"] == 3
     assert state.metrics["completion_tokens"] == 2
-    assert state.metrics["provider_request_attempts"] == 1
+    # attempt 指标从 runner 迁到 retry 执行器（core/retry.py）：此处不再累计，
+    # 仍停留在 RunState 基线的默认值 0。
+    assert state.metrics["provider_request_attempts"] == 0
     assert state.metrics["provider_retried_requests"] == 0
 
 
-def test_model_turn_runner_records_retried_request_and_runtime_identity() -> None:
-    class RetriedProvider:
+def test_model_turn_runner_records_response_identity() -> None:
+    class IdentityProvider:
         def complete(self, messages, *, options=None):
             return ModelResponse(
                 text='{"type":"final","answer":"done"}',
                 raw={"model": "actual-model", "system_fingerprint": "backend-1"},
                 usage=ModelUsage(prompt_tokens=3),
                 latency_ms=5,
-                attempt_count=2,
             )
 
     state = RunState.start("finish")
-    trace = TraceRecorder()
-    ModelTurnRunner(RetriedProvider(), trace=trace).next_turn(state, [])
+    ModelTurnRunner(IdentityProvider()).next_turn(state, [])
 
-    assert state.metrics["provider_request_attempts"] == 2
-    assert state.metrics["provider_retried_requests"] == 1
     assert state.metrics["provider_response_models"] == ["actual-model"]
     assert state.metrics["provider_system_fingerprints"] == ["backend-1"]
+
+
+def test_model_turn_runner_passes_attempt_metadata_through_to_trace() -> None:
+    state = RunState.start("finish")
+    trace = TraceRecorder()
+    ModelTurnRunner(
+        FakeProvider(['{"type":"final","answer":"done"}']),
+        trace=trace,
+    ).next_turn(state, [], attempt_count=2, retry_reasons=("timeout",))
+
     assert trace.events[0]["attempt_count"] == 2
+    assert trace.events[0]["retry_reasons"] == ["timeout"]
+
+
+def test_model_turn_runner_defaults_attempt_metadata_to_single() -> None:
+    state = RunState.start("finish")
+    trace = TraceRecorder()
+    ModelTurnRunner(FakeProvider(['{"type":"final","answer":"done"}']), trace=trace).next_turn(
+        state, []
+    )
+
+    assert trace.events[0]["attempt_count"] == 1
+    assert trace.events[0]["retry_reasons"] == []
 
 
 def test_model_turn_runner_stops_after_protocol_error_limit() -> None:

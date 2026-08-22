@@ -31,8 +31,6 @@ class FakeProvider:
             raw={},
             usage=ModelUsage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
             latency_ms=9,
-            attempt_count=2,
-            retry_reasons=("timeout",),
         )
 
 
@@ -97,7 +95,7 @@ def test_model_review_is_separate_and_source_verified(tmp_path) -> None:
     }
     assert hashlib.sha256((run_dir / "trace.jsonl").read_bytes()).hexdigest() == before
     assert verify_review_source(result.report) is True
-    assert result.report["invocation"]["attempt_count"] == 2
+    assert result.report["invocation"]["attempt_count"] == 1
     assert result.report["implementation_commit"] == "commit-1"
     assert result.report["schema_version"] == 2
     assert result.report["quality_audit"]["quality_gate_passed"] is True
@@ -135,7 +133,7 @@ def test_schema_validation_retries_with_correction_prompt(tmp_path) -> None:
     invocation = result.report["invocation"]
     assert invocation["model_call_count"] == 2
     assert invocation["schema_retry_count"] == 1
-    assert invocation["attempt_count"] == 4
+    assert invocation["attempt_count"] == 2
     assert invocation["usage"]["total_tokens"] == 240
     assert "failed validation" in provider.messages[1][-1]["content"]
 

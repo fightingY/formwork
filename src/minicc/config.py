@@ -1,27 +1,69 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import yaml
 
+from minicc.core.provider import (
+    ALL_CODES,
+    FAILOVER_DEFAULT_ON,
+    RetryPolicy,
+    resolve_retry_policy,
+)
+
 CompactionStrategy = Literal["disabled", "deterministic", "semantic"]
 PromptLayout = Literal["rebuild", "append", "epoch", "append_until_compaction"]
 
 
+class MisconfigurationError(ValueError):
+    """minicc.yaml / environment violates the V4.1 provider contract (fail-fast)."""
+
+
 @dataclass(frozen=True)
-class ProviderSettings:
-    base_url: str | None = None
-    api_key: str | None = None
-    model: str | None = None
-    temperature: float = 0.0
-    stream: bool = False
-    include_usage: bool = True
+class ProviderRoute:
+    """One enumerable upstream route.
+
+    ``name`` is the route key in the ``providers:`` map. ``api_key`` is the
+    *resolved* key value (never written to YAML); it is read from the
+    ``api_key_env`` environment variable, falling back to ``MINICC_API_KEY``.
+    """
+
+    name: str
+    base_url: str
+    api_key: str
+    model: str
+    display_name: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+    timeout_ms: int = 120_000
+    stream_idle_timeout_ms: int = 300_000
     json_mode: bool = True
-    timeout_sec: float = 120.0
-    max_retries: int = 2
+    api: str = "openai-completions"
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+
+    @property
+    def effective_display_name(self) -> str:
+        return self.display_name or self.name
+
+
+@dataclass(frozen=True)
+class ChildProviderConfig:
+    """Selected submodel route (V4 delegate / scout / planner / reviewer)."""
+
+    provider: str
+    model: str | None = None
+
+
+@dataclass(frozen=True)
+class FailoverConfig:
+    """Outermost upstream fallback chain."""
+
+    chain: tuple[str, ...]
+    on: tuple[str, ...] = FAILOVER_DEFAULT_ON
+    max_hops: int = 0
 
 
 @dataclass(frozen=True)
@@ -80,42 +122,43 @@ class ToolingSettings:
 
 @dataclass(frozen=True)
 class Settings:
-    provider: ProviderSettings
     sandbox: SandboxSettings
     budget: BudgetSettings
     context: ContextSettings
     policy: PolicySettings
+    providers: Mapping[str, ProviderRoute] = field(default_factory=dict)
+    default_provider: str = ""
+    failover: FailoverConfig | None = None
+    child: ChildProviderConfig | None = None
     project: ProjectSettings = field(default_factory=ProjectSettings)
     workspace: WorkspaceSettings = field(default_factory=WorkspaceSettings)
     tooling: ToolingSettings = field(default_factory=ToolingSettings)
-    child_provider: ProviderSettings | None = None
 
     @property
-    def base_url(self) -> str | None:
-        return self.provider.base_url
+    def default_route(self) -> ProviderRoute:
+        return self.providers[self.default_provider]
 
-    @property
-    def api_key(self) -> str | None:
-        return self.provider.api_key
 
-    @property
-    def model(self) -> str | None:
-        return self.provider.model
-
-    @property
-    def temperature(self) -> float:
-        return self.provider.temperature
-
-    @property
-    def child_model(self) -> str | None:
-        return (self.child_provider or self.provider).model
+_ROUTE_KEYS = frozenset(
+    {
+        "base_url",
+        "api_key_env",
+        "model",
+        "display_name",
+        "headers",
+        "timeout_ms",
+        "stream_idle_timeout_ms",
+        "json_mode",
+        "api",
+        "retry_policy",
+    }
+)
 
 
 def load_settings() -> Settings:
     load_dotenv_file(Path.cwd() / ".env")
     config = load_yaml_config(Path.cwd() / "minicc.yaml")
 
-    provider_config = _dict_at(config, "provider")
     sandbox_config = _dict_at(config, "sandbox")
     budget_config = _dict_at(config, "budget")
     context_config = _dict_at(config, "context")
@@ -124,62 +167,26 @@ def load_settings() -> Settings:
     workspace_config = _dict_at(config, "workspace")
     tooling_config = _dict_at(config, "tooling")
 
-    provider = ProviderSettings(
-            base_url=_env_or_config("MINICC_BASE_URL", provider_config, "base_url"),
-            api_key=os.getenv("MINICC_API_KEY"),
-            model=_env_or_config("MINICC_MODEL", provider_config, "model"),
-            temperature=_float_env_or_config(
-                "MINICC_TEMPERATURE",
-                provider_config,
-                "temperature",
-                0.0,
-            ),
-            stream=_bool_env_or_config("MINICC_STREAM", provider_config, "stream", False),
-            include_usage=_bool_env_or_config(
-                "MINICC_INCLUDE_USAGE",
-                provider_config,
-                "include_usage",
-                True,
-            ),
-            json_mode=_bool_env_or_config(
-                "MINICC_JSON_MODE",
-                provider_config,
-                "json_mode",
-                True,
-            ),
-            max_retries=_int_config(provider_config, "max_retries", 2),
-            timeout_sec=_float_env_or_config(
-                "MINICC_PROVIDER_TIMEOUT_SEC",
-                provider_config,
-                "timeout_sec",
-                120.0,
-            ),
+    fallback_api_key = os.getenv("MINICC_API_KEY")
+    routes = _parse_providers(config, fallback_api_key=fallback_api_key)
+    default_provider = _resolve_default_provider(config, routes)
+    routes = _apply_default_route_env_overrides(routes, default_provider)
+
+    failover = _parse_failover(config.get("failover"))
+    if failover is not None:
+        for route_name in failover.chain:
+            if route_name not in routes:
+                raise MisconfigurationError(
+                    f"failover.chain references unknown route: {route_name!r}"
+                )
+
+    child = _parse_child(_dict_at(config, "child"), default_provider)
+    if child is not None and child.provider not in routes:
+        raise MisconfigurationError(
+            f"child.provider references unknown route: {child.provider!r}"
         )
-    child_config = _dict_at(config, "child_provider")
-    child_provider = ProviderSettings(
-        base_url=_env_or_config("MINICC_CHILD_BASE_URL", child_config, "base_url") or provider.base_url,
-        api_key=os.getenv("MINICC_CHILD_API_KEY") or provider.api_key,
-        model=(
-            os.getenv("MINICC_CHILD_MODEL")
-            or os.getenv("MINICC_FAST_MODEL")
-            or _str_config(child_config, "model", "")
-            or provider.model
-        ),
-        temperature=_float_env_or_config(
-            "MINICC_CHILD_TEMPERATURE",
-            child_config,
-            "temperature",
-            float(os.getenv("MINICC_FAST_TEMPERATURE", str(provider.temperature))),
-        ),
-        stream=_bool_env_or_config("MINICC_CHILD_STREAM", child_config, "stream", provider.stream),
-        include_usage=_bool_env_or_config("MINICC_CHILD_INCLUDE_USAGE", child_config, "include_usage", provider.include_usage),
-        json_mode=_bool_env_or_config("MINICC_CHILD_JSON_MODE", child_config, "json_mode", provider.json_mode),
-        timeout_sec=_float_env_or_config("MINICC_CHILD_PROVIDER_TIMEOUT_SEC", child_config, "timeout_sec", provider.timeout_sec),
-        max_retries=_int_config(child_config, "max_retries", provider.max_retries),
-    )
 
     return Settings(
-        provider=provider,
         sandbox=SandboxSettings(
             image=_str_config(sandbox_config, "image", "python:3.11-slim"),
             mode=_str_config(sandbox_config, "mode", "locked"),
@@ -217,6 +224,10 @@ def load_settings() -> Settings:
                 True,
             ),
         ),
+        providers=routes,
+        default_provider=default_provider,
+        failover=failover,
+        child=child,
         project=ProjectSettings(
             milestone=_str_config(project_config, "milestone", ""),
         ),
@@ -228,8 +239,148 @@ def load_settings() -> Settings:
             max_parallel_tool_calls=_int_config(tooling_config, "max_parallel_tool_calls", 4),
             max_tool_calls_per_step=_int_config(tooling_config, "max_tool_calls_per_step", 16),
         ),
-        child_provider=child_provider,
     )
+
+
+def _parse_providers(
+    config: dict[str, Any],
+    *,
+    fallback_api_key: str | None,
+) -> dict[str, ProviderRoute]:
+    raw_providers = config.get("providers")
+    if not isinstance(raw_providers, Mapping) or not raw_providers:
+        raise MisconfigurationError(
+            "no providers configured; add a non-empty `providers:` section to minicc.yaml"
+        )
+
+    routes: dict[str, ProviderRoute] = {}
+    for name, raw_route in raw_providers.items():
+        route_cfg = raw_route if isinstance(raw_route, Mapping) else {}
+        if not isinstance(raw_route, Mapping):
+            raise MisconfigurationError(f"providers.{name} must be a mapping")
+        unknown = set(route_cfg) - _ROUTE_KEYS
+        if unknown:
+            raise MisconfigurationError(
+                f"providers.{name} has unknown keys: {sorted(unknown)}"
+            )
+
+        base_url = str(route_cfg.get("base_url") or "").strip()
+        if not base_url:
+            raise MisconfigurationError(f"providers.{name}.base_url is required")
+
+        model = str(route_cfg.get("model") or "").strip()
+        if not model:
+            raise MisconfigurationError(f"providers.{name}.model is required")
+
+        api_key_env = str(route_cfg.get("api_key_env") or "MINICC_API_KEY")
+        api_key = os.getenv(api_key_env) or fallback_api_key or ""
+        if not api_key:
+            raise MisconfigurationError(
+                f"providers.{name}: no API key found (set {api_key_env!r} or MINICC_API_KEY)"
+            )
+
+        api = _str_config(route_cfg, "api", "openai-completions")
+        if api != "openai-completions":
+            raise MisconfigurationError(
+                f"providers.{name}.api must be 'openai-completions' (got {api!r})"
+            )
+
+        headers = _string_map(route_cfg.get("headers"))
+        retry_policy = resolve_retry_policy(_dict_at(route_cfg, "retry_policy"))
+
+        routes[str(name)] = ProviderRoute(
+            name=str(name),
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            display_name=None
+            if route_cfg.get("display_name") is None
+            else str(route_cfg["display_name"]),
+            headers=headers,
+            timeout_ms=_int_config(route_cfg, "timeout_ms", 120_000),
+            stream_idle_timeout_ms=_int_config(
+                route_cfg,
+                "stream_idle_timeout_ms",
+                300_000,
+            ),
+            json_mode=_bool_config(route_cfg, "json_mode", True),
+            api=api,
+            retry_policy=retry_policy,
+        )
+    return routes
+
+
+def _resolve_default_provider(config: dict[str, Any], routes: dict[str, ProviderRoute]) -> str:
+    default = os.getenv("MINICC_PROVIDER") or _str_config(config, "default_provider", "")
+    if not default:
+        # 只配了一条 route 时允许省略 default_provider。
+        if len(routes) == 1:
+            return next(iter(routes))
+        raise MisconfigurationError(
+            "default_provider is required when multiple providers are configured"
+        )
+    if default not in routes:
+        raise MisconfigurationError(f"default_provider {default!r} is not a configured route")
+    return default
+
+
+def _apply_default_route_env_overrides(
+    routes: dict[str, ProviderRoute],
+    default_provider: str,
+) -> dict[str, ProviderRoute]:
+    """MINICC_MODEL / MINICC_PROVIDER_TIMEOUT_SEC 只作用于默认 route。"""
+    route = routes[default_provider]
+    model_override = os.getenv("MINICC_MODEL")
+    timeout_override = os.getenv("MINICC_PROVIDER_TIMEOUT_SEC")
+    if model_override or (timeout_override is not None and timeout_override.strip()):
+        if model_override:
+            route = replace(route, model=model_override)
+        if timeout_override is not None and timeout_override.strip():
+            try:
+                timeout_ms = int(float(timeout_override) * 1000)
+            except ValueError:
+                raise MisconfigurationError(
+                    "MINICC_PROVIDER_TIMEOUT_SEC must be a number of seconds"
+                ) from None
+            route = replace(route, timeout_ms=timeout_ms)
+        routes = dict(routes)
+        routes[default_provider] = route
+    return routes
+
+
+def _parse_failover(raw: Any) -> FailoverConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise MisconfigurationError("failover must be a mapping")
+    # YAML 1.1（PyYAML safe_load）会把裸键 ``on:`` 解析成布尔 ``True``；这里把它
+    # 还原成字符串键，避免 `failover.on` 因 YAML 类型而失效。
+    raw = {
+        ("on" if key is True else ("off" if key is False else key)): value
+        for key, value in raw.items()
+    }
+    unknown = set(raw) - {"chain", "on", "max_hops"}
+    if unknown:
+        raise MisconfigurationError(f"failover has unknown keys: {sorted(unknown)}")
+    chain = tuple(_str_tuple_config(raw, "chain"))
+    if not chain:
+        raise MisconfigurationError("failover.chain must list at least one route")
+    on: tuple[str, ...] = _str_tuple_config(raw, "on") or FAILOVER_DEFAULT_ON
+    invalid_on = [code for code in on if code not in ALL_CODES]
+    if invalid_on:
+        raise MisconfigurationError(f"failover.on has unknown codes: {invalid_on}")
+    max_hops = _int_config(raw, "max_hops", 0)
+    if max_hops < 0:
+        raise MisconfigurationError("failover.max_hops must be non-negative")
+    return FailoverConfig(chain=chain, on=on, max_hops=max_hops)
+
+
+def _parse_child(cfg: dict[str, Any], default_provider: str) -> ChildProviderConfig | None:
+    provider = os.getenv("MINICC_CHILD_PROVIDER") or _str_config(cfg, "provider", "")
+    model = os.getenv("MINICC_CHILD_MODEL") or _optional_str(cfg, "model")
+    if not provider and not model:
+        return None
+    return ChildProviderConfig(provider=provider or default_provider, model=model)
 
 
 def load_yaml_config(path: Path) -> dict[str, Any]:
@@ -264,31 +415,34 @@ def _strip_env_value(value: str) -> str:
     return value
 
 
-def _dict_at(config: dict[str, Any], key: str) -> dict[str, Any]:
+def _dict_at(config: Mapping[str, Any], key: str) -> dict[str, Any]:
     value = config.get(key, {})
     if isinstance(value, dict):
         return value
     return {}
 
 
-def _env_or_config(env_name: str, config: dict[str, Any], key: str) -> str | None:
-    env_value = os.getenv(env_name)
-    if env_value is not None:
-        return env_value
-    value = config.get(key)
-    if value is None:
-        return None
-    return str(value)
+def _string_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): str(item) for key, item in value.items() if item is not None}
 
 
-def _str_config(config: dict[str, Any], key: str, default: str) -> str:
+def _str_config(config: Mapping[str, Any], key: str, default: str) -> str:
     value = config.get(key, default)
     if value is None:
         return default
     return str(value)
 
 
-def _int_config(config: dict[str, Any], key: str, default: int) -> int:
+def _optional_str(config: Mapping[str, Any], key: str) -> str | None:
+    value = config.get(key)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _int_config(config: Mapping[str, Any], key: str, default: int) -> int:
     value = config.get(key, default)
     try:
         return int(value)
@@ -296,21 +450,21 @@ def _int_config(config: dict[str, Any], key: str, default: int) -> int:
         return default
 
 
-def _str_tuple_config(config: dict[str, Any], key: str) -> tuple[str, ...]:
+def _str_tuple_config(config: Mapping[str, Any], key: str) -> tuple[str, ...]:
     value = config.get(key, ())
     if not isinstance(value, (list, tuple)):
         return ()
     return tuple(str(item) for item in value if str(item).strip())
 
 
-def _compaction_strategy(config: dict[str, Any]) -> CompactionStrategy:
+def _compaction_strategy(config: Mapping[str, Any]) -> CompactionStrategy:
     value = str(config.get("compaction_strategy", "deterministic")).strip().lower()
     if value not in {"disabled", "deterministic", "semantic"}:
         raise ValueError("context.compaction_strategy must be disabled, deterministic, or semantic")
     return cast(CompactionStrategy, value)
 
 
-def _prompt_layout(config: dict[str, Any]) -> PromptLayout:
+def _prompt_layout(config: Mapping[str, Any]) -> PromptLayout:
     value = str(config.get("prompt_layout", "rebuild")).strip().lower()
     if value not in {"rebuild", "append", "epoch", "append_until_compaction"}:
         raise ValueError(
@@ -319,34 +473,7 @@ def _prompt_layout(config: dict[str, Any]) -> PromptLayout:
     return cast(PromptLayout, value)
 
 
-def _float_env_or_config(
-    env_name: str,
-    config: dict[str, Any],
-    key: str,
-    default: float,
-) -> float:
-    raw_value = os.getenv(env_name)
-    if raw_value is None:
-        raw_value = config.get(key, default)
-    try:
-        return float(raw_value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _bool_env_or_config(
-    env_name: str,
-    config: dict[str, Any],
-    key: str,
-    default: bool,
-) -> bool:
-    raw_value = os.getenv(env_name)
-    if raw_value is None:
-        raw_value = config.get(key, default)
-    return _bool_value(raw_value, default)
-
-
-def _bool_config(config: dict[str, Any], key: str, default: bool) -> bool:
+def _bool_config(config: Mapping[str, Any], key: str, default: bool) -> bool:
     return _bool_value(config.get(key, default), default)
 
 
