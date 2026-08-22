@@ -246,10 +246,10 @@ def test_load_settings_requires_api_key(tmp_path, monkeypatch) -> None:
         load_settings()
 
 
-def test_load_settings_rejects_real_key_in_api_key_env(tmp_path, monkeypatch) -> None:
-    # api_key_env 应填环境变量的**名字**；把真密钥塞进来要 fail-fast（minicc.yaml 会被提交）。
+def test_load_settings_api_key_env_accepts_direct_key(tmp_path, monkeypatch) -> None:
+    # api_key_env 找不到同名环境变量时，把值本身当密钥（本地 minicc.yaml 可直填真密钥）。
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MINICC_API_KEY", "sk-fallback")
+    monkeypatch.delenv("MINICC_API_KEY", raising=False)
     (tmp_path / "minicc.yaml").write_text(
         """
 providers:
@@ -262,8 +262,8 @@ default_provider: primary
         encoding="utf-8",
     )
 
-    with pytest.raises(MisconfigurationError, match="环境变量"):
-        load_settings()
+    settings = load_settings()
+    assert settings.default_route.api_key == "sk-secret-real-key-123456"
 
 
 def test_load_settings_accepts_valid_env_name(tmp_path, monkeypatch) -> None:

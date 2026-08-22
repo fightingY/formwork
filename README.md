@@ -441,10 +441,11 @@ uv run pytest
 
 ## 配置模型
 
-> ⚠️ **密钥安全（务必先看）**：真密钥**只放 `.env`**（已被 `.gitignore` 忽略，不会进 git / GitHub）。
-> 仓库不自带 `.env`，只有占位的 `.env.example`——请先复制它为 `.env`（例如 `cp .env.example .env`），
-> 再在里面填你的密钥。`minicc.yaml` 会被提交到 GitHub，里面只能写 `api_key_env` 的「变量名」，
-> 绝不能填真密钥：把 `sk-…` 等真密钥填进 `api_key_env` 会被程序直接拒绝（fail-fast）。
+> ⚠️ **密钥安全（务必先看）**：`minicc.yaml` 已被 `.gitignore` 忽略、**不进 git / GitHub**，
+> 所以真密钥直接填在它的 route 里即可（用 `api_key:` 直填；`api_key_env:` 填环境变量名也行）。
+> 仓库不自带 `minicc.yaml`——从被提交的通用模板 `minicc.example.yaml` 复制一份
+> （`cp minicc.example.yaml minicc.yaml`）再按需改；模板只有占位变量名、没有真密钥。
+> 若仍想走 `.env`：复制 `.env.example` → `.env`，把变量名对应的真密钥填进去。
 
 把默认上游（`siliconflow`）的密钥 `SILICONFLOW_API_KEY` 改成你的即可；`MINICC_API_KEY` 只是某条 route 未声明 `api_key_env` 时的兜底。
 
@@ -537,7 +538,7 @@ workspace:
   ignored_allowlist: []
 ```
 
-`MINICC_PROVIDER`（覆盖 `default_provider`）、`MINICC_CHILD_PROVIDER`（覆盖 `child.provider`）、`MINICC_MODEL` / `MINICC_CHILD_MODEL`（覆盖 route 的 model）、`MINICC_PROVIDER_TIMEOUT_SEC`（覆盖默认 route 的 timeout）可用环境变量覆盖；`MINICC_API_KEY` 与各 `api_key_env` 只放 `.env` 或系统环境，不写入 `minicc.yaml`。
+`MINICC_PROVIDER`（覆盖 `default_provider`）、`MINICC_CHILD_PROVIDER`（覆盖 `child.provider`）、`MINICC_MODEL` / `MINICC_CHILD_MODEL`（覆盖 route 的 model）、`MINICC_PROVIDER_TIMEOUT_SEC`（覆盖默认 route 的 timeout）可用环境变量覆盖；密钥可直填 `minicc.yaml`（`api_key:` 或 `api_key_env:`）或放 `.env` / 系统环境（`api_key_env` 指变量名，`MINICC_API_KEY` 兜底）。
 
 `tooling.profile` 选择工具面（`baseline-bash` 默认 / `hybrid-v3.6` / `multi-agent-v4`），也可用
 `minicc run --profile <profile>` 单次覆盖；`max_parallel_tool_calls` 控制只读并行上限，

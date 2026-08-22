@@ -9,9 +9,9 @@ project:
 # base_url / api_key_env(或 api_key) / model / timeout / retry_policy，换上游 = 改一行
 # （default_provider 或环境变量 MINICC_PROVIDER）。
 #
-# 密钥两种写法（二选一，只写在本地 minicc.yaml，别写进本模板）：
+# 密钥写法（写在本地 minicc.yaml，别写进本模板；两种都支持直填真密钥）：
 #   api_key: sk-xxx            # 直接填真密钥
-#   api_key_env: XXX_API_KEY   # 填环境变量名，真密钥放 .env / 系统环境
+#   api_key_env: XXX_API_KEY   # 环境变量名；直接填密钥值也行（找不到同名变量时就把值当密钥）
 providers:
   # 主上游（默认 route）：硅基流动。
   siliconflow:

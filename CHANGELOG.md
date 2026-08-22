@@ -15,9 +15,9 @@
 
 ### Security
 
-- 密钥安全防护：`api_key_env` 只接受合法环境变量名（`[A-Za-z_][A-Za-z0-9_]*`），把真密钥（如
-  `sk-…`）误填进 `minicc.yaml` 会被 `config.py::_require_valid_env_name` fail-fast 拒绝；同时强化
-  `.env.example` / `minicc.yaml` / README 的「密钥只放 `.env`、`minicc.yaml` 会被 git 提交」提示。
+- 密钥安全（最简方案）：`minicc.yaml` 加入 `.gitignore`、不再被 git 追踪，本地配置文件里真密钥
+  随便填（route 新增 `api_key:` 直填字段；`api_key_env` 找不到同名环境变量时也把它本身当密钥），
+  都不入库。新增被提交的 `minicc.example.yaml` 通用模板（只留变量名占位、无密钥）。
 
 ### Changed
 
