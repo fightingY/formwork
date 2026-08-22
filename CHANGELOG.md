@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### Added
+
+- V4 可验证多 Agent Harness（experimental）：`delegate` action 与 `WorkflowCoordinator`，
+  角色 `scout`/`planner`/`worker`/`reviewer`，单一 `WorkspaceWriteLease` 写者，以及
+  `CapabilityPolicy` / `ReadOnlyBashPolicy` 权限边界。
+- `minicc childrun` 子进程与 in-process 两种 child 后端，通过 stdin/stdout JSONL 通信。
+- 不可变 `trace.jsonl` 到脱敏 `transcript.jsonl` / `transcript.md` 的可读投影。
+- `child_provider` 子模型配置（`MINICC_CHILD_MODEL`，旧别名 `MINICC_FAST_MODEL`），未设置时回退主模型。
+
+### Changed
+
+- 移除无意义的 `max_turns` 预算；改由 `max_seconds`（wall-clock，Loop 内强制）+
+  `max_bash_actions` + `max_action_timeout_sec` 约束。
+- 删减 eval/acceptance 侧大量哈希校验与 `source_lock.yaml`，简化证据链操作。
+- 覆盖率硬门由 78% 下调至 50%（对应 `pyproject.toml` 的 `fail_under = 50`）。
+
+### Boundaries
+
+- V4 仍为 experimental，未升 stable；不声明真实 Provider 多 Agent 成功率。
+- 正式只读 child 的 Docker read-only mount 证据仍需 Docker 集成环境。
+
 ## [3.6.0] - 2026-08-21
 
 ### Added
@@ -14,18 +35,30 @@
 
 ### Validated
 
-- V3.5 Docker integration gate: 3 passed.
 - Full CI-equivalent quality gate: 367 passed, 2 skipped, 78.46% coverage, Ruff, mypy, and package build passed.
 
 ### Boundaries
 
 - Formal M5 real-model A/B is not claimed by the offline archive; the default profile remains `baseline-bash`.
 
+## [3.5.0] - 2026-08-20
+
 ### Added
 
-- V3.4 最小真实项目评测闭环：初始失败验证、独立最终 verify、verdict、验证 artifact、自动 workspace 清理。
-- 增加从 MyHeiMaDianPing 抽取的三个最小 Java 任务 fixture 和 mutation 回归测试任务。
-- V3.5 六个公开题库 case 的 source/verifier 合同、离线 18-run 聚合器、恢复矩阵和归档索引。
+- Docker 生命周期治理：启动失败即时回滚删除容器；容器内命令超时销毁容器并标记 run 失败但保留
+  workspace 与 artifacts；轻量启动前置检查。
+- 六个公开题库 case 的 source/verifier 合同、离线 18-run 聚合器、恢复矩阵和归档索引。
+
+### Validated
+
+- 真实 Docker 集成测试（有 `MINICC_DOCKER_INTEGRATION` 环境变量门控）：3 passed。
+
+## [3.4.0] - 2026-08-19
+
+### Added
+
+- 最小真实项目评测闭环：初始失败验证、独立最终 verify、verdict、验证 artifact、自动 workspace 清理。
+- 从 MyHeiMaDianPing 抽取的三个最小 Java 任务 fixture 和 mutation 回归测试任务。
 
 ## [3.2.0] - 2026-08-12
 

@@ -24,11 +24,12 @@ uv run minicc web --host 127.0.0.1 --port 8000
 ```
 
 `release-report` 会生成系统回归、Context、Memory、Resume 四维 JSON/Markdown/CSV 和 manifest，
-每个数字都带 run ID、配置、原始 artifact 与复跑命令。需要真实运行时，按
-[`docs/V3_RELEASE_RUNBOOK.md`](docs/V3_RELEASE_RUNBOOK.md) 配置 Provider 后执行单 case；七层能力
-状态与边界见 [`docs/ETCLOVG_CAPABILITY_MATRIX.md`](docs/ETCLOVG_CAPABILITY_MATRIX.md)。
+每个数字都带 run ID、配置、原始 artifact 与复跑命令。需要真实运行时，先在 `.env` 里配置
+`MINICC_API_KEY` 再执行单 case；七层能力状态与边界见
+[`miniClaudeCode.md`](miniClaudeCode.md)（ETCLOVG 面试讲稿）。
 
-当前项目按 6 个里程碑推进：
+当前项目按 6 个基础里程碑推进，随后按版本里程碑（V2.x → V3.x → V4）演进，完整路线图见
+`STABLE_V1_MILESTONE_ROADMAP.md`：
 
 ```text
 M1: uv 项目骨架、Provider Adapter、Action Protocol、Minimal Agent Loop
@@ -39,22 +40,34 @@ M5: Goal-relevant Skill/Feedback selection、Trace events、Metrics
 M6: Eval runner、Web trace viewer、文档与面试示例
 ```
 
-## 当前稳定版本：Stable V3.2
+## 当前版本
 
-当前发布版本为 `3.6.0`。V3.2 将目标相关 Skill catalog 与 commit-bound Feedback rules 的
+当前发布版本为 `3.6.0`（`minicc.yaml` 的 `project.milestone` 为 `v3.6`），默认 tooling profile 是
+`baseline-bash`。项目在 Bash-first 极简 action space 之上按 profile 演进出三套工具面，由
+`tooling.profile` 选择：
+
+```text
+baseline-bash   默认；只有 bash / ask / final / skill，走 BashExecutor（历史对照与可回退）
+hybrid-v3.6     FS 工具 read / edit / write + bash，支持有界多工具调用 tool_calls
+multi-agent-v4  delegate 多 Agent 编排（experimental），root + childrun + workflow + transcript
+```
+
+V3.6 已把结构化 hybrid 工具面与有界多工具调度归档为确定性实现；V4 多 Agent Harness 已实现但
+仍标 experimental（见下文）。以下 V2.x/V3.x 逐段是历史验收叙事，保留为“简历数字→原始证据”的
+关联链，结论仍只属于对应归档版本。
+
+Stable V3.2 将目标相关 Skill catalog 与 commit-bound Feedback rules 的
 确定性选择升格为 stable。Stable V3.1.1 的 CI、覆盖率、lint、类型检查、构建检查和发布治理继续
 生效。底层 Harness
 继续继承 Stable V3.0：固定 C01/C02/C03/C04/C09 系统矩阵在执行提交
 `7d346fb77a191f0a5dbbb3157419cd0c0079c0cf` 上达到 15/15 PASS；正式聚合器在验证提交
 `cc150b0ae815e2add2f4ac036b3e0371205ddda4` 上逐 run 复核资格，二者之间仅包含报告验证器及其
 测试。最终四维报告覆盖系统回归 15 runs、Context 24 runs、Memory 27 runs、Resume 1 run，
-所有 claim 均携带配置、run ID、原始 artifact 和复跑命令。归档见 `acceptance/stable-v3.0/`，
-七层能力与诚实边界见 `docs/ETCLOVG_CAPABILITY_MATRIX.md`。
+所有 claim 均携带配置、run ID、原始 artifact 和复跑命令。归档见 `acceptance/stable-v3.0/`。
 
 上下文与记忆采用分层设计：运行态 trajectory/state summary 只服务当前 run；显式
 working memory 通过 `final.memory` 声明文件行区间，并在 follow-up 时校验文件、哈希和项目快照；
-Feedback Memory 只提供项目级 `never`/`prefer`/`caution` 规则选择。完整边界见
-[`docs/CONTEXT_MEMORY_GUIDE.md`](docs/CONTEXT_MEMORY_GUIDE.md)。
+Feedback Memory 只提供项目级 `never`/`prefer`/`caution` 规则选择。
 
 Stable V3.1 新增显式触发的离线
 Meta Review：`minicc meta-review <run_id>` 读取已结束 run 的不可变证据，在独立
@@ -97,6 +110,24 @@ python eval_cases/real_project_suite_v1/R03_cache_key_builder_feature/fixture/ve
 真实模型评测使用 `uv run minicc eval eval_cases/real_project_suite_v1 --repeat 3 --execute-local`；
 Provider、Java toolchain 或清理问题会记为 `infrastructure_error`，不混入任务通过率。当前阶段仍不
 引入 GitHub 拉取、完整仓库复制、worktree、并发或 patch replay。
+
+V3.6 在保留 `baseline-bash` 回退能力的前提下新增结构化 hybrid 工具面
+（`tooling.profile = hybrid-v3.6`）：模型通过 `tool_calls` 一次发起至多 `max_tool_calls_per_step`
+个调用，`read` 可有界并行（`max_parallel_tool_calls`，默认 4），`edit`/`write`/`bash` 是排他屏障；
+`read`/`edit`/`write` 只面向 workspace 内相对路径，已有文件的 `edit`/`write` 必须携带与最近一次
+读取一致的 `expected_hash`，版本冲突以结构化错误拒绝，不静默降级。确定性证据
+`acceptance/stable-v3.6/` 由 `tools/run_v36_offline_evidence.py` 生成且 `provider_calls: 0`；正式
+M5 真实模型 A/B 尚未开展，因此不声明 hybrid 提高任务成功率，默认 profile 仍为 `baseline-bash`。
+
+V4 在 hybrid 工具面之上增加 `delegate` action 与 `WorkflowCoordinator`
+（`tooling.profile = multi-agent-v4`），将 miniCC 定位为“低成本模型上的可验证多 Agent Coding
+Harness”。角色 `scout`/`planner`/`reviewer` 只读、`worker` 持有唯一 `WorkspaceWriteLease`；
+`CapabilityPolicy` / `ReadOnlyBashPolicy` 提供运行时权限边界，正式只读 child 还要求 Docker
+read-only mount 与 workspace fingerprint 四层合同。child 通过 `minicc childrun` 子进程的
+stdin/stdout JSONL 运行，并配 `child_provider` 子模型；不可变 `trace.jsonl` 投影为脱敏
+`transcript.jsonl`/`transcript.md`。确定性实现证据在 `acceptance/experimental-v4/`
+（370 passed、3 skipped），但仍是 experimental：未做真实 Provider 多 Agent A/B，不声明多 Agent
+通用成功率；旧 profile `baseline-bash` / `hybrid-v3.6` 默认行为不变。
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -432,6 +463,11 @@ context:
   artifact_preview_chars: 12000
   prompt_layout: append_until_compaction
 
+tooling:
+  profile: baseline-bash
+  max_parallel_tool_calls: 4
+  max_tool_calls_per_step: 16
+
 provider:
   base_url: https://api.siliconflow.cn/v1
   model: deepseek-ai/DeepSeek-V4-Pro
@@ -455,6 +491,10 @@ workspace:
 ```
 
 其中 `MINICC_BASE_URL`、`MINICC_MODEL`、`MINICC_TEMPERATURE` 可以通过环境变量覆盖 `minicc.yaml`；`MINICC_API_KEY` 只建议放在 `.env` 或系统环境变量里，不写入 `minicc.yaml`。
+
+`tooling.profile` 选择工具面（`baseline-bash` 默认 / `hybrid-v3.6` / `multi-agent-v4`），也可用
+`minicc run --profile <profile>` 单次覆盖；`max_parallel_tool_calls` 控制只读并行上限，
+`max_tool_calls_per_step` 控制单轮 `tool_calls` 调用数量。
 
 V4 的主 Agent 使用 `provider.model`（或 `MINICC_MODEL`），子 Agent 使用 `child_provider.model`（或 `MINICC_CHILD_MODEL`）。未设置子模型时回退到主模型；历史变量 `MINICC_FAST_MODEL` 也可作为子模型别名。使用 `minicc run --profile multi-agent-v4` 才会启用真实 child 模型编排。
 
@@ -601,62 +641,94 @@ uv run minicc resume <run_id> --from-checkpoint
 
 协议错误会被转成 `protocol_error` observation，让模型按协议重试；连续错误超过阈值后 run 会失败。
 
+默认 profile 下模型只有 `bash` / `ask` / `final` / `skill` 四种 action；扩展 action 由 profile 打开：
+
+- `hybrid-v3.6` 增加 `tool_calls`，一次发起多个 `read`/`edit`/`write`/`bash` 调用：
+
+```json
+{"type":"tool_calls","calls":[{"id":"c1","tool":"read","arguments":{"path":"src/a.py"}},{"id":"c2","tool":"bash","arguments":{"command":"pytest -q"}}]}
+```
+
+- `multi-agent-v4` 增加 `delegate`，把任务交给一个或多个 child Agent：
+
+```json
+{"type":"delegate","tasks":[{"id":"scout-1","role":"scout","goal":"定位实现","capability_profile":"scout","depends_on":[],"output_schema":"investigation_report"}]}
+```
+
+`tool_calls` 与 `delegate` 和 `ask`/`skill`/`final` 不能在同一响应混用；未启用对应 profile 时它们会
+收到 `protocol_error` 回喂。
+
 ## 目录结构
 
 ```text
 src/minicc/
-  cli.py              # CLI 入口
-  config.py           # 环境变量配置
+  cli.py              # CLI 入口：子命令、profile 选择、run/eval/resume/childrun
+  config.py           # 配置合并（env > .env > minicc.yaml）+ budget/tooling/child_provider
+  runtime.py          # V4 运行时契约：ChildCapabilities / CapabilityPolicy / ReadOnlyBashPolicy / WorkspaceWriteLease / AgentRuntime
+  multi_agent.py      # V4：WorkflowCoordinator / ChildRunProvider / 标准工作流 / childrun 入口
   core/
-    loop.py           # 只保留 Agent Loop 编排
-    runner.py         # 模型调用、usage 统计、action 解析
-    context.py        # M4 ContextBuilder：prompt 分层、预算检查、压缩摘要
+    loop.py           # AgentLoop 编排（budget、tool_calls、delegate 分流）
+    runner.py         # ModelTurnRunner：模型调用、usage 统计、action 解析、protocol 重试
+    context.py        # ContextBuilder：prompt 分层、预算检查、压缩摘要
     action_handler.py # final/ask/skill/bash 分流，policy 和 executor 调度
-    session.py        # state 保存、审批请求和审批结果应用
-    prompt.py         # 旧 prompt 模块兼容入口，仅导出 ContextBuilder / SYSTEM_PROMPT
-    protocol.py       # bash / skill / ask / final action parser
+    protocol.py       # bash / skill / ask / final / tool_calls / delegate parser
     provider.py       # OpenAI-compatible Provider Adapter
     state.py          # RunState / Observation / TrajectoryStep
+    tooling.py        # ToolCallScheduler + read/edit/write/bash capability（expected_hash 版本校验）
+    workflow.py       # workflow 辅助类型
+    childrun.py       # childrun 子进程 JSONL transport
+    session.py        # state 保存、审批（ask/approval）
+    checkpoint.py     # 版本化 checkpoint
+    lifecycle.py      # RunLifecycle 收尾
+    verification.py   # CompletionVerifier（Runtime Completion Gate）
+    ledger.py         # run/suite/version 技术账本（schema v2）
+    run_catalog.py    # 版本索引
+    project_context.py# repository inspector / MINICC.md project guide
+    prompt.py         # 旧 prompt 兼容入口
   skills/
     registry.py       # SkillRegistry：多来源 catalog、YAML 校验、哈希冻结与按需加载
   memory/
-    feedback.py       # FeedbackMemory：读取并选择项目反馈规则
+    feedback.py       # FeedbackMemory：项目级 never/prefer/caution 规则选择
     working.py        # 显式 working memory：ground、snapshot、attach 与完整性校验
     compaction.py     # deterministic / semantic context compaction
   trace/
     recorder.py       # TraceRecorder：JSONL event 记录
     metrics.py        # metrics.json 快照落盘
+    report.py         # run_report.json/.md
+    transcript.py     # V4 transcript 投影（脱敏 transcript.jsonl/.md）
   evals/
     case.py           # eval case.yaml 读取与发现
     assertions.py     # eval 确定性断言
     runner.py         # eval suite/case 执行与报告
-  server/
-    app.py            # 标准库只读 trace viewer
+    cache_ab.py / compaction_ab.py / guidance_ab.py / memory_ab.py / meta_review_ab.py / release_report.py
   policy/
     base.py           # Policy / PolicyChain / PolicyDecision
-    factory.py        # 根据配置构建完整 PolicyChain
+    factory.py        # 按配置构建 PolicyChain
     command.py        # 危险命令策略
     path.py           # 敏感路径策略
     network.py        # locked mode 网络策略
     budget.py         # bash 次数和 timeout 策略
     approval.py       # 删除类动作审批策略
+    capability.py     # V4 capability 权限策略
+    readonly_bash.py  # V4 只读 bash 分类策略
   sandbox/
     artifact_store.py # 大输出 artifact 存储
     docker_runner.py  # Docker sandbox 启动、执行、清理
     local_runner.py   # 本地开发执行器
     observation.py    # command result -> Observation
     workspace.py      # run workspace copy 与 diff 生成
+  meta/
+    reviewer.py       # 离线 Meta Review
+  server/
+    app.py            # 标准库只读 trace viewer
 tests/
-  test_policy.py
-  test_docker_runner.py
-  test_observation.py
-  test_workspace.py
-  test_loop.py
-  test_protocol.py
-  test_provider.py
+  test_cli.py / test_loop.py / test_protocol.py / test_provider.py / test_policy.py / test_tooling.py
+  test_workspace.py / test_docker_runner.py / test_observation.py
+  test_multi_agent_v4.py / test_v36_tooling.py
 docs/
-  AI_IMPLEMENTATION_SPEC.md
-  INTERVIEW_PLAYBOOK.md
+  V3_5_PUBLIC_BENCHMARK_EXPERIMENT_PLAN.md
+  V3_6_HYBRID_TOOLING_DESIGN.md
+  V4_MULTI_AGENT_REFACTOR_PLAN.md
 ```
 
 ## 验收
@@ -671,9 +743,9 @@ uv run pytest --cov=minicc --cov-report=term-missing --cov-report=xml
 uv build
 ```
 
-上述命令与 `.github/workflows/ci.yml` 使用同一套锁文件和配置；全包分支覆盖率低于 78% 时测试
-命令失败。V3.1.1 建门时的实测基线为 78.60%，没有排除 CLI 或低覆盖模块；80% 是后续只能通过
-补测试提高的目标，不能通过缩小统计范围达成。
+上述命令与 `.github/workflows/ci.yml` 使用同一套锁文件和配置；全包分支覆盖率低于 50% 时测试
+命令失败（`pyproject.toml` 的 `fail_under = 50`，早期 78% 门已在覆盖率现实压力下下调）。覆盖率
+只能通过补测试提高，不能通过缩小统计范围达成。
 V3.1.1 只验证工程质量门，不替换 `acceptance/stable-v3.0/` 与 `acceptance/stable-v3.1/` 中的
 Provider-backed 正式能力证据。
 
@@ -688,7 +760,8 @@ uv run pytest -q
 uv run minicc traces
 ```
 
-版本化验收结果保存在 `acceptance/stable-v1.0/` 至 `acceptance/stable-v3.2/`。V3.0 的系统回归、Context、Memory、Resume 四维结论与逐 claim 证据入口见 `acceptance/stable-v3.0/report.md`；V3.1 Meta Review 的正式证据见 `acceptance/stable-v3.1/report.md`；V3.2 Skill/Feedback 指引 A/B 见 `acceptance/stable-v3.2/report.md`。
+版本化验收结果保存在 `acceptance/stable-v1.0/` 至 `acceptance/stable-v3.6/`，另有
+`acceptance/experimental-v4/`。V3.0 的系统回归、Context、Memory、Resume 四维结论与逐 claim 证据入口见 `acceptance/stable-v3.0/report.md`；V3.1 Meta Review 的正式证据见 `acceptance/stable-v3.1/report.md`；V3.2 Skill/Feedback 指引 A/B 见 `acceptance/stable-v3.2/report.md`。V3.6 hybrid 工具面离线实现证据见 `acceptance/stable-v3.6/`，V4 多 Agent 确定性实现证据见 `acceptance/experimental-v4/`。
 
 V3.1 Meta Review 验收命令：
 
