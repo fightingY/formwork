@@ -20,6 +20,7 @@ from uuid import uuid4
 from minicc.config import load_settings
 from minicc.core.protocol import DelegateAction, DelegateTask
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider, ProviderError
+from minicc.prompts.child_agent import child_agent_system_prompt
 from minicc.runtime import ChildCapabilities, WorkspaceWriteLease
 
 PROTOCOL_VERSION = 1
@@ -312,11 +313,7 @@ def _complete_child_model(task: dict[str, Any], child_run_id: str) -> dict[str, 
     )
     role = str(task.get("role", "scout"))
     goal = str(task.get("goal", ""))
-    system = (
-        "You are a child coding agent in miniCC. Return one concise JSON object with "
-        "summary, findings, and evidence. Do not claim hidden reasoning. "
-        f"Your role is {role}; obey its capabilities and do not edit files."
-    )
+    system = child_agent_system_prompt(role)
     try:
         response = provider.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": goal}],

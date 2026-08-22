@@ -20,15 +20,8 @@ from minicc.core.protocol import BashAction, ProtocolError, parse_action
 from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.evals.cache_probe import CacheProbeBundle, write_cache_probe
+from minicc.prompts.cache_probe import FIXED_PROBE_CONSTRAINTS, FIXED_PROBE_GOAL
 
-FIXED_PROBE_GOAL = (
-    "Inspect the supplied repository evidence and choose the next minimal verification action. "
-    "This is a deterministic transport-level cache probe; rely only on the supplied observations."
-)
-FIXED_PROBE_CONSTRAINTS = (
-    "Return exactly one Bash-first JSON action.",
-    "Do not assume that a displayed command was actually executed outside this fixed sequence.",
-)
 FIXED_LONG_EVIDENCE_CHARS = 8_000
 FIXED_LONG_EVIDENCE_SOURCE = "src/minicc/evals/cache_probe.py"
 _SAFE_SEQUENCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")

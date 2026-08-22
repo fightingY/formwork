@@ -20,7 +20,6 @@ from minicc.evals.cache_probe_runner import (
 from minicc.evals.cache_utilization import (
     LONG_ACTION_SHAPE_SHA256,
     LONG_CASE,
-    REQUIRED_CASES,
     SHORT_CASE,
     build_cache_utilization_report,
     failed_criteria,

@@ -2,7 +2,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.protocol import BashAction
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, ProviderError

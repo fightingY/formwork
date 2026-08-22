@@ -20,6 +20,7 @@ from minicc.evals.cache_probe_runner import (
     fixed_probe_request_sha256s,
     fixed_probe_sequence_sha256,
 )
+
 REQUIRED_REAL_CASE = "C02_fix_failing_test"
 REQUIRED_INPUT_MILESTONE = "v2.1.1-development"
 

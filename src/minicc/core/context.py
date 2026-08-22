@@ -11,67 +11,19 @@ from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.memory.compaction import CompactionError, ContextCompactor
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.working import working_memory_context
+from minicc.prompts.agent import (
+    HYBRID_PREFIX_SUFFIX,
+    MULTI_AGENT_PREFIX_SUFFIX,
+    STABLE_PREFIX,
+)
+from minicc.prompts.guidance import (
+    action_economy_guidance,
+    continuity_footer,
+    io_repetition_guidance,
+    state_snapshot_text,  # noqa: F401  # re-exported for backward compatibility
+)
 from minicc.skills.registry import SkillRegistry
 from minicc.trace.recorder import TraceRecorder
-
-STABLE_PREFIX = """You are miniCC, a Bash-first CodeAct coding agent.
-
-You must output exactly one JSON object per turn. Do not output Markdown.
-
-Allowed actions:
-{"type":"bash","command":"pytest -q","timeout_sec":60,"purpose":"run tests"}
-{"type":"skill","name":"skill-name"}
-{"type":"ask","question":"A concrete question for the user"}
-{"type":"final","answer":"The final answer to the user"}
-
-Behavior rules:
-- Use bash actions to inspect files, run tests, or make changes.
-- Write `purpose` as a concise user-readable intent (why the action is useful), not a copy of the command.
-- Use skill to load one catalog entry only when its instructions are relevant.
-- Use ask only when the task is blocked by missing user input.
-- Use final only when the task is complete or cannot continue.
-- Treat observations as authoritative harness results.
-- For code-modification goals, use the fewest safe model turns. If inspected source or tests
-  already establish a straightforward root cause, skip redundant pre-change verification;
-  the next bash action should apply the smallest fix and, when policy permits, run the
-  authoritative verification.
-
-Sandbox and policy constraints:
-- Bash commands run inside the configured miniCC execution environment.
-- Commands may be denied, rewritten, or paused for approval before execution.
-- Network, destructive filesystem, sensitive path, timeout, and action budget policies may apply.
-- If a command is denied, choose a safer alternative or ask the user.
-
-Observation contract:
-- command_result means the command ran successfully and produced output.
-- no_output means the command exited successfully without stdout or stderr.
-- command_error means the command ran and exited non-zero.
-- timeout means the command exceeded its allowed runtime.
-- policy_violation means the harness blocked the action before execution.
-- protocol_error means the previous model output violated the JSON action protocol.
-- approval_result means the user approved, denied, or answered a pending request.
-- verification_error means a pre-bound completion verifier rejected the previous final request.
-"""
-
-HYBRID_PREFIX_SUFFIX = """
-
-This run uses the hybrid-v3.6 profile. A response may be either one control action
-(`ask`, `skill`, or `final`) or one `tool_calls` object, never both. Tool calls preserve
-the listed order:
-{"type":"tool_calls","calls":[{"id":"r1","tool":"read","arguments":{"path":"src/app.py","offset":1,"limit":160}}]}
-Available tools are `read`, `edit`, `write`, and `bash`. `read` is bounded and returns a
-version hash. Existing-file `edit` and `write` require the current `expected_hash`.
-After tool results, use the next turn to choose the next tool call or a control action.
-"""
-
-MULTI_AGENT_PREFIX_SUFFIX = """
-
-This run uses the opt-in multi-agent-v4 profile. You may emit one `delegate` action per turn.
-Delegate tasks must use role/profile pairs scout/scout, planner/planner, reviewer/reviewer,
-or worker/worker. Read-only roles cannot edit, write, or delegate. Use bounded dependencies
-and return structured goals; child results arrive as workflow_summary_observation.
-{"type":"delegate","intent":"先并行调查实现和测试约束","join":"all","tasks":[{"id":"scout-1","role":"scout","goal":"inspect the implementation","capability_profile":"scout","timeout_sec":180,"output_schema":"investigation_report"}]}
-"""
 
 EPOCH_COMPACTION_TARGET_RATIO = 0.65
 CompactionStrategy = Literal["disabled", "deterministic", "semantic"]
@@ -371,12 +323,12 @@ class ContextBuilder:
                 f"Run status: {state.status}",
             ]
         )
-        repetition_guidance = _io_repetition_guidance(state)
+        repetition_guidance = io_repetition_guidance(state)
         if repetition_guidance:
             dynamic_context.append(repetition_guidance)
-        action_economy_guidance = _action_economy_guidance(state)
-        if action_economy_guidance:
-            dynamic_context.append(action_economy_guidance)
+        action_economy = action_economy_guidance(state)
+        if action_economy:
+            dynamic_context.append(action_economy)
         if state.constraints:
             dynamic_context.append("Constraints:\n" + "\n".join(f"- {item}" for item in state.constraints))
         if state.state_summary:
@@ -618,7 +570,7 @@ class ContextBuilder:
         # authoritative fact that compaction happened while the run is still
         # active.  Without this footer a terse summary can incorrectly report
         # "no open work", causing the next turn to repeat inspection forever.
-        return _append_summary(result.summary, _continuity_footer(state))
+        return _append_summary(result.summary, continuity_footer(state))
 
     def _record_compaction(
         self,
@@ -800,9 +752,6 @@ class ContextBuilder:
         return sum(len(item.get("content", "")) for item in messages)
 
 
-SYSTEM_PROMPT = STABLE_PREFIX
-
-
 def _format_compaction_summary(steps: list[TrajectoryStep], *, config: ContextConfig) -> str:
     lines = ["Compacted trajectory summary:"]
     for index, step in enumerate(steps, start=1):
@@ -856,22 +805,6 @@ def _preserve_retention_markers(
     return _trim_text(summary, body_budget).rstrip() + footer
 
 
-def _continuity_footer(state: RunState) -> str:
-    """Keep unfinished-run semantics explicit across semantic compaction."""
-
-    lines = [
-        "Execution continuity (authoritative):",
-        f"- Goal: {state.goal}",
-        f"- Run status: {state.status}; the goal is not complete while this run is active.",
-        "- Continue from the last observation and take the next necessary action; do not treat a missing patch as completion.",
-    ]
-    if state.current_plan:
-        lines.append("- Current plan: " + " | ".join(str(item) for item in state.current_plan))
-    if state.open_questions:
-        lines.append("- Open questions: " + " | ".join(str(item) for item in state.open_questions))
-    return "\n".join(lines)
-
-
 def _trim_text(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
@@ -883,53 +816,6 @@ def _trim_text(text: str, max_chars: int) -> str:
     tail = keep - head
     tail_text = text[-tail:] if tail else ""
     return text[:head] + marker + tail_text
-
-
-def _io_repetition_guidance(state: RunState) -> str:
-    repeated_reads = int(state.metrics.get("repeated_file_reads", 0) or 0)
-    repeated_searches = int(state.metrics.get("repeated_searches", 0) or 0)
-    if not repeated_reads and not repeated_searches:
-        return ""
-    return (
-        "I/O repetition guard: the same file/search action has already been repeated "
-        f"({repeated_reads} file read(s), {repeated_searches} search(es)). "
-        "Do not repeat it again; make the smallest required patch or run the authoritative verification now."
-    )
-
-
-def _action_economy_guidance(state: RunState) -> str:
-    file_reads = int(state.metrics.get("file_read_actions", 0) or 0)
-    if file_reads < 1:
-        return ""
-    if not any("authoritative offline verification commands" in item for item in state.constraints):
-        return ""
-    return (
-        "Action economy: if the root cause and smallest change are clear from the current "
-        "evidence, the next bash action should apply that change and run one authoritative "
-        "verification command in the same shell command when policy permits. Do not inspect a "
-        "test solely to reconfirm behavior already established unambiguously by the goal and "
-        "source; authoritative post-change verification is sufficient. Otherwise inspect only "
-        "the specific missing evidence."
-    )
-
-
-def state_snapshot_text(state: RunState) -> str:
-    """Freeze mutable guidance at an immutable trajectory boundary."""
-
-    parts: list[str] = []
-    repetition_guidance = _io_repetition_guidance(state)
-    if repetition_guidance:
-        parts.append(repetition_guidance)
-    action_economy_guidance = _action_economy_guidance(state)
-    if action_economy_guidance:
-        parts.append(action_economy_guidance)
-    if state.open_questions:
-        parts.append("Open questions:\n" + "\n".join(f"- {item}" for item in state.open_questions))
-    if state.approval_question:
-        parts.append(f"Pending approval question:\n{state.approval_question}")
-    if state.status != "running":
-        parts.append(f"Run status: {state.status}")
-    return "\n\n".join(parts)
 
 
 def _prefix_profile(messages: list[dict[str, str]]) -> dict[str, object]:

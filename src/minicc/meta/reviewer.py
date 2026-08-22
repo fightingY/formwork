@@ -12,6 +12,11 @@ from typing import Any
 from uuid import uuid4
 
 from minicc.core.provider import CompletionOptions, ModelProvider, ModelResponse
+from minicc.prompts.meta_review import (
+    META_REVIEW_SYSTEM_PROMPT,
+    review_prompt,
+    schema_correction_prompt,
+)
 
 REVIEW_SEVERITIES = {"low", "medium", "high"}
 REVIEW_AREAS = {"context", "memory", "policy", "tools", "loop", "verification", "other"}
@@ -73,12 +78,9 @@ class MetaReviewer:
             messages = [
                 {
                     "role": "system",
-                    "content": (
-                        "You are miniCC's offline meta reviewer. Diagnose reusable harness-level "
-                        "improvements from immutable run evidence. Return exactly one JSON object."
-                    ),
+                    "content": META_REVIEW_SYSTEM_PROMPT,
                 },
-                {"role": "user", "content": _review_prompt(snapshot)},
+                {"role": "user", "content": review_prompt(snapshot)},
             ]
             for schema_attempt in range(self.max_schema_retries + 1):
                 response = self.provider.complete(
@@ -101,7 +103,7 @@ class MetaReviewer:
                     messages.extend(
                         [
                             {"role": "assistant", "content": response.text[:8_000]},
-                            {"role": "user", "content": _schema_correction_prompt(str(exc))},
+                            {"role": "user", "content": schema_correction_prompt(str(exc))},
                         ]
                     )
         _, after = _load_snapshot(run_dir)
@@ -213,43 +215,6 @@ def _load_snapshot(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return snapshot, source
 
 
-def _review_prompt(snapshot: Mapping[str, Any]) -> str:
-    payload = json.dumps(snapshot, ensure_ascii=False, indent=2)
-    return f"""Review this completed miniCC run.
-
-Focus only on reusable improvements to prompts, context, memory, policy, tools, loop control,
-and verification. Do not change the run verdict. Do not propose task-specific product code.
-Every finding must cite at least one evidence reference such as metrics.<field>,
-trace_tail[index], run_report.<field>, or diff_preview.
-
-Run evidence:
-{payload}
-
-Return ONLY this JSON shape:
-{{
-  "summary": "one concise paragraph",
-  "findings": [
-    {{
-      "id": "F1",
-      "severity": "low|medium|high",
-      "area": "context|memory|policy|tools|loop|verification|other",
-      "message": "reusable diagnosis",
-      "evidence_refs": ["metrics.turns"]
-    }}
-  ],
-  "suggested_changes": [
-    {{
-      "id": "S1",
-      "finding_ids": ["F1"],
-      "change": "bounded harness-level experiment",
-      "expected_effect": "measurable expected outcome",
-      "validation": "deterministic test or fixed A/B that would validate it"
-    }}
-  ]
-}}
-"""
-
-
 def _parse_model_review(text: str, *, snapshot: Mapping[str, Any]) -> dict[str, Any]:
     payload_text = text.strip()
     if not payload_text.startswith("{"):
@@ -263,18 +228,6 @@ def _parse_model_review(text: str, *, snapshot: Mapping[str, Any]) -> dict[str, 
     if not isinstance(payload, dict):
         raise MetaReviewError("model meta review must be a JSON object")
     return _validate_review_content(payload, snapshot=snapshot)
-
-
-def _schema_correction_prompt(reason: str) -> str:
-    return (
-        "Your previous JSON failed validation: "
-        + reason
-        + ". Return the complete corrected JSON object only. Use canonical evidence paths without "
-        "embedding values: state.<field>, metrics.<field>, run_report.<field>, "
-        "trace_tail[<non-negative index>].<field>, or diff_preview. Every finding needs a unique F<n> "
-        "id. Every suggested change needs a unique S<n> id, finding_ids, change, expected_effect, "
-        "and validation. Every finding must be linked by at least one suggested change."
-    )
 
 
 def _validate_review_content(
