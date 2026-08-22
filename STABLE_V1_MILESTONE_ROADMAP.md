@@ -1421,6 +1421,52 @@ V4.1 的设计、实施阶段和验收门，不把计划能力写成已实现能
 V4.1 与 V4.0 的多 Agent 编排正交（child 模型同走该 provider 层），不夹带未验收的 multi-agent
 变更一起归因。归档证据：三个提交 + 末尾 `V4.1` tag，全程确定性验证、未触碰 `acceptance/`。
 
+### V4.2：Benchmark 执行链收敛（回合上限 + 收尾自述）
+
+目标：承接 V4.1 实测暴露的缺口，把 benchmark 执行链收敛为「单 Agent → 模型自述 `final` →
+post-hoc 打分」，不引入 verifier 回喂闭环。方向经三方对照（dsh / pi）确定：**跟随 dsh 的
+prompt 级自述 + 权威性检查，信任模型 `final`，不跑隐藏测试、不回喂失败**——对小模型而言
+worker→verifier→worker 闭环太重、易死循环。详细设计见本地不追踪文件
+[`docs/V4_2_BENCHMARK_EXECUTION_LOOP_PLAN.md`](docs/V4_2_BENCHMARK_EXECUTION_LOOP_PLAN.md)。
+
+**状态（2026-08-22）**：已实现并全量回归通过。Block A（`max_turns`，`core/loop.py:55/152-153`、
+`config.py:102/228`、`cli.py:1304/2160`）+ Block B（收尾 grounding，`prompts/agent.py:23-26`）
+均落地；`ruff check src tests` / `mypy src/minicc` 通过，`pytest` 463 passed，`acceptance/` 与既有
+run/suite 零改动。唯一连带修正：`tests/test_context.py` 的 epoch 压缩测试预算 3000→4000，消除其与
+稳定前缀长度的脆弱耦合（grounding 使 `STABLE_PREFIX` 增长 ~232 字符）。真实模型 smoke 仍可选、
+gitignored、需密钥、不进 acceptance。
+
+设计边界：
+
+- **不新增** in-loop 验证 / 回喂 / `python_verifier` 断言 / `verification_attempts` / `max_verification_rounds`。
+- **`CompletionVerifier` 保持 opt-in**（`completion_gate` 仍显式开启才挂载），不进 benchmark 默认。
+- **成功 = 模型 `final`**：harness 信任自述（对齐 dsh `complete`、pi「模型停止即完成」），post-hoc
+  `run_assertions` 是唯一、不可变的通过/失败打分器。
+- **不修不删** `reviewer_loop` 死骨架（`multi_agent.py`），也不接线 benchmark。
+- 只补一个 prompt 收尾约束，不新增任何 action/机制。
+
+#### V4.2-M1：回合上限（成本早停）
+
+- `LoopConfig`/`BudgetSettings` 新增 `max_turns`（0 = 不限，默认 0）；`AgentLoop.run` 在现有
+  `max_seconds` 检查处加 `max_turns` 达上限即 `failed` 早停。
+- 不做 token 上限：`max_turns` 已覆盖成本约束（回合数 × 有界单回合成本，dsh 也只有 `maxRounds`）。
+- `case.yaml` 支持 `budget.max_turns`，失败烧 token 的单个 case（如 `scale-generator`）可声明自己的 cap。
+
+#### V4.2-M2：收尾自述 grounding
+
+- `prompts/agent.py::STABLE_PREFIX` 的 `final` 规则旁补一条 grounding：`final` 的 `answer` 只写本次
+  bash/observation 实际证实的、说清关键结论由哪条命令验证、不编造会话里没有的结果——对应 dsh
+  `wrapup.ts` 的 GROUNDING。
+
+验收门（确定性，不调 Provider）：
+
+1. `ruff check src tests`、`mypy src/minicc`、全量 `pytest`、`git diff --check` 通过，覆盖率不降
+   （`fail_under = 50`，补测试达成，不缩小统计范围）。
+2. 新增确定性测试：`max_turns` 达上限 → `failed` + summary 含 `max_turns`；默认 0 不限；
+   `case.budget.max_turns` 覆盖生效；`STABLE_PREFIX` 含 grounding 子串。
+3. `acceptance/` 与既有 run/suite 原始证据零改动；不覆盖任何 suite/report。
+4. 真实模型 smoke 仅可选、gitignored、需密钥，不进 acceptance。
+
 ### Sandbox Runtime 生命周期治理（当前小步迭代）
 
 目标：在不引入 Compose、容器池、标签清理平台或多运行时的前提下，把现有“一次
@@ -1470,7 +1516,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                             |
                                       |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
                                       |                                                        |
-                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness -> V4.1 provider refactor with multi-upstream degradation contract (已归档)
+                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness -> V4.1 provider refactor with multi-upstream degradation contract (已归档) -> V4.2 benchmark execution convergence (回合上限 + 收尾自述，已实现)
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |

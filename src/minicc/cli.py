@@ -1301,6 +1301,7 @@ def _build_loop(
         turn_provider_factory=lambda runner: _build_turn_provider(runner, provider, settings),
         config=LoopConfig(
             max_seconds=settings.budget.max_seconds,
+            max_turns=settings.budget.max_turns,
             max_action_timeout_sec=settings.budget.max_action_timeout_sec,
             model_options=CompletionOptions(
                 temperature=0.0,
@@ -2156,6 +2157,7 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
         budget = BudgetSettings(
             max_bash_actions=_case_int(case, "max_bash_actions", settings.budget.max_bash_actions),
             max_seconds=_case_int(case, "max_seconds", settings.budget.max_seconds),
+            max_turns=_case_int(case, "max_turns", settings.budget.max_turns),
             max_action_timeout_sec=_case_int(
                 case,
                 "max_action_timeout_sec",

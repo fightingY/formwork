@@ -20,6 +20,29 @@ default_provider: primary
 """
 
 
+def test_load_settings_reads_budget_max_turns(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(
+        _minimal_providers() + "\nbudget:\n  max_turns: 5\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.budget.max_turns == 5
+
+
+def test_load_settings_defaults_max_turns_to_zero(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(_minimal_providers(), encoding="utf-8")
+
+    settings = load_settings()
+
+    assert settings.budget.max_turns == 0
+
+
 def test_load_dotenv_file_does_not_override_existing_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("MINICC_API_KEY", "from-env")
     dotenv = tmp_path / ".env"

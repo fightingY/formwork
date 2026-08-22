@@ -12,6 +12,10 @@
 - `minicc childrun` 子进程与 in-process 两种 child 后端，通过 stdin/stdout JSONL 通信。
 - 不可变 `trace.jsonl` 到脱敏 `transcript.jsonl` / `transcript.md` 的可读投影。
 - `child` 子模型 route 配置（`child.provider` + `child.model`，环境变量 `MINICC_CHILD_PROVIDER` / `MINICC_CHILD_MODEL`），未设置时回退主 route 模型。
+- `budget.max_turns` 回合上限（默认 `0` = 不限）：消费 `state.metrics["turns"]`，达上限即 `failed`；
+  对齐 dsh `maxRounds`，作为唯一成本硬防线（不设 token/美元成本上限）。
+- 收尾自述 grounding：`STABLE_PREFIX` 的 `final` 规则要求 `answer` 只报会话实际证实的结论、
+  并说明每条关键声明由哪条命令验证（对应 dsh `wrapup.ts` GROUNDING）。
 
 ### Security
 
@@ -21,8 +25,9 @@
 
 ### Changed
 
-- 移除无意义的 `max_turns` 预算；改由 `max_seconds`（wall-clock，Loop 内强制）+
-  `max_bash_actions` + `max_action_timeout_sec` 约束。
+- 移除早期硬编码、无意义的 `max_turns=30` 预算；V4.2 起改回可配置 `budget.max_turns`
+  （默认 `0` = 不限，见 Added），与 `max_seconds`（wall-clock，Loop 内强制）+
+  `max_bash_actions` + `max_action_timeout_sec` 共同约束。
 - 删减 eval/acceptance 侧大量哈希校验与 `source_lock.yaml`，简化证据链操作。
 - 覆盖率硬门由 78% 下调至 50%（对应 `pyproject.toml` 的 `fail_under = 50`）。
 

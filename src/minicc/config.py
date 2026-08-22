@@ -99,6 +99,7 @@ class SandboxSettings:
 class BudgetSettings:
     max_bash_actions: int = 30
     max_seconds: int = 900
+    max_turns: int = 0
     max_action_timeout_sec: int = 120
 
 
@@ -224,6 +225,7 @@ def load_settings() -> Settings:
         budget=BudgetSettings(
             max_bash_actions=_int_config(budget_config, "max_bash_actions", 30),
             max_seconds=_int_config(budget_config, "max_seconds", 900),
+            max_turns=_int_config(budget_config, "max_turns", 0),
             max_action_timeout_sec=_int_config(budget_config, "max_action_timeout_sec", 120),
         ),
         context=ContextSettings(

@@ -52,6 +52,7 @@ class DirectTurnProvider:
 @dataclass(frozen=True)
 class LoopConfig:
     max_seconds: int = 0
+    max_turns: int = 0
     max_protocol_errors: int = 2
     max_action_timeout_sec: int = 120
     model_options: CompletionOptions = field(default_factory=CompletionOptions)
@@ -146,6 +147,10 @@ class AgentLoop:
         while state.status == "running":
             if self.config.max_seconds > 0 and (time.monotonic() - started_at) >= self.config.max_seconds:
                 self.session.fail(state, "Run failed because max_seconds was exhausted.")
+                break
+
+            if self.config.max_turns > 0 and int(state.metrics.get("turns", 0)) >= self.config.max_turns:
+                self.session.fail(state, "Run failed because max_turns was exhausted.")
                 break
 
             self.context_builder.maybe_compact(state, trajectory)

@@ -237,6 +237,29 @@ def test_loop_default_config_has_no_turn_cap(tmp_path) -> None:
     assert result.state.metrics["turns"] == 4
 
 
+def test_loop_fails_when_max_turns_exhausted(tmp_path) -> None:
+    provider = FakeProvider(
+        [
+            '{"type":"bash","command":"a"}',
+            '{"type":"bash","command":"b"}',
+            '{"type":"bash","command":"c"}',
+            '{"type":"final","answer":"done"}',
+        ]
+    )
+    state = RunState.start("capped turns")
+
+    result = AgentLoop(
+        provider,
+        FakeExecutor(),
+        session=SessionManager(runs_root=tmp_path / "runs"),
+        config=LoopConfig(max_turns=2),
+    ).run(state)
+
+    assert result.state.status == "failed"
+    assert "max_turns" in result.state.state_summary
+    assert result.state.metrics["turns"] == 2
+
+
 def test_loop_fails_fast_when_provider_truncates_at_token_limit(tmp_path) -> None:
     class LengthTruncatedProvider:
         def complete(self, messages, *, options=None):

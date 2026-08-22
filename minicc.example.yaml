@@ -69,6 +69,7 @@ sandbox:
 budget:
   max_bash_actions: 30
   max_seconds: 900
+  max_turns: 0
   max_action_timeout_sec: 120
 
 context:

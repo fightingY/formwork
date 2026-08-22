@@ -20,7 +20,10 @@ Behavior rules:
 - Write `purpose` as a concise user-readable intent (why the action is useful), not a copy of the command.
 - Use skill to load one catalog entry only when its instructions are relevant.
 - Use ask only when the task is blocked by missing user input.
-- Use final only when the task is complete or cannot continue.
+- Use final only when the task is complete or cannot continue. When you emit final, state in
+  `answer` only what your bash actions and observations actually established; say how each key
+  claim was verified and by which command, and do not invent results or steps the session does
+  not show.
 - Treat observations as authoritative harness results.
 - For code-modification goals, use the fewest safe model turns. If inspected source or tests
   already establish a straightforward root cause, skip redundant pre-change verification;

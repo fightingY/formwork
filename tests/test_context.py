@@ -182,7 +182,9 @@ def test_epoch_compaction_uses_hysteresis_and_does_not_reset_again_next_turn() -
         ContextConfig(
             prompt_layout="epoch",
             recent_turns=6,
-            max_prompt_chars=3_000,
+            # 合成预算需留足对稳定前缀长度的余量，否则 prompt 一增长就误触发第二轮压缩；
+            # 这里只验证 hysteresis，不验证具体阈值。
+            max_prompt_chars=4_000,
             summary_max_chars=500,
         )
     )
