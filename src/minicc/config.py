@@ -59,7 +59,13 @@ class ChildProviderConfig:
 
 @dataclass(frozen=True)
 class FailoverConfig:
-    """Outermost upstream fallback chain."""
+    """Outermost upstream fallback chain.
+
+    ``chain`` lists route names in fallback order; ``on`` is the set of
+    ``LlmFailure`` codes that trigger a hop to the next route. ``max_hops``
+    caps the number of hop transitions: ``0`` (default) means "unlimited —
+    traverse the whole chain", a positive value aborts after that many hops.
+    """
 
     chain: tuple[str, ...]
     on: tuple[str, ...] = FAILOVER_DEFAULT_ON

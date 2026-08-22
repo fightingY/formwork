@@ -25,6 +25,7 @@ from minicc.config import (
 )
 from minicc.core.checkpoint import CheckpointError, CheckpointManager
 from minicc.core.context import STABLE_PREFIX, ContextBuilder, ContextConfig
+from minicc.core.failover import ProviderFailoverChain
 from minicc.core.ledger import (
     apply_cleanup_plan,
     build_cleanup_plan,
@@ -32,10 +33,12 @@ from minicc.core.ledger import (
     new_suite_id,
     write_artifact_index,
 )
-from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
+from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig, TurnProvider
 from minicc.core.project_context import inspect_repository, write_repository_profile
 from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider, ProviderRegistry
+from minicc.core.retry import RetryingTurnProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
+from minicc.core.runner import ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
 from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
@@ -961,6 +964,45 @@ def _build_provider_or_print_error(settings: Settings) -> OpenAICompatibleProvid
     return _route_provider(route)
 
 
+def _build_turn_provider(
+    runner: ModelTurnRunner,
+    default_adapter: OpenAICompatibleProvider,
+    settings: Settings,
+) -> TurnProvider:
+    """Assemble the failure-step executor for the agent loop's ``turn_provider`` seam.
+
+    V4.1 的编排层组装点：没有 ``failover`` 块时是单 route 的 :class:`RetryingTurnProvider`
+    （默认 adapter + 该 route 的 retry_policy）；配了 ``failover`` 则换成
+    :class:`ProviderFailoverChain`（按 chain 逐 route 构造 adapter，复用同一个 runner）。
+    trace 直接复用 runner 里已解析好的 TraceRecorder。
+    """
+    trace = runner.trace
+    if settings.failover is not None:
+        routes = [
+            (
+                route_name,
+                _route_provider(settings.providers[route_name]),
+                settings.providers[route_name].retry_policy,
+            )
+            for route_name in settings.failover.chain
+        ]
+        return ProviderFailoverChain(
+            runner,
+            routes=routes,
+            on=settings.failover.on,
+            max_hops=settings.failover.max_hops,
+            trace=trace,
+        )
+    route = settings.default_route
+    return RetryingTurnProvider(
+        runner,
+        route_name=route.name,
+        provider=default_adapter,
+        policy=route.retry_policy,
+        trace=trace,
+    )
+
+
 def _child_route(settings: Settings) -> ProviderRoute:
     child = settings.child
     if child is None:
@@ -1141,6 +1183,7 @@ def _build_loop(
         completion_verifier=completion_verifier,
         tool_scheduler=scheduler,
         workflow_coordinator=workflow_coordinator,
+        turn_provider_factory=lambda runner: _build_turn_provider(runner, provider, settings),
         config=LoopConfig(
             max_seconds=settings.budget.max_seconds,
             max_action_timeout_sec=settings.budget.max_action_timeout_sec,

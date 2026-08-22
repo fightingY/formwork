@@ -113,6 +113,42 @@ class TraceRecorder:
             },
         )
 
+    def llm_retry(
+        self,
+        state: RunState,
+        *,
+        route: str,
+        code: str,
+        retry_index: int,
+        delay_ms: int,
+        failure: Any,
+    ) -> None:
+        self.record(
+            "llm/retry",
+            state,
+            route=route,
+            code=code,
+            retry_index=retry_index,
+            delay_ms=delay_ms,
+            failure=failure.to_dict() if hasattr(failure, "to_dict") else failure,
+        )
+
+    def failover_hop(
+        self,
+        state: RunState,
+        *,
+        from_route: str,
+        to_route: str,
+        code: str,
+    ) -> None:
+        self.record(
+            "failover/hop",
+            state,
+            from_route=from_route,
+            to_route=to_route,
+            code=code,
+        )
+
     def action_parsed(self, state: RunState, action: Action | None) -> None:
         self.record("action_parsed", state, action=action_to_dict(action) if action is not None else None)
 
