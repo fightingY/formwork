@@ -1111,6 +1111,26 @@ def _child_model(settings: Settings) -> str | None:
     return route.model
 
 
+def _aux_route(settings: Settings) -> ProviderRoute:
+    """离线辅助模型（Meta Review / 语义压缩）走的 route；缺省回退主 route。"""
+    aux = settings.aux
+    if aux is None:
+        return settings.default_route
+    return settings.providers[aux.provider]
+
+
+def _aux_model(settings: Settings) -> str:
+    route = _aux_route(settings)
+    if settings.aux is not None and settings.aux.model:
+        return settings.aux.model
+    return route.model
+
+
+def _build_aux_provider(settings: Settings) -> OpenAICompatibleProvider:
+    """构造 aux route 的 adapter，供 Meta Review / 语义压缩等辅助模型调用使用。"""
+    return _route_provider(_aux_route(settings))
+
+
 def _provider_summary(settings: Settings) -> dict[str, Any]:
     """Aggregate the default route into the report-configuration contract keys.
 
@@ -1199,8 +1219,9 @@ def _build_loop(
     )
     semantic_compactor = None
     if settings.context.compaction_strategy == "semantic":
+        compaction_provider = provider if settings.aux is None else _build_aux_provider(settings)
         semantic_compactor = SemanticCompactor(
-            provider,
+            compaction_provider,
             trace=trace,
             max_input_chars=settings.context.semantic_max_input_chars,
             max_summary_chars=settings.context.summary_max_chars,
@@ -2683,14 +2704,12 @@ def meta_review_command(args: argparse.Namespace) -> int:
     provider = None
     settings = load_settings()
     if not args.offline:
-        provider = _build_provider_or_print_error(settings)
-        if provider is None:
-            return 2
+        provider = _build_aux_provider(settings)
     try:
         implementation_commit, _ = _git_evidence(Path.cwd())
         result = MetaReviewer(
             provider,
-            model=settings.default_route.model,
+            model=_aux_model(settings),
             implementation_commit=implementation_commit,
         ).review_run(
             run_dir,

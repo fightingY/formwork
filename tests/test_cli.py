@@ -12,6 +12,7 @@ import pytest
 
 from minicc import __version__, cli
 from minicc.config import (
+    AuxModelConfig,
     BudgetSettings,
     ContextSettings,
     PolicySettings,
@@ -82,6 +83,37 @@ def _settings(**overrides) -> Settings:
     }
     kwargs.update(overrides)
     return Settings(**kwargs)
+
+
+def _settings_with_aux(model: str | None = None) -> tuple[Settings, ProviderRoute]:
+    aux_route = ProviderRoute(
+        name="aux",
+        base_url="https://aux.test/v1",
+        api_key="key",
+        model="aux-model",
+    )
+    settings = _settings(
+        providers={"default": _settings().default_route, "aux": aux_route},
+        aux=AuxModelConfig(provider="aux", model=model),
+    )
+    return settings, aux_route
+
+
+def test_aux_route_defaults_to_default_route() -> None:
+    settings = _settings()
+    assert cli._aux_route(settings) is settings.default_route
+    assert cli._aux_model(settings) == "model"
+
+
+def test_aux_route_uses_configured_provider() -> None:
+    settings, aux_route = _settings_with_aux()
+    assert cli._aux_route(settings) is aux_route
+    assert cli._aux_model(settings) == "aux-model"
+
+
+def test_aux_model_prefers_override() -> None:
+    settings, _ = _settings_with_aux(model="aux-override")
+    assert cli._aux_model(settings) == "aux-override"
 
 
 def test_reconfigure_std_streams_allows_emoji_on_gbk_console(monkeypatch) -> None:

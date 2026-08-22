@@ -29,7 +29,8 @@ class ProviderRoute:
     """One enumerable upstream route.
 
     ``name`` is the route key in the ``providers:`` map. ``api_key`` is the
-    *resolved* key value (never written to YAML); it is read from the
+    *resolved* key value; it comes directly from the route's ``api_key:`` field
+    (only ever written to the local, git-ignored ``minicc.yaml``), or from the
     ``api_key_env`` environment variable, falling back to ``MINICC_API_KEY``.
     """
 
@@ -53,6 +54,18 @@ class ProviderRoute:
 @dataclass(frozen=True)
 class ChildProviderConfig:
     """Selected submodel route (V4 delegate / scout / planner / reviewer)."""
+
+    provider: str
+    model: str | None = None
+
+
+@dataclass(frozen=True)
+class AuxModelConfig:
+    """Selected offline aux model (Meta Review / semantic compaction).
+
+    与主 Agent（``default_provider``）和 V4 child（``child``）解耦：Meta Review、
+    语义压缩这类「辅助模型」调用可单独指向一条 route，缺省回退主 route。
+    """
 
     provider: str
     model: str | None = None
@@ -137,6 +150,7 @@ class Settings:
     default_provider: str = ""
     failover: FailoverConfig | None = None
     child: ChildProviderConfig | None = None
+    aux: AuxModelConfig | None = None
     project: ProjectSettings = field(default_factory=ProjectSettings)
     workspace: WorkspaceSettings = field(default_factory=WorkspaceSettings)
     tooling: ToolingSettings = field(default_factory=ToolingSettings)
@@ -149,6 +163,7 @@ class Settings:
 _ROUTE_KEYS = frozenset(
     {
         "base_url",
+        "api_key",
         "api_key_env",
         "model",
         "display_name",
@@ -214,6 +229,12 @@ def load_settings() -> Settings:
             f"child.provider references unknown route: {child.provider!r}"
         )
 
+    aux = _parse_aux(_dict_at(config, "aux"), default_provider)
+    if aux is not None and aux.provider not in routes:
+        raise MisconfigurationError(
+            f"aux.provider references unknown route: {aux.provider!r}"
+        )
+
     return Settings(
         sandbox=SandboxSettings(
             image=_str_config(sandbox_config, "image", "python:3.11-slim"),
@@ -256,6 +277,7 @@ def load_settings() -> Settings:
         default_provider=default_provider,
         failover=failover,
         child=child,
+        aux=aux,
         project=ProjectSettings(
             milestone=_str_config(project_config, "milestone", ""),
         ),
@@ -300,12 +322,15 @@ def _parse_providers(
         if not model:
             raise MisconfigurationError(f"providers.{name}.model is required")
 
+        api_key = str(route_cfg.get("api_key") or "").strip()
         api_key_env = str(route_cfg.get("api_key_env") or "MINICC_API_KEY")
-        _require_valid_env_name(name, api_key_env)
-        api_key = os.getenv(api_key_env) or fallback_api_key or ""
+        if not api_key:
+            _require_valid_env_name(name, api_key_env)
+            api_key = os.getenv(api_key_env) or fallback_api_key or ""
         if not api_key:
             raise MisconfigurationError(
-                f"providers.{name}: no API key found (set {api_key_env!r} or MINICC_API_KEY)"
+                f"providers.{name}: no API key found (set api_key, {api_key_env!r}, "
+                f"or MINICC_API_KEY)"
             )
 
         api = _str_config(route_cfg, "api", "openai-completions")
@@ -410,6 +435,14 @@ def _parse_child(cfg: dict[str, Any], default_provider: str) -> ChildProviderCon
     if not provider and not model:
         return None
     return ChildProviderConfig(provider=provider or default_provider, model=model)
+
+
+def _parse_aux(cfg: dict[str, Any], default_provider: str) -> AuxModelConfig | None:
+    provider = os.getenv("MINICC_AUX_PROVIDER") or _str_config(cfg, "provider", "")
+    model = os.getenv("MINICC_AUX_MODEL") or _optional_str(cfg, "model")
+    if not provider and not model:
+        return None
+    return AuxModelConfig(provider=provider or default_provider, model=model)
 
 
 def load_yaml_config(path: Path) -> dict[str, Any]:

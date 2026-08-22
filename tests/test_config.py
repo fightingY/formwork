@@ -285,6 +285,26 @@ default_provider: primary
     assert settings.default_route.name == "primary"
 
 
+def test_load_settings_reads_direct_api_key(tmp_path, monkeypatch) -> None:
+    # 本地 minicc.yaml 允许直填 api_key（该文件已被 .gitignore 忽略，不提交）。
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MINICC_API_KEY", raising=False)
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://provider.test/v1
+    model: test-model
+    api_key: sk-direct-key-123
+default_provider: primary
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+    assert settings.default_route.api_key == "sk-direct-key-123"
+
+
 def test_load_settings_failover_unknown_route_fails(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MINICC_API_KEY", "sk-key")
@@ -335,6 +355,60 @@ providers:
     base_url: https://a.test/v1
     model: m
 child:
+  provider: ghost
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MisconfigurationError, match="unknown route"):
+        load_settings()
+
+
+def test_load_settings_reads_aux(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://a.test/v1
+    model: main-model
+  auxroute:
+    base_url: https://aux.test/v1
+    model: aux-model
+default_provider: primary
+aux:
+  provider: auxroute
+  model: aux-override
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+    assert settings.aux is not None
+    assert settings.aux.provider == "auxroute"
+    assert settings.aux.model == "aux-override"
+
+
+def test_load_settings_aux_defaults_to_none(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(_minimal_providers(), encoding="utf-8")
+
+    settings = load_settings()
+    assert settings.aux is None
+
+
+def test_load_settings_aux_unknown_route_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://a.test/v1
+    model: m
+aux:
   provider: ghost
 """,
         encoding="utf-8",
