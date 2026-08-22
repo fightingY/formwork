@@ -4,9 +4,9 @@
 
 ## 项目是什么
 
-miniCC（`mini-claude-code`）是一个 **Bash-first 的 CodeAct Agent Harness**——面向面试展示的、对 coding agent 背后工程层的最小化复刻。模型只输出一小撮 action（`bash` / `ask` / `final` / `skill`，外加实验性的 `tool_calls` 和 `delegate`），harness 负责协议校验、Provider 适配、执行编排、状态管理、策略、安全、上下文/prompt-cache、trace 与 eval。当前包版本为 `3.6.0`；`minicc.yaml` 里的 `project.milestone` 记录发布里程碑。
+miniCC（`mini-claude-code`）是一个 **Bash-first 的 CodeAct Agent Harness**——面向面试展示的、对 coding agent 背后工程层的最小化复刻。模型只输出一小撮 action（`bash` / `ask` / `final` / `skill`，外加实验性的 `tool_calls` 和 `delegate`），harness 负责协议校验、Provider 适配、执行编排、状态管理、策略、安全、上下文/prompt-cache、trace 与 eval。当前包版本为 `3.7.0.dev0`；`minicc.yaml` 里的 `project.milestone` 记录发布里程碑（当前 `v4.1`）。
 
-文档很全但是中文、且多为历史验收叙述。有用的几份：`README.md`（验收/证据）、`miniClaudeCode.md`（按 ETCLOVG 七层组织的面试讲稿）、`docs/V3_5_PUBLIC_BENCHMARK_EXPERIMENT_PLAN.md`、`docs/V3_6_HYBRID_TOOLING_DESIGN.md`、`docs/V4_MULTI_AGENT_REFACTOR_PLAN.md`（V3.5–V4 实施方案）、`STABLE_V1_MILESTONE_ROADMAP.md`（路线图）。本文件是工作速查。
+文档很全但是中文、且多为历史验收叙述。有用的几份：`README.md`（验收/证据）、`miniClaudeCode.md`（按 ETCLOVG 七层组织的面试讲稿）、`docs/V3_5_PUBLIC_BENCHMARK_EXPERIMENT_PLAN.md`、`docs/V3_6_HYBRID_TOOLING_DESIGN.md`、`docs/V4_MULTI_AGENT_REFACTOR_PLAN.md`（V3.5–V4 实施方案）、`docs/V4_1_PROVIDER_REFACTOR_PLAN.md`（V4.1 实施方案）、`STABLE_V1_MILESTONE_ROADMAP.md`（路线图）。本文件是工作速查。
 
 ## 开发命令
 
@@ -35,25 +35,29 @@ uv build                                 # 构建 sdist/wheel
 - `run "<goal>"` —— 让 agent 循环执行一个目标。常用参数：`--source-dir`（把外部仓库隔离复制进来）、`--execute-local`（改成宿主机执行而非 Docker）、`--no-workspace-copy`、`--verify-command`（可重复，绑定 Runtime Completion Gate）、`--profile {baseline-bash,hybrid-v3.6,multi-agent-v4}`、`--interrupt-after-steps N`、`--follow-up-from <run_id>`。
 - `eval <cases_dir>` —— 跑 eval case；`--repeat N`、`--case NAME`（可重复）、`--execute-local`、`--release-gate`。
 - `resume / approve / deny <run_id>` —— Stop-and-Resume 的 HITL 闭环（`resume --from-checkpoint` 改为从 checkpoint 恢复）。
+- `models <route> [--probe-key KEY] [--json]` —— 对某条 route 做有界 `GET /models` 模型发现（对目录外中转站也可列模型）。
 - `traces`、`transcript <trace.jsonl>`、`web`（只读 trace viewer）、`cleanup`（默认 dry-run，`--apply` 才删）、`meta-review <run_id>`、`childrun`（V4 子进程传输的内部命令）。
 - 实验/验收报告命令：`release-report`、`compaction-report`、`cache-probe`、`cache-report`、`cache-utilization-report`、`memory-eval`、`memory-report`、`guidance-report`、`meta-review-report`。
 
 ## 配置分层
 
-`load_settings()`（`src/minicc/config.py`）按优先级合并：系统 env > `.env`（简易 dotenv 加载，已存在则不覆盖）> `minicc.yaml`。`MINICC_*` 环境变量覆盖 yaml 中对应 `provider`/`context` 项；`MINICC_API_KEY` 只能放 `.env`/环境变量，刻意不写入 `minicc.yaml`。配置是 `config.py` 里的 frozen dataclass；`child_provider` 段（或 `MINICC_CHILD_MODEL` / 旧别名 `MINICC_FAST_MODEL`）配置 V4 子模型。
+`load_settings()`（`src/minicc/config.py`）按优先级合并：系统 env > `.env`（简易 dotenv 加载，已存在则不覆盖）> `minicc.yaml`。上游是 `providers:` dict（key 即 route 名，每条 route 有 `base_url`/`api_key_env`/`model`/`headers`/`timeout_ms`/`retry_policy`）+ `default_provider` + 可选 `failover` 降级链 + `child` 子模型 route。`MINICC_PROVIDER`/`MINICC_CHILD_PROVIDER`/`MINICC_MODEL`/`MINICC_CHILD_MODEL`/`MINICC_PROVIDER_TIMEOUT_SEC` 覆盖对应项；密钥只放 `.env`/环境变量（route 的 `api_key_env` 指向这里的变量名，`MINICC_API_KEY` 兜底），刻意不写入 `minicc.yaml`。
 
 ## 架构大图
 
 运行管线是一个循环，拆在 `src/minicc/` 下：
 
-1. **`core/loop.py`（`AgentLoop`）** —— 编排：压缩上下文（`context.maybe_compact`）→ 拼消息 → `ModelTurnRunner.next_turn`（调 Provider、累计 usage/指标、解析 action）→ 交给 `ActionHandler` → checkpoint → 循环直到 status 离开 `running`。
-2. **`core/runner.py`（`ModelTurnRunner`）** —— 单个模型回合；负责 protocol-error 重试计数、cache/token 指标累计（`_accumulate_usage` 等）。大部分 cache 分层计算都在这里。
-3. **`core/protocol.py`** —— 严格 action 解析器。只接受一个 `bash|skill|ask|final|tool_calls|delegate` 类型的 JSON object；会回退适配 markdown/`<function>` 外壳。`ProtocolError` 作为 `protocol_error` observation 喂回模型。
-4. **`core/action_handler.py`（`ActionHandler`）** —— 分流：`final`（视情况跑 `CompletionVerifier` gate、落地声明的 memory 引用、完成）、`ask`（HITL）、`skill`（加载冻结的 skill 正文）、`bash`（policy 链 → executor）。也实现 `_record_io_action` 里的「重复 I/O 守卫」。
-5. **`core/context.py`（`ContextBuilder`）** —— 分层 prompt 组装（stable prefix + 动态 trajectory）、预算检查、压缩（默认 deterministic，可选 semantic）。prompt layout 有 `rebuild`/`append`/`epoch`/`append_until_compaction`。
-6. **`policy/`（`PolicyChain`）** —— 有序策略（command/path/network/budget/approval + V4 的 capability/readonly-bash），返回 `deny`/`require_approval`/`rewrite`/`allow`。由 `policy/factory.py` 按配置构建。
-7. **`sandbox/`** —— `workspace.py`（复制 + `diff.patch`）、`docker_runner.py`、`local_runner.py`、`observation.py`（命令结果归一成 `Observation`）、`artifact_store.py`。
-8. **`trace/` + `core/ledger.py` + `core/run_catalog.py`** —— 证据：`trace.jsonl`（recorder）、`metrics.json`、`run_report.json/.md`、suite manifest/report、版本索引。schema v2、不可变、SHA-256 锚定。
+1. **`core/loop.py`（`AgentLoop`）** —— 编排：压缩上下文（`context.maybe_compact`）→ 拼消息 → `turn_provider.next_turn`（经重试/降级扩展点）→ 交给 `ActionHandler` → checkpoint → 循环直到 status 离开 `running`；失败由 `except ProviderError`（读 `failure.code`）收敛。
+2. **`core/provider.py`** —— V4.1 的 provider 边界：`LlmFailure` 稳定失败码、`OpenAICompatibleProvider`（单次可见 attempt，只报事实、不重试/不降级）、`ProviderRegistry`（按 route 构造 adapter）。
+3. **`core/runner.py`（`ModelTurnRunner`）** —— 单次模型回合；负责 cache/token 指标累计（`_accumulate_usage` 等）。大部分 cache 分层计算都在这里。
+4. **`core/retry.py` + `core/failover.py`** —— 失败步骤扩展点上两件独立编排：per-route 重试（有界退避+抖动、尊重 `Retry-After`、落 `llm/retry` 事件）与最外层降级链（按 `failover.on` 准入码跨 route，落 `failover/hop` 事件）。
+5. **`core/discovery.py`** —— `minicc models <route>` 的模型发现：有界 `GET {base_url}/models`，401/403→`AUTH`，其余解析失败→`DISCOVERY_FAILED`。
+6. **`core/protocol.py`** —— 严格 action 解析器。只接受一个 `bash|skill|ask|final|tool_calls|delegate` 类型的 JSON object；会回退适配 markdown/`<function>` 外壳。`ProtocolError` 作为 `protocol_error` observation 喂回模型。
+7. **`core/action_handler.py`（`ActionHandler`）** —— 分流：`final`（视情况跑 `CompletionVerifier` gate、落地声明的 memory 引用、完成）、`ask`（HITL）、`skill`（加载冻结的 skill 正文）、`bash`（policy 链 → executor）。也实现 `_record_io_action` 里的「重复 I/O 守卫」。
+8. **`core/context.py`（`ContextBuilder`）** —— 分层 prompt 组装（stable prefix + 动态 trajectory）、预算检查、压缩（默认 deterministic，可选 semantic）。prompt layout 有 `rebuild`/`append`/`epoch`/`append_until_compaction`。
+9. **`policy/`（`PolicyChain`）** —— 有序策略（command/path/network/budget/approval + V4 的 capability/readonly-bash），返回 `deny`/`require_approval`/`rewrite`/`allow`。由 `policy/factory.py` 按配置构建。
+10. **`sandbox/`** —— `workspace.py`（复制 + `diff.patch`）、`docker_runner.py`、`local_runner.py`、`observation.py`（命令结果归一成 `Observation`）、`artifact_store.py`。
+11. **`trace/` + `core/ledger.py` + `core/run_catalog.py`** —— 证据：`trace.jsonl`（recorder）、`metrics.json`、`run_report.json/.md`、suite manifest/report、版本索引。schema v2、不可变、SHA-256 锚定。
 
 有**三套 tooling profile**，由 `tooling.profile` 选择（见 `core/tooling.py`、`core/loop.py`、`multi_agent.py`、`runtime.py`）：
 

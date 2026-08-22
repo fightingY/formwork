@@ -1291,7 +1291,7 @@ V4 从 experimental 进入稳定声明必须同时满足：
 在 M7 之前，简历和 README 只能声明“experimental 多 Agent 编排和可验证执行合同”，不能把
 一次成功演示或计划中的 workflow 写成通用成功率。
 
-### V4.1：Provider 层重构与多上游降级契约（设计合同，尚未实现）
+### V4.1：Provider 层重构与多上游降级契约（已实现，确定性测试归档）
 
 目标：把单一 OpenAI 兼容适配器（`OpenAICompatibleProvider` + 扁平 `provider:` 块）重构为多
 route 注册表 + `LlmFailure` 归一化 + per-route `retryPolicy`（在失败步骤扩展点执行）+ 最外层
@@ -1299,6 +1299,12 @@ route 注册表 + `LlmFailure` 归一化 + per-route `retryPolicy`（在失败�
 详细实施合同见本地不追踪文件
 [`docs/V4_1_PROVIDER_REFACTOR_PLAN.md`](docs/V4_1_PROVIDER_REFACTOR_PLAN.md)。路线图只冻结
 V4.1 的设计、实施阶段和验收门，不把计划能力写成已实现能力。
+
+**完成状态（2026-08-22）**：V4.1 已完成实施并归档——M0 合同冻结、M1 `LlmFailure` 与
+`complete()` 单次 attempt、M2 多 route 注册表与配置重构、M3 失败步骤扩展点重试、M4 最外层
+降级链、M5 模型发现、M6 指标/文档/回归均已落地；下方 8 点验收门全部满足。全部能力由
+`httpx.MockTransport` 确定性测试覆盖，不调真实 Provider；`acceptance/` 与既有 run/suite
+证据零改动。以下 M0–M6 条目与验收门作为归档时的设计合同与验收记录保留。
 
 #### V4.1 移植原则（对 deepseek-harness 的 `packages/llm` 设计）
 
@@ -1410,10 +1416,10 @@ V4.1 的设计、实施阶段和验收门，不把计划能力写成已实现能
    不进 acceptance。
 8. `acceptance/` 与既有 run/suite 原始证据零改动；不覆盖任何 suite/report。
 
-在以上达成前，路线图只声明「provider 层重构为设计合同/experimental」，多上游、降级、发现能力
-均不写成已验收稳定能力。V4.1 与 V4.0 的多 Agent 编排正交（child 模型同走该 provider 层），因此
-从当前稳定基线建立独立实验分支即可开工，不必依赖 `stable-v4.0`；也不夹带未验收的 multi-agent
-变更一起归因。
+以上 8 点验收门已全部满足（2026-08-22），V4.1 的 provider 层多上游、降级、发现能力已作为
+确定性测试覆盖的稳定实现归档；真实模型 smoke 仍仅可选、gitignored、需密钥，不进 acceptance。
+V4.1 与 V4.0 的多 Agent 编排正交（child 模型同走该 provider 层），不夹带未验收的 multi-agent
+变更一起归因。归档证据：三个提交 + 末尾 `V4.1` tag，全程确定性验证、未触碰 `acceptance/`。
 
 ### Sandbox Runtime 生命周期治理（当前小步迭代）
 
@@ -1464,7 +1470,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                             |
                                       |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
                                       |                                                        |
-                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness -> V4.1 provider refactor with multi-upstream degradation contract (设计合同)
+                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness -> V4.1 provider refactor with multi-upstream degradation contract (已归档)
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |

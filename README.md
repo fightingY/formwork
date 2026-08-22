@@ -42,7 +42,7 @@ M6: Eval runner、Web trace viewer、文档与面试示例
 
 ## 当前版本
 
-当前发布版本为 `3.6.0`（`minicc.yaml` 的 `project.milestone` 为 `v3.6`），默认 tooling profile 是
+当前发布版本为 `3.7.0.dev0`（`minicc.yaml` 的 `project.milestone` 为 `v4.1`），默认 tooling profile 是
 `baseline-bash`。项目在 Bash-first 极简 action space 之上按 profile 演进出三套工具面，由
 `tooling.profile` 选择：
 
@@ -124,10 +124,22 @@ V4 在 hybrid 工具面之上增加 `delegate` action 与 `WorkflowCoordinator`
 Harness”。角色 `scout`/`planner`/`reviewer` 只读、`worker` 持有唯一 `WorkspaceWriteLease`；
 `CapabilityPolicy` / `ReadOnlyBashPolicy` 提供运行时权限边界，正式只读 child 还要求 Docker
 read-only mount 与 workspace fingerprint 四层合同。child 通过 `minicc childrun` 子进程的
-stdin/stdout JSONL 运行，并配 `child_provider` 子模型；不可变 `trace.jsonl` 投影为脱敏
+stdin/stdout JSONL 运行，子模型由 `child` route 指定；不可变 `trace.jsonl` 投影为脱敏
 `transcript.jsonl`/`transcript.md`。确定性实现证据在 `acceptance/experimental-v4/`
 （370 passed、3 skipped），但仍是 experimental：未做真实 Provider 多 Agent A/B，不声明多 Agent
 通用成功率；旧 profile `baseline-bash` / `hybrid-v3.6` 默认行为不变。
+
+V4.1 把单一 Provider 适配器（扁平 `provider:` 块）重构为多上游降级契约：`minicc.yaml` 用
+`providers:` dict 枚举上游 route（硅基流动 / 百炼 / 私人中转站，每条 route 独立 `base_url`/
+`api_key_env`/`model`/`retry_policy`），配 `default_provider` + 可选 `failover` 最外层降级链 +
+`child` 子模型 route，换 provider = 改一行配置（`MINICC_PROVIDER` 或 `default_provider`）。每个
+provider 失败归一成稳定 `LlmFailure`（`RATE_LIMIT/SERVER/TIMEOUT/TRANSPORT/EMPTY_RESPONSE` 与
+`AUTH/QUOTA/BAD_REQUEST/CONTEXT_OVERFLOW/ABORTED/UNKNOWN`，载荷不含 retryable/failover 字段）；
+`complete()` 回归单次可见 attempt，重试上移到 loop 失败步骤扩展点（per-route、有界退避 + 抖动 +
+尊重 `Retry-After`、落 `llm/retry` 事件），跨 route 重路由交给最外层 `ProviderFailoverChain`
+（落 `failover/hop` 事件），adapter/registry 内无任何 routing 分支。新增 `minicc models <route>`
+对目录外中转站做有界 `GET /models` 发现。全部能力由 `httpx.MockTransport` 确定性测试覆盖，
+不调真实 Provider；真实模型 smoke 仅作为可选、gitignored、需密钥的开发预检，不进 acceptance。
 
 Stable V2.0 已完成 10 个 checkpoint/resume 状态场景、3 个执行式中断场景和 1 个真实模型恢复 run，恢复后的 workspace、trajectory、diff 与终态一致，已完成 action 重复执行次数为 0；同时 V1.3 的 C01-C04/C09 完整矩阵继续保持 15/15 PASS。完整证据见 `acceptance/stable-v2.0/`，V1.3 原始验收仍保留在 `acceptance/stable-v1.3/`。
 
@@ -429,17 +441,31 @@ uv run pytest
 
 ## 配置模型
 
-项目根目录已经提供 `.env`，直接把里面的 `MINICC_API_KEY` 改成你的模型密钥即可。
+项目根目录已经提供 `.env`，把默认上游（`siliconflow`）的密钥 `SILICONFLOW_API_KEY` 改成你的即可；`MINICC_API_KEY` 只是某条 route 未声明 `api_key_env` 时的兜底。
 
 ```text
-MINICC_BASE_URL=https://api.siliconflow.cn/v1
-MINICC_API_KEY=替换成你的_api_key
-MINICC_MODEL=deepseek-ai/DeepSeek-V4-Pro
-MINICC_CHILD_MODEL=deepseek-ai/DeepSeek-V4-Flash
-MINICC_TEMPERATURE=0
+# 每条 route 的 api_key_env 指向这里的变量名；MINICC_API_KEY 是未声明 api_key_env 时的兜底
+SILICONFLOW_API_KEY=替换成你的_api_key
+# BAILIAN_API_KEY=替换成你的_api_key
+# RELAY_PRIVATE_API_KEY=替换成你的_api_key
+# MINICC_API_KEY=替换成你的_api_key
 ```
 
 `minicc run` 会自动读取根目录 `.env`。如果系统环境变量里已经设置了同名配置，则系统环境变量优先。
+
+**快速换上游（以阿里云百炼为例）：**
+
+1. 在 `.env` 里填 `BAILIAN_API_KEY=你的百炼密钥`。
+2. 切默认上游（二选一）：持久改 `minicc.yaml` 的 `default_provider: bailian`；或单次
+   `MINICC_PROVIDER=bailian uv run minicc run "..."`（只对这次生效，不落盘）。
+3. 若你账号的实际模型/地址与样例不同，改 `bailian` route 的 `model`（或 `base_url`），
+   也可用 `MINICC_MODEL=...` 临时覆盖。
+4. 验证：`uv run minicc models bailian` 能列出模型，就说明 key 与地址都通。
+
+接入一个不在样例里的 OpenAI 兼容上游（例如你自己的 `/v1` 中转站）同理：在 `providers:` 下加一条
+route，`base_url` 换成对方给的 `/v1` 地址、`api_key_env` 指向存放该 key 的变量名、`model` 填对方
+支持的模型名；在 `.env` 里加对应的 `XXX_API_KEY=...`，再用 `default_provider` 或 `MINICC_PROVIDER`
+指向它，最后用 `minicc models <route>` 验证。
 
 模型服务地址、模型名、Docker sandbox、预算和上下文参数放在 `minicc.yaml`：
 
@@ -468,18 +494,34 @@ tooling:
   max_parallel_tool_calls: 4
   max_tool_calls_per_step: 16
 
-provider:
-  base_url: https://api.siliconflow.cn/v1
-  model: deepseek-ai/DeepSeek-V4-Pro
-  temperature: 0
-  stream: false
-  include_usage: true
+providers:
+  siliconflow:
+    base_url: https://api.siliconflow.cn/v1
+    api_key_env: SILICONFLOW_API_KEY
+    model: deepseek-ai/DeepSeek-V4-Pro
+    json_mode: true
+  bailian:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: BAILIAN_API_KEY
+    model: qwen-plus
+    json_mode: true
+  relay-private:
+    base_url: https://relay.example.com/v1
+    api_key_env: RELAY_PRIVATE_API_KEY
+    model: deepseek-chat
 
-child_provider:
-  base_url: https://api.siliconflow.cn/v1
+default_provider: siliconflow
+
+# 可选：最外层降级链（在这些失败码上切下一 route）
+# failover:
+#   chain: [siliconflow, bailian, relay-private]
+#   on: [QUOTA, AUTH, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
+#   max_hops: 2
+
+# V4 child / 子模型走哪条 route（model 可覆盖该 route 默认模型）
+child:
+  provider: siliconflow
   model: deepseek-ai/DeepSeek-V4-Flash
-  temperature: 0
-  json_mode: true
 
 policy:
   require_approval_for_network: true
@@ -490,13 +532,13 @@ workspace:
   ignored_allowlist: []
 ```
 
-其中 `MINICC_BASE_URL`、`MINICC_MODEL`、`MINICC_TEMPERATURE` 可以通过环境变量覆盖 `minicc.yaml`；`MINICC_API_KEY` 只建议放在 `.env` 或系统环境变量里，不写入 `minicc.yaml`。
+`MINICC_PROVIDER`（覆盖 `default_provider`）、`MINICC_CHILD_PROVIDER`（覆盖 `child.provider`）、`MINICC_MODEL` / `MINICC_CHILD_MODEL`（覆盖 route 的 model）、`MINICC_PROVIDER_TIMEOUT_SEC`（覆盖默认 route 的 timeout）可用环境变量覆盖；`MINICC_API_KEY` 与各 `api_key_env` 只放 `.env` 或系统环境，不写入 `minicc.yaml`。
 
 `tooling.profile` 选择工具面（`baseline-bash` 默认 / `hybrid-v3.6` / `multi-agent-v4`），也可用
 `minicc run --profile <profile>` 单次覆盖；`max_parallel_tool_calls` 控制只读并行上限，
 `max_tool_calls_per_step` 控制单轮 `tool_calls` 调用数量。
 
-V4 的主 Agent 使用 `provider.model`（或 `MINICC_MODEL`），子 Agent 使用 `child_provider.model`（或 `MINICC_CHILD_MODEL`）。未设置子模型时回退到主模型；历史变量 `MINICC_FAST_MODEL` 也可作为子模型别名。使用 `minicc run --profile multi-agent-v4` 才会启用真实 child 模型编排。
+V4 子 Agent 使用 `child` 指定的 route（缺省回退 `default_provider`，可用 `child.model` 覆盖模型），主 Agent 用 `default_provider` route 的模型。使用 `minicc run --profile multi-agent-v4` 才会启用真实 child 模型编排。可用 `minicc models <route>` 列出某条 route 可用的模型（对目录外中转站也有效，配合 `--probe-key` 可临时试一把密钥）。
 
 `workspace.ignored_allowlist` 只用于确实需要进入普通 run 的 ignored 项目文件，例如
 `generated/runtime.json`。它不能放行 `.env`、`.minicc/`、`.workbuddy/`、虚拟环境、缓存或构建产物。
@@ -615,7 +657,7 @@ uv run minicc resume <run_id> --from-checkpoint
 
 ## Action 协议
 
-默认优先请求供应商原生 JSON mode（`MINICC_JSON_MODE=true`）；若兼容供应商明确返回
+默认优先请求供应商原生 JSON mode（route 配置 `json_mode: true`）；若兼容供应商明确返回
 400/422 不支持，Provider 会自动降级为文本响应，再由本地唯一顶层 JSON 解码器和 action schema
 严格校验。评测 case 可通过 `workspace.writable_paths` 把 Docker 工作区根目录挂为只读，仅开放声明路径。
 
@@ -662,17 +704,20 @@ uv run minicc resume <run_id> --from-checkpoint
 
 ```text
 src/minicc/
-  cli.py              # CLI 入口：子命令、profile 选择、run/eval/resume/childrun
-  config.py           # 配置合并（env > .env > minicc.yaml）+ budget/tooling/child_provider
+  cli.py              # CLI 入口：子命令、profile 选择、run/eval/resume/childrun/models
+  config.py           # 配置合并（env > .env > minicc.yaml）+ providers 多 route/child/failover
   runtime.py          # V4 运行时契约：ChildCapabilities / CapabilityPolicy / ReadOnlyBashPolicy / WorkspaceWriteLease / AgentRuntime
   multi_agent.py      # V4：WorkflowCoordinator / ChildRunProvider / 标准工作流 / childrun 入口
   core/
     loop.py           # AgentLoop 编排（budget、tool_calls、delegate 分流）
-    runner.py         # ModelTurnRunner：模型调用、usage 统计、action 解析、protocol 重试
+    runner.py         # ModelTurnRunner：单次模型调用、usage 统计、action 解析
     context.py        # ContextBuilder：prompt 分层、预算检查、压缩摘要
     action_handler.py # final/ask/skill/bash 分流，policy 和 executor 调度
     protocol.py       # bash / skill / ask / final / tool_calls / delegate parser
-    provider.py       # OpenAI-compatible Provider Adapter
+    provider.py       # LlmFailure 稳定失败码 + OpenAI-compatible Adapter + ProviderRegistry
+    retry.py          # per-route 重试执行器（run_with_retry / RetryingTurnProvider）
+    failover.py       # 最外层降级链（ProviderFailoverChain）
+    discovery.py      # minicc models 模型发现（有界 GET /models）
     state.py          # RunState / Observation / TrajectoryStep
     tooling.py        # ToolCallScheduler + read/edit/write/bash capability（expected_hash 版本校验）
     workflow.py       # workflow 辅助类型

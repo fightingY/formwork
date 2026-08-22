@@ -11,7 +11,7 @@
   `CapabilityPolicy` / `ReadOnlyBashPolicy` 权限边界。
 - `minicc childrun` 子进程与 in-process 两种 child 后端，通过 stdin/stdout JSONL 通信。
 - 不可变 `trace.jsonl` 到脱敏 `transcript.jsonl` / `transcript.md` 的可读投影。
-- `child_provider` 子模型配置（`MINICC_CHILD_MODEL`，旧别名 `MINICC_FAST_MODEL`），未设置时回退主模型。
+- `child` 子模型 route 配置（`child.provider` + `child.model`，环境变量 `MINICC_CHILD_PROVIDER` / `MINICC_CHILD_MODEL`），未设置时回退主 route 模型。
 
 ### Changed
 
@@ -24,6 +24,32 @@
 
 - V4 仍为 experimental，未升 stable；不声明真实 Provider 多 Agent 成功率。
 - 正式只读 child 的 Docker read-only mount 证据仍需 Docker 集成环境。
+
+## [3.7.0] - 2026-08-22
+
+### Added
+
+- V4.1 Provider 层重构（多上游降级合同）：稳定失败码 `LlmFailure`
+  （`RATE_LIMIT`/`SERVER`/`TIMEOUT`/`TRANSPORT`/`EMPTY_RESPONSE` 为瞬态，`AUTH`/`QUOTA`/
+  `BAD_REQUEST`/`CONTEXT_OVERFLOW`/`ABORTED`/`UNKNOWN` 为非瞬态），adapter 只上报事实。
+- `ProviderRegistry` 多 route 注册 + `providers:` dict / `default_provider` / `failover` /
+  `child` 配置 schema；换上游 = 改一行（`default_provider` 或 `MINICC_PROVIDER`）。
+- per-route 重试执行器 `RetryingTurnProvider.run_with_retry`（有界退避 + 抖动 + 尊重 `Retry-After`，
+  落 `llm/retry` 事件）与最外层 `ProviderFailoverChain`（落 `failover/hop` 事件）挂到 loop 失败步骤扩展点。
+- `minicc models <route>` 子命令：有界 `GET /models` 模型发现，配合 `--probe-key` / `--json`。
+
+### Changed
+
+- `OpenAICompatibleProvider.complete()` 收敛为单次可见 attempt，移除内部传输重试；
+  `ModelResponse` 不再携带 `attempt_count`/`retry_reasons`（`model_response` trace 事件合同保留）。
+- `provider:` / `child_provider:` 扁平配置块替换为 `providers:` dict + `child` route；
+  旧 env `MINICC_BASE_URL`/`MINICC_TEMPERATURE`/`MINICC_JSON_MODE` 移除，新增
+  `MINICC_PROVIDER`/`MINICC_CHILD_PROVIDER`/`MINICC_MODEL`/`MINICC_CHILD_MODEL`/`MINICC_PROVIDER_TIMEOUT_SEC`。
+
+### Boundaries
+
+- 全部能力由 `httpx.MockTransport` 确定性测试覆盖，不调真实 Provider；真实模型 smoke
+  仅作为可选、gitignored、需密钥的开发预检，不进 acceptance。
 
 ## [3.6.0] - 2026-08-21
 

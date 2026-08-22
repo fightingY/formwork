@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path, PurePosixPath
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from minicc import __version__
 from minicc.config import (
@@ -35,7 +35,12 @@ from minicc.core.ledger import (
 )
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig, TurnProvider
 from minicc.core.project_context import inspect_repository, write_repository_profile
-from minicc.core.provider import CompletionOptions, OpenAICompatibleProvider, ProviderRegistry
+from minicc.core.provider import (
+    CompletionOptions,
+    OpenAICompatibleProvider,
+    ProviderError,
+    ProviderRegistry,
+)
 from minicc.core.retry import RetryingTurnProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.runner import ModelTurnRunner
@@ -43,6 +48,9 @@ from minicc.core.session import SessionManager
 from minicc.core.state import RunState, state_path_for_run
 from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
 from minicc.core.verification import CommandCompletionVerifier, CompletionVerifier
+
+if TYPE_CHECKING:
+    from minicc.core.discovery import ModelInfo
 from minicc.evals.cache_ab import (
     build_cache_ab_report,
     write_cache_ab_report,
@@ -234,6 +242,29 @@ def build_parser() -> argparse.ArgumentParser:
     deny_parser.add_argument("run_id", help="Run id waiting for approval.")
     deny_parser.add_argument("--reason", default="User denied the action.", help="Reason returned to the model.")
     deny_parser.set_defaults(handler=deny_command)
+
+    models_parser = subparsers.add_parser(
+        "models",
+        help="Discover models available on a provider route (bounded GET /models).",
+    )
+    models_parser.add_argument(
+        "route",
+        nargs="?",
+        default=None,
+        help="Route name from providers: (defaults to default_provider).",
+    )
+    models_parser.add_argument(
+        "--probe-key",
+        default=None,
+        help="Temporary API key to probe with; never persisted.",
+    )
+    models_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit a single JSON array instead of a plain list.",
+    )
+    models_parser.set_defaults(handler=models_command)
 
     eval_parser = subparsers.add_parser("eval", help="Run eval cases and write JSON/Markdown reports.")
     eval_parser.add_argument("path", nargs="?", default="eval_cases", help="Eval cases directory.")
@@ -604,6 +635,69 @@ def build_parser() -> argparse.ArgumentParser:
     childrun_parser = subparsers.add_parser("childrun", help="Run a V4 child over stdin/stdout JSONL.")
     childrun_parser.set_defaults(handler=childrun_command)
     return parser
+
+
+def models_command(args: argparse.Namespace) -> int:
+    # V4.1 M5：模型发现在解析到该子命令时才按需 import，避免 `core.discovery` 的
+    # httpx 边界进入其它命令的启动路径。
+    from minicc.core.discovery import discover_models
+
+    settings = load_settings()
+    route_name = args.route or settings.default_provider
+    route = settings.providers.get(route_name)
+    if route is None:
+        print(f"Unknown provider route: {route_name!r}", file=sys.stderr)
+        return 2
+    api_key = args.probe_key or route.api_key
+    if not api_key:
+        print(
+            f"Route {route_name!r} has no API key; pass --probe-key or set its api_key_env.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        models = discover_models(
+            route.base_url,
+            api_key,
+            headers=route.headers or None,
+            timeout_ms=route.timeout_ms,
+        )
+    except ProviderError as exc:
+        print(f"Model discovery failed ({exc.failure.code}): {exc.failure.message}", file=sys.stderr)
+        return 1
+
+    if not models:
+        print("No models discovered.", file=sys.stderr)
+        return 1
+    _print_models(models, json_output=args.json_output)
+    return 0
+
+
+def _print_models(models: list[ModelInfo], *, json_output: bool) -> None:
+    if json_output:
+        print(
+            json.dumps(
+                [
+                    {
+                        "id": model.id,
+                        "context_window": model.context_window,
+                        "max_output_tokens": model.max_output_tokens,
+                    }
+                    for model in models
+                ],
+                ensure_ascii=False,
+            )
+        )
+        return
+    for model in models:
+        extras = []
+        if model.context_window is not None:
+            extras.append(f"context_window={model.context_window}")
+        if model.max_output_tokens is not None:
+            extras.append(f"max_output_tokens={model.max_output_tokens}")
+        suffix = ("  " + "  ".join(extras)) if extras else ""
+        print(model.id + suffix)
 
 
 def childrun_command(args: argparse.Namespace) -> int:

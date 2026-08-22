@@ -1129,3 +1129,42 @@ def test_cleanup_command_defaults_to_dry_run_and_apply_uses_same_candidate(tmp_p
 def test_cli_version_is_prerelease_dev() -> None:
     # V4.1 开发期仍是 pre-release（.dev0），归档时再定正式版本号。
     assert __version__ == "3.7.0.dev0"
+
+
+def test_models_command_prints_discovered_models(monkeypatch, capsys) -> None:
+    from minicc.core.discovery import ModelInfo
+
+    monkeypatch.setattr(cli, "load_settings", lambda: _settings())
+    monkeypatch.setattr(
+        "minicc.core.discovery.discover_models",
+        lambda base_url, api_key, *, headers=None, timeout_ms=120000, max_bytes=4194304: [
+            ModelInfo(id="a", context_window=131072, max_output_tokens=8192),
+            ModelInfo(id="b"),
+        ],
+    )
+
+    code = cli.models_command(argparse.Namespace(route=None, probe_key=None, json_output=False))
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "a  context_window=131072  max_output_tokens=8192" in out
+    assert "\nb\n" in out
+
+
+def test_models_command_json_output(monkeypatch, capsys) -> None:
+    from minicc.core.discovery import ModelInfo
+
+    monkeypatch.setattr(cli, "load_settings", lambda: _settings())
+    monkeypatch.setattr(
+        "minicc.core.discovery.discover_models",
+        lambda *args, **kwargs: [ModelInfo(id="a", context_window=131072, max_output_tokens=8192)],
+    )
+
+    code = cli.models_command(
+        argparse.Namespace(route="default", probe_key="tmp", json_output=True)
+    )
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {"id": "a", "context_window": 131072, "max_output_tokens": 8192}
+    ]
