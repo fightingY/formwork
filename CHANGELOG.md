@@ -13,6 +13,12 @@
 - 不可变 `trace.jsonl` 到脱敏 `transcript.jsonl` / `transcript.md` 的可读投影。
 - `child` 子模型 route 配置（`child.provider` + `child.model`，环境变量 `MINICC_CHILD_PROVIDER` / `MINICC_CHILD_MODEL`），未设置时回退主 route 模型。
 
+### Security
+
+- 密钥安全防护：`api_key_env` 只接受合法环境变量名（`[A-Za-z_][A-Za-z0-9_]*`），把真密钥（如
+  `sk-…`）误填进 `minicc.yaml` 会被 `config.py::_require_valid_env_name` fail-fast 拒绝；同时强化
+  `.env.example` / `minicc.yaml` / README 的「密钥只放 `.env`、`minicc.yaml` 会被 git 提交」提示。
+
 ### Changed
 
 - 移除无意义的 `max_turns` 预算；改由 `max_seconds`（wall-clock，Loop 内强制）+

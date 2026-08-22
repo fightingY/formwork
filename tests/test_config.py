@@ -246,6 +246,45 @@ def test_load_settings_requires_api_key(tmp_path, monkeypatch) -> None:
         load_settings()
 
 
+def test_load_settings_rejects_real_key_in_api_key_env(tmp_path, monkeypatch) -> None:
+    # api_key_env 应填环境变量的**名字**；把真密钥塞进来要 fail-fast（minicc.yaml 会被提交）。
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-fallback")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://provider.test/v1
+    model: test-model
+    api_key_env: sk-secret-real-key-123456
+default_provider: primary
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MisconfigurationError, match="环境变量"):
+        load_settings()
+
+
+def test_load_settings_accepts_valid_env_name(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CUSTOM_KEY", "sk-custom")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://provider.test/v1
+    model: test-model
+    api_key_env: CUSTOM_KEY
+default_provider: primary
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+    assert settings.default_route.name == "primary"
+
+
 def test_load_settings_failover_unknown_route_fails(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MINICC_API_KEY", "sk-key")

@@ -3,9 +3,12 @@ project:
 
 # V4.1：多上游路由注册表。key 即 route 名；每条 route 一套独立的
 # base_url / api_key_env / model / timeout / retry_policy，换上游 = 改一行配置
-# （default_provider 或环境变量 MINICC_PROVIDER）。密钥不放这里，只放 .env / 环境变量。
+# （default_provider 或环境变量 MINICC_PROVIDER）。
+#
+# ⚠️ 密钥安全：api_key_env 填的是「环境变量的名字」（如 SILICONFLOW_API_KEY），
+#    不是密钥本身。真密钥只放 .env / 系统环境变量；minicc.yaml 会被 git 提交到
+#    GitHub，绝不能在这里出现明码密钥（把 sk-… 填进来会被 config 层直接拒绝）。
 providers:
-  # 主上游（默认 route）：硅基流动。
   siliconflow:
     base_url: https://api.siliconflow.cn/v1
     api_key_env: SILICONFLOW_API_KEY
@@ -16,23 +19,29 @@ providers:
   bailian:
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     api_key_env: BAILIAN_API_KEY
-    model: qwen-plus
+    model: deepseek-v4-flash
     json_mode: true
 
-  # 备用上游：私人中转站示例。
-  relay-private:
-    base_url: https://relay.example.com/v1
-    api_key_env: RELAY_PRIVATE_API_KEY
-    model: deepseek-chat
-    headers: {}          # 可选：中转站额外头
+  # 私人中转站mmkg
+  mmkg:
+    base_url: https://code.mmkg.cloud/v1
+    api_key_env: MMKG_API_KEY
+    model: grok-4.6
+    json_mode: true
+  
+  b-ai:
+    base_url: https://api.b.ai/v1        # 必须带 /v1
+    api_key_env: BAI_API_KEY
+    model: deepseek-v4-flash                 # 换成你想用的，如 gpt-5.2
+    json_mode: true
 
 # 无 failover 时的主 route；也可被环境变量 MINICC_PROVIDER 覆盖。
-default_provider: siliconflow
+default_provider: b-ai
 
 # 可选：最外层降级链（在以下失败码上切换到下一 route）。默认关闭（failover 是可选
 # 最外层调度器，不是默认姿势）。
 # failover:
-#   chain: [siliconflow, bailian, relay-private]
+#   chain: [siliconflow, bailian, b-ai]
 #   on: [QUOTA, AUTH, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
 #   max_hops: 2
 

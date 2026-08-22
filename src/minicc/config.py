@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -160,6 +161,27 @@ _ROUTE_KEYS = frozenset(
     }
 )
 
+# 合法的环境变量名：字母/数字/下划线，且不以数字开头。用于拦截把真密钥
+# 误填进 ``api_key_env`` 的情况（见 `_require_valid_env_name`）。
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _require_valid_env_name(route_name: str, api_key_env: str) -> None:
+    """``api_key_env`` 填的是环境变量的**名字**，不是密钥本身。
+
+    ``minicc.yaml`` 会被 git 跟踪并提交到 GitHub，绝不允许明码密钥；真密钥只放
+    ``.env`` / 环境变量。合法变量名形如 ``SILICONFLOW_API_KEY``，而真实密钥
+    （``sk-…``）几乎必然含连字符等非法字符，据此 fail-fast 拦截，避免用户手滑。
+    """
+    if _ENV_NAME_RE.fullmatch(api_key_env):
+        return
+    raise MisconfigurationError(
+        f"providers.{route_name}.api_key_env 应该填环境变量的**名字**"
+        f"（如 SILICONFLOW_API_KEY），而不是密钥本身。检测到 {api_key_env!r} 不是"
+        f"合法的环境变量名：请把真密钥写进 .env（已被 .gitignore 忽略、不会提交），"
+        f"这里只留变量名。minicc.yaml 会被 git 提交，绝不能包含真密钥。"
+    )
+
 
 def load_settings() -> Settings:
     load_dotenv_file(Path.cwd() / ".env")
@@ -279,6 +301,7 @@ def _parse_providers(
             raise MisconfigurationError(f"providers.{name}.model is required")
 
         api_key_env = str(route_cfg.get("api_key_env") or "MINICC_API_KEY")
+        _require_valid_env_name(name, api_key_env)
         api_key = os.getenv(api_key_env) or fallback_api_key or ""
         if not api_key:
             raise MisconfigurationError(

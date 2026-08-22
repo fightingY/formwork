@@ -441,7 +441,12 @@ uv run pytest
 
 ## 配置模型
 
-项目根目录已经提供 `.env`，把默认上游（`siliconflow`）的密钥 `SILICONFLOW_API_KEY` 改成你的即可；`MINICC_API_KEY` 只是某条 route 未声明 `api_key_env` 时的兜底。
+> ⚠️ **密钥安全（务必先看）**：真密钥**只放 `.env`**（已被 `.gitignore` 忽略，不会进 git / GitHub）。
+> 仓库不自带 `.env`，只有占位的 `.env.example`——请先复制它为 `.env`（例如 `cp .env.example .env`），
+> 再在里面填你的密钥。`minicc.yaml` 会被提交到 GitHub，里面只能写 `api_key_env` 的「变量名」，
+> 绝不能填真密钥：把 `sk-…` 等真密钥填进 `api_key_env` 会被程序直接拒绝（fail-fast）。
+
+把默认上游（`siliconflow`）的密钥 `SILICONFLOW_API_KEY` 改成你的即可；`MINICC_API_KEY` 只是某条 route 未声明 `api_key_env` 时的兜底。
 
 ```text
 # 每条 route 的 api_key_env 指向这里的变量名；MINICC_API_KEY 是未声明 api_key_env 时的兜底

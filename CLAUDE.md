@@ -41,7 +41,7 @@ uv build                                 # 构建 sdist/wheel
 
 ## 配置分层
 
-`load_settings()`（`src/minicc/config.py`）按优先级合并：系统 env > `.env`（简易 dotenv 加载，已存在则不覆盖）> `minicc.yaml`。上游是 `providers:` dict（key 即 route 名，每条 route 有 `base_url`/`api_key_env`/`model`/`headers`/`timeout_ms`/`retry_policy`）+ `default_provider` + 可选 `failover` 降级链 + `child` 子模型 route。`MINICC_PROVIDER`/`MINICC_CHILD_PROVIDER`/`MINICC_MODEL`/`MINICC_CHILD_MODEL`/`MINICC_PROVIDER_TIMEOUT_SEC` 覆盖对应项；密钥只放 `.env`/环境变量（route 的 `api_key_env` 指向这里的变量名，`MINICC_API_KEY` 兜底），刻意不写入 `minicc.yaml`。
+`load_settings()`（`src/minicc/config.py`）按优先级合并：系统 env > `.env`（简易 dotenv 加载，已存在则不覆盖）> `minicc.yaml`。上游是 `providers:` dict（key 即 route 名，每条 route 有 `base_url`/`api_key_env`/`model`/`headers`/`timeout_ms`/`retry_policy`）+ `default_provider` + 可选 `failover` 降级链 + `child` 子模型 route。`MINICC_PROVIDER`/`MINICC_CHILD_PROVIDER`/`MINICC_MODEL`/`MINICC_CHILD_MODEL`/`MINICC_PROVIDER_TIMEOUT_SEC` 覆盖对应项；密钥只放 `.env`/环境变量（route 的 `api_key_env` 指向这里的变量名，`MINICC_API_KEY` 兜底），刻意不写入 `minicc.yaml`。`.env.example` 是占位模板、会被提交，只留 `your_api_key_here`；`config.py::_require_valid_env_name` 会 fail-fast 拦截把真密钥（如 `sk-…`）误填进 `api_key_env` 的行为——`api_key_env` 只接受合法环境变量名（`[A-Za-z_][A-Za-z0-9_]*`）。
 
 ## 架构大图
 
