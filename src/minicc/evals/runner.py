@@ -36,6 +36,7 @@ from minicc.evals.case import (
     fixture_source_path,
 )
 from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
+from minicc.trace.transcript import project_trace
 
 AgentRunCallable = Callable[[EvalCase, RunState], RunState]
 EvalCaseCompletedCallable = Callable[["EvalCaseResult"], None]
@@ -196,6 +197,7 @@ def run_eval_case(
         state.metrics["infrastructure_errors"] = state.metrics.get("infrastructure_errors", 0) + 1
         save_run_state(state)
     write_workspace_diff(workspace.workspace_dir, workspace.artifacts_dir)
+    _finalize_transcript(workspace.run_dir)
     metrics = _load_metrics(workspace.run_dir)
     assertion_results = run_assertions(
         case.assertions,
@@ -710,6 +712,8 @@ def _run_evidence_paths(result: EvalCaseResult) -> dict[str, str]:
         "workspace_manifest": str(run_dir / "workspace_manifest.json"),
         "diff": str(run_dir / "artifacts" / "diff.patch"),
         "run_report": str(run_dir / "eval_result.json"),
+        "transcript": str(run_dir / "transcript.jsonl"),
+        "transcript_markdown": str(run_dir / "transcript.md"),
         "suite_manifest": str(suite_manifest),
     }
     working_memory = run_dir / "working_memory.json"
@@ -769,6 +773,22 @@ def _expected_run_status(case: EvalCase) -> str:
             if expected == "waiting_approval" and case.capability.startswith("hitl"):
                 return expected
     return "completed"
+
+
+def _finalize_transcript(run_dir: Path) -> None:
+    """Project the run trace into the same human-readable transcript artifacts
+    the ordinary ``run`` command produces (``transcript.jsonl`` / ``transcript.md``).
+
+    Best-effort, like the ``run`` finalization: a transcript write failure must not
+    fail an otherwise-complete eval run.
+    """
+    try:
+        project_trace(run_dir / "trace.jsonl", run_dir)
+    except OSError as exc:
+        (run_dir / "finalize_errors.txt").write_text(
+            f"Failed to finalize transcript: {exc}\n",
+            encoding="utf-8",
+        )
 
 
 def _format_infrastructure_error(exc: Exception) -> str:

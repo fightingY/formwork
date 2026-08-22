@@ -530,12 +530,28 @@ class OpenAICompatibleProvider:
         return {"chunks": chunks, "usage": usage_raw}, "".join(content_parts), usage_raw
 
 
+def _body_preview(body: str, limit: int = 500) -> str:
+    """Collapse and bound a provider error body for safe inclusion in a log line."""
+    collapsed = " ".join((body or "").split())
+    if not collapsed:
+        return "no response body"
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit] + "…"
+
+
 def _classify_http_status(response: httpx.Response) -> LlmFailure:
-    """Map a non-2xx HTTP response onto a stable failure code."""
+    """Map a non-2xx HTTP response onto a stable failure code.
+
+    The message keeps the HTTP status and a truncated response body so operators
+    can tell 402 (quota) / 429 (rate limit) / 401·403 (auth) / 5xx (server) apart
+    without re-running the provider.
+    """
     status = response.status_code
-    code = _http_code(status, response.text)
+    body = response.text
+    code = _http_code(status, body)
     return LlmFailure(
-        message=f"Provider HTTP request failed with status {status}",
+        message=f"Provider HTTP request failed with status {status}: {_body_preview(body)}",
         code=code,
         status=status,
         retry_after_ms=_parse_retry_after_ms(response.headers),
