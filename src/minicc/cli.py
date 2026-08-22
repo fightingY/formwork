@@ -1286,6 +1286,10 @@ def _build_loop(
                 compaction_strategy=settings.context.compaction_strategy,
                 retention_markers=settings.context.retention_markers,
                 prompt_layout=prompt_layout,
+                context_window=settings.default_route.context_window,
+                threshold_ratio=settings.context.threshold_ratio,
+                retain_ratio=settings.context.retain_ratio,
+                max_overflow_retries=settings.context.max_overflow_retries,
             ),
             skill_registry=skill_registry,
             feedback_memory=feedback_memory,
@@ -2184,6 +2188,13 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
             tuple(str(item) for item in case.context.get("retention_markers", []))
             or settings.context.retention_markers
         ),
+        threshold_ratio=_context_float(case, "threshold_ratio", settings.context.threshold_ratio),
+        retain_ratio=_context_float(case, "retain_ratio", settings.context.retain_ratio),
+        max_overflow_retries=_context_int(
+            case,
+            "max_overflow_retries",
+            settings.context.max_overflow_retries,
+        ),
     )
 
     case_policy = settings.policy
@@ -2249,6 +2260,18 @@ def _context_int(case: EvalCase, name: str, default: int) -> int:
         return default
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _context_float(case: EvalCase, name: str, default: float) -> float:
+    value = case.context.get(name)
+    if value is None or isinstance(value, bool):
+        return default
+    if not isinstance(value, (str, int, float, bytes, bytearray)):
+        return default
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return default
 

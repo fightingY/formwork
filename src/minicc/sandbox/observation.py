@@ -21,7 +21,7 @@ def observation_from_command_result(
     *,
     state: RunState,
     artifacts: ArtifactStore | None = None,
-    artifact_threshold_bytes: int = 16 * 1024,
+    artifact_threshold_bytes: int = 50_000,
     preview_chars: int = 12_000,
 ) -> Observation:
     artifact_ids: list[str] = []

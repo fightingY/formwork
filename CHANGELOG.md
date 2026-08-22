@@ -16,6 +16,13 @@
   对齐 dsh `maxRounds`，作为唯一成本硬防线（不设 token/美元成本上限）。
 - 收尾自述 grounding：`STABLE_PREFIX` 的 `final` 规则要求 `answer` 只报会话实际证实的结论、
   并说明每条关键声明由哪条命令验证（对应 dsh `wrapup.ts` GROUNDING）。
+- 压缩阈值绑定模型上下文窗口：route 新增 `context_window` 字段，压缩触发改为
+  `context_window × threshold_ratio`（默认 0.8）token 计量，保留尾部改为
+  `context_window × retain_ratio`（默认 0.16）替换固定 `recent_turns`；缺省 `context_window`
+  时仍回退 `max_prompt_chars` 字符阈值（对齐 dsh `DEFAULT_THRESHOLD_RATIO` / `DEFAULT_RETAIN_RATIO`）。
+- `CONTEXT_OVERFLOW` 溢出恢复：抓到 413 / 上下文超长失败时 `force_compact` 强制压缩 + 重试同一
+  回合，由 `max_overflow_retries`（默认 1）封顶；压缩无进展（无可压步 / `compaction_strategy=disabled`）
+  或重试用尽即 `failed`，不无限循环。
 
 ### Security
 
@@ -30,6 +37,7 @@
   `max_bash_actions` + `max_action_timeout_sec` 共同约束。
 - 删减 eval/acceptance 侧大量哈希校验与 `source_lock.yaml`，简化证据链操作。
 - 覆盖率硬门由 78% 下调至 50%（对应 `pyproject.toml` 的 `fail_under = 50`）。
+- 长命令结果落盘阈值由 16KB 上调至 50 000 字节（对齐 dsh patch `maxInlineBytes: 50000`）。
 
 ### Boundaries
 

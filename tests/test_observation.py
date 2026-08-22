@@ -50,3 +50,25 @@ def test_large_output_writes_artifact(tmp_path) -> None:
 
 def test_preview_text_keeps_short_content() -> None:
     assert preview_text("short", 10) == "short"
+
+
+def test_artifact_threshold_defaults_aligned_to_50kb() -> None:
+    import inspect
+
+    from minicc.sandbox.docker_runner import DockerCommandExecutor
+    from minicc.sandbox.local_runner import LocalCommandExecutor
+    from minicc.sandbox.observation import observation_from_command_result
+
+    obs_default = inspect.signature(observation_from_command_result).parameters[
+        "artifact_threshold_bytes"
+    ].default
+    local_default = inspect.signature(LocalCommandExecutor.__init__).parameters[
+        "artifact_threshold_bytes"
+    ].default
+    docker_default = inspect.signature(DockerCommandExecutor.__init__).parameters[
+        "artifact_threshold_bytes"
+    ].default
+
+    assert obs_default == 50_000
+    assert local_default == 50_000
+    assert docker_default == 50_000

@@ -19,6 +19,10 @@ providers:
     api_key_env: SILICONFLOW_API_KEY
     model: deepseek-ai/DeepSeek-V4-Pro
     json_mode: true
+    # 模型上下文窗口（可选）：绑定压缩触发阈值（context.threshold_ratio）与保留尾部
+    # （context.retain_ratio），用 token 计量；缺省则回退 context.max_prompt_chars 的字符阈值。
+    # 按所选模型的实际窗口填（示例按 128K 写一个值）。
+    context_window: 131072
 
   # 备用上游：阿里云百炼（OpenAI 兼容模式）。
   bailian:
@@ -80,6 +84,12 @@ context:
   field_preview_chars: 4000
   compaction_strategy: deterministic
   semantic_max_input_chars: 60000
+  # 绑定模型上下文窗口时的压缩触发/保留比例（token 计量，对齐 dsh 默认 0.8/0.16）；
+  # 无 route 的 context_window 时这些被忽略，回退 max_prompt_chars 字符阈值。
+  threshold_ratio: 0.8
+  retain_ratio: 0.16
+  # CONTEXT_OVERFLOW（413/上下文超长）时的「强制压缩+重试」上限（0 = 关闭恢复）。
+  max_overflow_retries: 1
   # Keep the full append-only history until the prompt budget triggers one compaction.
   prompt_layout: append_until_compaction
 

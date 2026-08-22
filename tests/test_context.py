@@ -540,3 +540,82 @@ def _step(
         ),
         state_snapshot=state_snapshot,
     )
+
+
+def test_model_bound_threshold_triggers_compaction() -> None:
+    builder = ContextBuilder(
+        ContextConfig(context_window=200, threshold_ratio=0.8, recent_turns=0)
+    )
+    state = RunState.start("Token-metered compaction")
+    trajectory = [
+        _step(f"echo step {index}", "some compactable trajectory content")
+        for index in range(6)
+    ]
+
+    builder.maybe_compact(state, trajectory)
+
+    assert state.metrics["context_compactions"] >= 1
+    assert state.metrics["context_compacted_steps"] < len(trajectory)
+
+
+def test_model_bound_threshold_replaces_char_threshold() -> None:
+    # context_window 很大，token 估算远低于 0.8 阈值 → 不触发；若仍走字符阈值
+    # （max_prompt_chars=10 极小）就会误触发。
+    builder = ContextBuilder(
+        ContextConfig(
+            context_window=100_000,
+            threshold_ratio=0.8,
+            max_prompt_chars=10,
+            recent_turns=1,
+        ),
+    )
+    state = RunState.start("No compaction expected")
+
+    builder.maybe_compact(state, [_step("pwd", "tiny")])
+
+    assert state.metrics.get("context_compactions", 0) == 0
+
+
+def test_char_threshold_fallback_without_context_window() -> None:
+    # 无 context_window：保留按字符阈值的回退行为（阈值大 → 不触发）。
+    builder = ContextBuilder(
+        ContextConfig(max_prompt_chars=10**9, recent_turns=1),
+    )
+    state = RunState.start("Char fallback")
+
+    builder.maybe_compact(state, [_step("pwd", "tiny")])
+
+    assert state.metrics.get("context_compactions", 0) == 0
+
+
+def test_force_compact_compacts_regardless_of_threshold() -> None:
+    builder = ContextBuilder(ContextConfig(max_prompt_chars=10**9, recent_turns=0))
+    state = RunState.start("Force compact below threshold")
+    trajectory = [_step("pwd", "first"), _step("ls", "second")]
+
+    assert builder.force_compact(state, trajectory) is True
+    assert state.metrics["context_compactions"] == 1
+    assert state.metrics["context_compacted_steps"] == 2
+
+
+def test_force_compact_returns_false_when_fully_compacted() -> None:
+    builder = ContextBuilder(ContextConfig(recent_turns=0))
+    state = RunState.start("Already compacted")
+    trajectory = [_step("pwd", "first"), _step("ls", "second")]
+
+    assert builder.force_compact(state, trajectory) is True
+    assert builder.force_compact(state, trajectory) is False
+
+
+def test_force_compact_returns_false_when_disabled() -> None:
+    builder = ContextBuilder(ContextConfig(compaction_strategy="disabled"))
+    state = RunState.start("Disabled")
+
+    assert builder.force_compact(state, [_step("pwd", "first")]) is False
+
+
+def test_force_compact_returns_false_on_empty_trajectory() -> None:
+    builder = ContextBuilder()
+    state = RunState.start("Empty")
+
+    assert builder.force_compact(state, []) is False

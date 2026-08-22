@@ -40,6 +40,10 @@ class ContextConfig:
     compaction_strategy: CompactionStrategy = "deterministic"
     retention_markers: tuple[str, ...] = ()
     prompt_layout: PromptLayout = "rebuild"
+    context_window: int | None = None
+    threshold_ratio: float = 0.8
+    retain_ratio: float = 0.16
+    max_overflow_retries: int = 1
 
 
 class ContextBuilder:
@@ -131,26 +135,37 @@ class ContextBuilder:
         uncompressed_trajectory = trajectory[compacted_steps:]
         estimated_messages = self._build_messages_with_trajectory(state, uncompressed_trajectory)
         before_chars = self._messages_len(estimated_messages)
-        if before_chars <= self.config.max_prompt_chars:
+        if self._under_threshold(estimated_messages, before_chars):
             return
         state.metrics["context_budget_triggered"] = True
 
-        if self._uses_budget_driven_history():
-            compactable_end = compacted_steps + self._epoch_compactable_steps(
-                state,
-                uncompressed_trajectory,
-            )
-        else:
-            compactable_end = len(trajectory) - max(self.config.recent_turns, 0)
+        compactable_end = self._compactable_end(
+            state,
+            trajectory,
+            uncompressed_trajectory,
+            compacted_steps,
+        )
         if compactable_end <= compacted_steps:
             state.metrics["context_budget_overflows"] = (
                 state.metrics.get("context_budget_overflows", 0) + 1
             )
             return
 
+        self._apply_compaction(state, trajectory, compacted_steps, compactable_end, before_chars)
+
+    def _apply_compaction(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep],
+        compacted_steps: int,
+        compactable_end: int,
+        before_chars: int,
+    ) -> None:
         compactable = trajectory[compacted_steps:compactable_end]
         if not compactable:
-            state.metrics["context_budget_overflows"] = state.metrics.get("context_budget_overflows", 0) + 1
+            state.metrics["context_budget_overflows"] = (
+                state.metrics.get("context_budget_overflows", 0) + 1
+            )
             return
 
         trajectory_text = self.format_trajectory(compactable)
@@ -263,6 +278,104 @@ class ContextBuilder:
             compacted_step_end=compactable_end,
             preserved_recent_steps=len(trajectory) - compactable_end,
         )
+
+    def _under_threshold(
+        self,
+        estimated_messages: list[dict[str, str]],
+        before_chars: int,
+    ) -> bool:
+        context_window = self._bound_window()
+        if context_window is not None:
+            threshold_tokens = int(context_window * self.config.threshold_ratio)
+            return _estimate_messages_tokens(estimated_messages) <= threshold_tokens
+        return before_chars <= self.config.max_prompt_chars
+
+    def _bound_window(self) -> int | None:
+        context_window = self.config.context_window
+        if context_window is not None and context_window > 0:
+            return context_window
+        return None
+
+    def _compactable_end(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep],
+        uncompressed_trajectory: list[TrajectoryStep],
+        compacted_steps: int,
+    ) -> int:
+        if self._uses_budget_driven_history():
+            end = compacted_steps + self._epoch_compactable_steps(
+                state,
+                uncompressed_trajectory,
+            )
+        else:
+            end = len(trajectory) - max(self.config.recent_turns, 0)
+        context_window = self._bound_window()
+        if context_window is not None:
+            retain_tokens = int(context_window * self.config.retain_ratio)
+            retain_count = self._retain_tail_step_count(state, trajectory, retain_tokens)
+            end = min(end, len(trajectory) - retain_count)
+        return end
+
+    def _retain_tail_step_count(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep],
+        retain_tokens: int,
+    ) -> int:
+        """最长「尾部步数」，其估算 token 不超过 retain_tokens；至少保留 1 步。"""
+        if not trajectory:
+            return 0
+        prefix_tokens = _estimate_messages_tokens(
+            self._build_messages_with_trajectory(state, [])
+        )
+        for keep in range(1, len(trajectory) + 1):
+            suffix_tokens = (
+                _estimate_messages_tokens(
+                    self._build_messages_with_trajectory(state, trajectory[-keep:])
+                )
+                - prefix_tokens
+            )
+            if suffix_tokens > retain_tokens:
+                return max(keep - 1, 1)
+        return len(trajectory)
+
+    def force_compact(
+        self,
+        state: RunState,
+        trajectory: list[TrajectoryStep],
+    ) -> bool:
+        """溢出恢复：无视阈值强制压缩，返回是否真的发生了压缩。"""
+        if not trajectory:
+            return False
+        if self.config.compaction_strategy == "disabled":
+            return False
+        compacted_steps = int(state.metrics.get("context_compacted_steps", 0))
+        if compacted_steps >= len(trajectory):
+            return False
+        uncompressed_trajectory = trajectory[compacted_steps:]
+        estimated_messages = self._build_messages_with_trajectory(
+            state,
+            uncompressed_trajectory,
+        )
+        before_chars = self._messages_len(estimated_messages)
+        compactable_end = self._compactable_end(
+            state,
+            trajectory,
+            uncompressed_trajectory,
+            compacted_steps,
+        )
+        if compactable_end <= compacted_steps:
+            return False
+        pre_count = int(state.metrics.get("context_compactions", 0))
+        self._apply_compaction(
+            state,
+            trajectory,
+            compacted_steps,
+            compactable_end,
+            before_chars,
+        )
+        return int(state.metrics.get("context_compactions", 0)) > pre_count
 
     def _epoch_compactable_steps(
         self,

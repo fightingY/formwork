@@ -44,6 +44,7 @@ class ProviderRoute:
     json_mode: bool = True
     api: str = "openai-completions"
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+    context_window: int | None = None
 
     @property
     def effective_display_name(self) -> str:
@@ -114,6 +115,9 @@ class ContextSettings:
     semantic_max_input_chars: int = 60_000
     retention_markers: tuple[str, ...] = ()
     prompt_layout: PromptLayout = "rebuild"
+    threshold_ratio: float = 0.8
+    retain_ratio: float = 0.16
+    max_overflow_retries: int = 1
 
 
 @dataclass(frozen=True)
@@ -173,6 +177,7 @@ _ROUTE_KEYS = frozenset(
         "json_mode",
         "api",
         "retry_policy",
+        "context_window",
     }
 )
 
@@ -238,6 +243,9 @@ def load_settings() -> Settings:
             semantic_max_input_chars=_int_config(context_config, "semantic_max_input_chars", 60_000),
             retention_markers=_str_tuple_config(context_config, "retention_markers"),
             prompt_layout=_prompt_layout(context_config),
+            threshold_ratio=_float_config(context_config, "threshold_ratio", 0.8),
+            retain_ratio=_float_config(context_config, "retain_ratio", 0.16),
+            max_overflow_retries=_int_config(context_config, "max_overflow_retries", 1),
         ),
         policy=PolicySettings(
             require_approval_for_network=_bool_config(
@@ -342,6 +350,7 @@ def _parse_providers(
             json_mode=_bool_config(route_cfg, "json_mode", True),
             api=api,
             retry_policy=retry_policy,
+            context_window=_int_or_none_config(route_cfg, "context_window"),
         )
     return routes
 
@@ -492,6 +501,24 @@ def _int_config(config: Mapping[str, Any], key: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _float_config(config: Mapping[str, Any], key: str, default: float) -> float:
+    value = config.get(key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_or_none_config(config: Mapping[str, Any], key: str) -> int | None:
+    value = config.get(key)
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _str_tuple_config(config: Mapping[str, Any], key: str) -> tuple[str, ...]:

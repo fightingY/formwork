@@ -922,6 +922,34 @@ context:
     assert adjusted.context.retention_markers == ("src/app.py",)
 
 
+def test_eval_case_context_ratio_overrides_settings(tmp_path) -> None:
+    case_dir = tmp_path / "cases" / "demo"
+    (case_dir / "fixture").mkdir(parents=True)
+    (case_dir / "case.yaml").write_text(
+        """
+name: demo
+prompt: Finish.
+context:
+  threshold_ratio: 0.5
+  retain_ratio: 0.25
+  max_overflow_retries: 0
+""",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        sandbox=SandboxSettings(),
+        budget=BudgetSettings(),
+        context=ContextSettings(),
+        policy=PolicySettings(),
+    )
+
+    adjusted = _settings_for_eval_case(settings, load_case(case_dir / "case.yaml"))
+
+    assert adjusted.context.threshold_ratio == 0.5
+    assert adjusted.context.retain_ratio == 0.25
+    assert adjusted.context.max_overflow_retries == 0
+
+
 def test_ordinary_eval_denies_network_instead_of_waiting_for_approval(tmp_path) -> None:
     case_dir = tmp_path / "cases" / "ordinary"
     (case_dir / "fixture").mkdir(parents=True)

@@ -11,7 +11,12 @@ from minicc.core.checkpoint import CheckpointManager
 from minicc.core.context import ContextBuilder, state_snapshot_text
 from minicc.core.lifecycle import RunLifecycle
 from minicc.core.protocol import BashAction, DelegateAction, ToolCallsAction
-from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
+from minicc.core.provider import (
+    CONTEXT_OVERFLOW,
+    CompletionOptions,
+    ModelProvider,
+    ProviderError,
+)
 from minicc.core.runner import ModelTurn, ModelTurnConfig, ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState, TrajectoryStep
@@ -161,6 +166,20 @@ class AgentLoop:
                 state.metrics["provider_errors"] = state.metrics.get("provider_errors", 0) + 1
                 state.metrics["provider_last_error_code"] = exc.failure.code
                 self.trace.record("provider_error", state, error=str(exc), code=exc.failure.code)
+                if exc.failure.code == CONTEXT_OVERFLOW:
+                    retries = int(state.metrics.get("context_overflow_retries", 0))
+                    if retries < self.context_builder.config.max_overflow_retries:
+                        if self.context_builder.force_compact(state, trajectory):
+                            state.metrics["context_overflow_retries"] = retries + 1
+                            state.metrics["context_overflow_recovered"] = (
+                                state.metrics.get("context_overflow_recovered", 0) + 1
+                            )
+                            self.trace.record(
+                                "context_overflow_recovery",
+                                state,
+                                retry=retries + 1,
+                            )
+                            continue
                 self.session.fail(state, f"Run failed because the model provider failed: {exc}")
                 break
             if turn.observation is not None:

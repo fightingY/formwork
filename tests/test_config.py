@@ -467,3 +467,43 @@ def test_load_settings_rejects_unknown_prompt_layout(tmp_path, monkeypatch) -> N
         assert "context.prompt_layout" in str(exc)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_load_settings_reads_context_window_and_ratios(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(
+        """
+providers:
+  primary:
+    base_url: https://provider.test/v1
+    model: test-model
+    context_window: 128000
+default_provider: primary
+context:
+  threshold_ratio: 0.75
+  retain_ratio: 0.2
+  max_overflow_retries: 3
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.default_route.context_window == 128000
+    assert settings.context.threshold_ratio == 0.75
+    assert settings.context.retain_ratio == 0.2
+    assert settings.context.max_overflow_retries == 3
+
+
+def test_load_settings_defaults_context_window_to_none(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
+    (tmp_path / "minicc.yaml").write_text(_minimal_providers(), encoding="utf-8")
+
+    settings = load_settings()
+
+    assert settings.default_route.context_window is None
+    assert settings.context.threshold_ratio == 0.8
+    assert settings.context.retain_ratio == 0.16
+    assert settings.context.max_overflow_retries == 1

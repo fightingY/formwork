@@ -178,7 +178,7 @@ class DockerCommandExecutor:
         runner: DockerSandboxRunner,
         *,
         artifacts: ArtifactStore,
-        artifact_threshold_bytes: int = 16 * 1024,
+        artifact_threshold_bytes: int = 50_000,
         preview_chars: int = 12_000,
     ) -> None:
         self.runner = runner

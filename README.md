@@ -495,6 +495,9 @@ context:
   recent_turns: 6
   artifact_preview_chars: 12000
   prompt_layout: append_until_compaction
+  threshold_ratio: 0.8      # 绑定 route.context_window 后的压缩触发比例（token 计量）
+  retain_ratio: 0.16        # 绑定后的保留尾部比例（替换 recent_turns）
+  max_overflow_retries: 1   # CONTEXT_OVERFLOW 强制压缩+重试上限（0 = 关闭）
 
 tooling:
   profile: baseline-bash
@@ -507,6 +510,7 @@ providers:
     api_key_env: SILICONFLOW_API_KEY
     model: deepseek-ai/DeepSeek-V4-Pro
     json_mode: true
+    context_window: 131072  # 绑定模型上下文窗口（可选，缺省回退字符阈值）
   bailian:
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     api_key_env: BAILIAN_API_KEY

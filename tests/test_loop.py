@@ -2,9 +2,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from minicc.core.context import ContextBuilder, ContextConfig
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig
 from minicc.core.protocol import BashAction
 from minicc.core.provider import (
+    CONTEXT_OVERFLOW,
     TIMEOUT,
     CompletionOptions,
     LlmFailure,
@@ -282,3 +284,130 @@ def test_loop_fails_fast_when_provider_truncates_at_token_limit(tmp_path) -> Non
     assert result.state.status == "failed"
     assert "finish_reason=length" in result.state.state_summary
     assert result.state.metrics.get("protocol_errors", 0) == 0
+
+
+class _OverflowThenOkProvider:
+    """先跑 2 个 bash 回合撑起轨迹，第 3 次调用抛 CONTEXT_OVERFLOW，之后回复 final。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages, *, options=None):
+        self.calls += 1
+        if self.calls == 3:
+            raise ProviderError(
+                failure=LlmFailure(message="context too long", code=CONTEXT_OVERFLOW)
+            )
+        if self.calls <= 2:
+            return ModelResponse(
+                text='{"type":"bash","command":"echo step","purpose":"grow"}',
+                raw={},
+                usage=ModelUsage(),
+                latency_ms=1,
+            )
+        return ModelResponse(
+            text='{"type":"final","answer":"done"}',
+            raw={},
+            usage=ModelUsage(),
+            latency_ms=1,
+        )
+
+
+def test_overflow_recovery_compacts_and_retries(tmp_path) -> None:
+    builder = ContextBuilder(ContextConfig(recent_turns=0))
+    state = RunState.start("grow then overflow")
+
+    result = AgentLoop(
+        _OverflowThenOkProvider(),
+        FakeExecutor(),
+        context_builder=builder,
+        session=SessionManager(runs_root=tmp_path / "runs"),
+    ).run(state)
+
+    assert result.state.status == "completed"
+    assert result.state.metrics["context_overflow_retries"] == 1
+    assert result.state.metrics["context_compactions"] == 1
+
+
+def test_overflow_recovery_exhausts_retries_and_fails(tmp_path) -> None:
+    class AlwaysOverflow:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, messages, *, options=None):
+            self.calls += 1
+            if self.calls <= 2:
+                return ModelResponse(
+                    text='{"type":"bash","command":"echo step","purpose":"grow"}',
+                    raw={},
+                    usage=ModelUsage(),
+                    latency_ms=1,
+                )
+            raise ProviderError(
+                failure=LlmFailure(message="context too long", code=CONTEXT_OVERFLOW)
+            )
+
+    builder = ContextBuilder(ContextConfig(recent_turns=0))
+    state = RunState.start("persistent overflow")
+
+    result = AgentLoop(
+        AlwaysOverflow(),
+        FakeExecutor(),
+        context_builder=builder,
+        session=SessionManager(runs_root=tmp_path / "runs"),
+    ).run(state)
+
+    assert result.state.status == "failed"
+    assert result.state.metrics["provider_errors"] == 2
+    assert result.state.metrics["context_overflow_retries"] == 1
+
+
+def test_overflow_recovery_disabled_when_zero(tmp_path) -> None:
+    builder = ContextBuilder(ContextConfig(recent_turns=0, max_overflow_retries=0))
+    state = RunState.start("no recovery")
+
+    result = AgentLoop(
+        _OverflowThenOkProvider(),
+        FakeExecutor(),
+        context_builder=builder,
+        session=SessionManager(runs_root=tmp_path / "runs"),
+    ).run(state)
+
+    assert result.state.status == "failed"
+    assert "context_overflow_retries" not in result.state.metrics
+
+
+def test_overflow_recovery_with_empty_trajectory_fails_without_looping(tmp_path) -> None:
+    class ImmediateOverflow:
+        def complete(self, messages, *, options=None):
+            raise ProviderError(
+                failure=LlmFailure(message="context too long", code=CONTEXT_OVERFLOW)
+            )
+
+    state = RunState.start("overflow on first turn")
+
+    result = AgentLoop(
+        ImmediateOverflow(),
+        FakeExecutor(),
+        session=SessionManager(runs_root=tmp_path / "runs"),
+    ).run(state)
+
+    assert result.state.status == "failed"
+    assert result.state.metrics["provider_errors"] == 1
+
+
+def test_overflow_recovery_disabled_compaction_fails(tmp_path) -> None:
+    builder = ContextBuilder(
+        ContextConfig(recent_turns=0, compaction_strategy="disabled")
+    )
+    state = RunState.start("compaction disabled")
+
+    result = AgentLoop(
+        _OverflowThenOkProvider(),
+        FakeExecutor(),
+        context_builder=builder,
+        session=SessionManager(runs_root=tmp_path / "runs"),
+    ).run(state)
+
+    assert result.state.status == "failed"
+    assert result.state.metrics.get("context_compactions", 0) == 0
