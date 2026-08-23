@@ -101,8 +101,17 @@ from minicc.evals.release_report import (
 )
 from minicc.evals.runner import run_eval_suite, write_eval_report, write_suite_report
 from minicc.memory.compaction import SemanticCompactor
+from minicc.memory.dedup import L1Deduper
+from minicc.memory.escalation import (
+    EscalationHook,
+    PersonaEscalator,
+    PersonaSynthesizer,
+    ScenarioEscalator,
+    ScenarioSynthesizer,
+)
 from minicc.memory.feedback import FeedbackMemory
-from minicc.memory.working import WorkingMemoryError, attach_working_memory
+from minicc.memory.l1 import L1Distiller, MemoryStore, MemoryTurnHook, project_db_path
+from minicc.memory.working import attach_working_memory
 from minicc.meta.reviewer import MetaReviewer, MetaReviewError, load_meta_review
 from minicc.multi_agent import SubprocessChildRunProvider, WorkflowCoordinator, childrun_main
 from minicc.policy.factory import build_policy_chain
@@ -866,15 +875,11 @@ def run_command(args: argparse.Namespace) -> int:
         _attach_repository_context(state, state.workspace_host_path or Path.cwd())
 
         if follow_up_from:
-            try:
-                attach_working_memory(
-                    state,
-                    str(follow_up_from),
-                    runs_root=Path.cwd() / ".minicc" / "runs",
-                )
-            except WorkingMemoryError as exc:
-                print(f"Cannot attach follow-up memory: {exc}", file=sys.stderr)
-                return 2
+            attach_working_memory(
+                state,
+                str(follow_up_from),
+                runs_root=Path.cwd() / ".minicc" / "runs",
+            )
 
         session = SessionManager()
         session.save(state)
@@ -1180,6 +1185,11 @@ def chat_command(args: argparse.Namespace) -> int:
 
     executor: BashExecutor = LocalCommandExecutor()
 
+    memory_store: MemoryStore | None = None
+    memory_hook: MemoryTurnHook | None = None
+    if settings.memory.enabled:
+        memory_store, memory_hook = _build_memory_subsystem(settings, provider, project_root)
+
     def loop_factory(state: RunState) -> AgentLoop:
         _attach_repository_context(state, state.workspace_host_path or project_root)
         return _build_loop(
@@ -1188,6 +1198,7 @@ def chat_command(args: argparse.Namespace) -> int:
             settings=settings,
             session=SessionManager(),
             state=state,
+            memory_store=memory_store,
         )
 
     if args.port is not None:
@@ -1199,7 +1210,12 @@ def chat_command(args: argparse.Namespace) -> int:
             # Deferred mode: no on_approval callback, so a gated destructive
             # command pauses the turn as waiting_approval and the web UI
             # resolves it through the approve/deny endpoints.
-            return SessionEngine(store, loop_factory=loop_factory, executor=executor)
+            return SessionEngine(
+                store,
+                loop_factory=loop_factory,
+                executor=executor,
+                on_turn_end=memory_hook,
+            )
 
         serve_chat(store=store, engine_factory=engine_factory, port=args.port)
         return 0
@@ -1224,6 +1240,7 @@ def chat_command(args: argparse.Namespace) -> int:
         loop_factory=loop_factory,
         executor=executor,
         on_approval=on_approval,
+        on_turn_end=memory_hook,
     )
     print("Chat mode (experimental): type a message; empty line or Ctrl-D exits.")
     print("Run in a real project directory; destructive commands ask for approval.")
@@ -1365,6 +1382,49 @@ def _build_aux_provider(settings: Settings) -> OpenAICompatibleProvider:
     return _route_provider(_aux_route(settings))
 
 
+def _build_memory_subsystem(
+    settings: Settings,
+    provider: OpenAICompatibleProvider,
+    project_root: Path,
+) -> tuple[MemoryStore | None, MemoryTurnHook | None]:
+    """Construct the V5.1 L1 memory store + turn-end hook, or degrade to (None, None).
+
+    Memory is a best-effort enhancement: if the SQLite/FTS5 store cannot be
+    created (unsupported sqlite, unwritable ``.minicc/memory``), the session
+    simply runs without memory rather than failing (plan §4.5).
+    """
+    try:
+        store = MemoryStore(project_db_path(project_root))
+        store.initialize()
+    except Exception as exc:  # noqa: BLE001 — memory must never block a run
+        print(f"Memory subsystem unavailable; continuing without it: {exc}", file=sys.stderr)
+        return None, None
+    distiller = L1Distiller(provider)
+    deduper: L1Deduper | None = None
+    escalator: EscalationHook | None = None
+    if settings.memory.enabled:
+        deduper = L1Deduper(provider)
+        persona = PersonaEscalator(
+            store,
+            PersonaSynthesizer(provider),
+            persona_threshold=settings.memory.persona_confirm_threshold,
+        )
+        scenario = ScenarioEscalator(
+            store,
+            ScenarioSynthesizer(provider),
+            scenario_threshold=settings.memory.scenario_cluster_threshold,
+        )
+        escalator = EscalationHook(persona=persona, scenario=scenario)
+    hook = MemoryTurnHook(
+        store,
+        distiller,
+        distill_every_n_turns=settings.memory.distill_every_n_turns,
+        escalator=escalator,
+        deduper=deduper,
+    )
+    return store, hook
+
+
 def _provider_summary(settings: Settings) -> dict[str, Any]:
     """Aggregate the default route into the report-configuration contract keys.
 
@@ -1426,6 +1486,7 @@ def _build_loop(
     stream: bool | None = None,
     interrupt_after_steps: int | None = None,
     completion_verifier: CompletionVerifier | None = None,
+    memory_store: MemoryStore | None = None,
 ) -> AgentLoop:
     if state is not None:
         start_session = getattr(provider, "start_session", None)
@@ -1528,6 +1589,10 @@ def _build_loop(
             skill_registry=skill_registry,
             feedback_memory=feedback_memory,
             semantic_compactor=semantic_compactor,
+            memory_store=memory_store,
+            memory_max_results=settings.memory.max_results,
+            memory_max_chars_per_memory=settings.memory.max_chars_per_memory,
+            memory_max_total_chars=settings.memory.max_total_chars,
         ),
         policy_chain=build_policy_chain(settings),
         session=session,
@@ -2012,7 +2077,7 @@ def memory_eval_command(args: argparse.Namespace) -> int:
                 if isinstance(case_result.configuration, dict):
                     case_result.configuration["git_postflight_verified"] = True
         bundle = write_memory_ab_report(result, suites_root)
-    except (FileNotFoundError, WorkingMemoryError, RuntimeError, ValueError) as exc:
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"Memory A/B failed: {exc}", file=sys.stderr)
         return 1
     finally:

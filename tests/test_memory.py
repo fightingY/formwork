@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from minicc.core.context import ContextBuilder
 from minicc.core.protocol import MemoryReference
 from minicc.core.provider import ModelResponse, ModelUsage
@@ -9,7 +7,6 @@ from minicc.core.state import RunState
 from minicc.memory.compaction import SemanticCompactor
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.working import (
-    WorkingMemoryError,
     attach_working_memory,
     ground_memory_references,
     working_memory_context,
@@ -112,7 +109,43 @@ def test_grounded_working_memory_is_explicitly_attached_and_injected_once(tmp_pa
     assert [event["event"] for event in trace.events].count("working_memory_injected") == 1
 
 
-def test_working_memory_rejects_tampering_and_project_drift(tmp_path) -> None:
+def test_attach_working_memory_degrades_on_missing_snapshot(tmp_path) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "contract.txt").write_text("port=8142\n", encoding="utf-8")
+    runs_root = tmp_path / "runs"
+    follow_workspace = prepare_run_workspace(fixture, run_id="follow-run", runs_root=runs_root)
+    follow = RunState.start(
+        "follow up",
+        run_dir=follow_workspace.run_dir,
+        workspace_host_path=follow_workspace.workspace_dir,
+    )
+    follow.run_id = "follow-run"
+
+    attach_working_memory(follow, "missing-source", runs_root=runs_root)
+
+    assert follow.working_memory == []
+    assert follow.working_memory_source_run_id is None
+    assert follow.metrics["working_memory_invalid_adoptions"] == 1
+
+
+def test_attach_working_memory_degrades_on_unsafe_source_id(tmp_path) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    follow_workspace = prepare_run_workspace(fixture, run_id="follow-run", runs_root=tmp_path / "runs")
+    follow = RunState.start(
+        "follow up",
+        run_dir=follow_workspace.run_dir,
+        workspace_host_path=follow_workspace.workspace_dir,
+    )
+
+    attach_working_memory(follow, "../../outside", runs_root=tmp_path / "runs")
+
+    assert follow.working_memory == []
+    assert follow.metrics["working_memory_invalid_adoptions"] == 1
+
+
+def test_attach_working_memory_degrades_on_unsupported_schema(tmp_path) -> None:
     fixture = tmp_path / "fixture"
     fixture.mkdir()
     (fixture / "contract.txt").write_text("port=8142\n", encoding="utf-8")
@@ -130,40 +163,26 @@ def test_working_memory_rejects_tampering_and_project_drift(tmp_path) -> None:
     )
     snapshot = write_working_memory_snapshot(source)
     assert snapshot is not None
-
     payload = json.loads(snapshot.read_text(encoding="utf-8"))
-    payload["items"][0]["excerpt"] = "port=9999"
+    payload["schema_version"] = 1
     snapshot.write_text(json.dumps(payload), encoding="utf-8")
-    same_workspace = prepare_run_workspace(fixture, run_id="same-run", runs_root=runs_root)
-    same = RunState.start(
+
+    follow_workspace = prepare_run_workspace(fixture, run_id="follow-run", runs_root=runs_root)
+    follow = RunState.start(
         "follow up",
-        run_dir=same_workspace.run_dir,
-        workspace_host_path=same_workspace.workspace_dir,
+        run_dir=follow_workspace.run_dir,
+        workspace_host_path=follow_workspace.workspace_dir,
     )
-    with pytest.raises(WorkingMemoryError, match="integrity"):
-        attach_working_memory(same, "source-run", runs_root=runs_root)
-    assert same.working_memory == []
 
-    source.memory_references, _ = ground_memory_references(
-        source,
-        [MemoryReference("contract.txt", 1, 1)],
-    )
-    write_working_memory_snapshot(source)
-    changed_fixture = tmp_path / "changed"
-    changed_fixture.mkdir()
-    (changed_fixture / "contract.txt").write_text("port=9000\n", encoding="utf-8")
-    changed_workspace = prepare_run_workspace(changed_fixture, run_id="changed-run", runs_root=runs_root)
-    changed = RunState.start(
-        "follow up",
-        run_dir=changed_workspace.run_dir,
-        workspace_host_path=changed_workspace.workspace_dir,
-    )
-    with pytest.raises(WorkingMemoryError, match="project snapshot"):
-        attach_working_memory(changed, "source-run", runs_root=runs_root)
-    assert changed.metrics["working_memory_items_injected"] == 0
+    attach_working_memory(follow, "source-run", runs_root=runs_root)
+
+    assert follow.working_memory == []
+    assert follow.metrics["working_memory_invalid_adoptions"] == 1
 
 
-def test_working_memory_rejects_live_source_file_drift(tmp_path) -> None:
+def test_attach_working_memory_trusts_declared_excerpts(tmp_path) -> None:
+    # No hash ceremony (V5.1 P4): a follow-up workspace whose files drifted does
+    # not abort adoption — the source snapshot's declared excerpts are taken as-is.
     fixture = tmp_path / "fixture"
     fixture.mkdir()
     (fixture / "contract.txt").write_text("port=8142\n", encoding="utf-8")
@@ -180,18 +199,25 @@ def test_working_memory_rejects_live_source_file_drift(tmp_path) -> None:
         [MemoryReference("contract.txt", 1, 1)],
     )
     write_working_memory_snapshot(source)
-    follow_workspace = prepare_run_workspace(fixture, run_id="follow-run", runs_root=runs_root)
-    (follow_workspace.workspace_dir / "contract.txt").write_text("port=9000\n", encoding="utf-8")
-    follow = RunState.start(
+    changed_fixture = tmp_path / "changed"
+    changed_fixture.mkdir()
+    (changed_fixture / "contract.txt").write_text("port=9000\n", encoding="utf-8")
+    changed_workspace = prepare_run_workspace(
+        changed_fixture, run_id="changed-run", runs_root=runs_root
+    )
+    changed = RunState.start(
         "follow up",
-        run_dir=follow_workspace.run_dir,
-        workspace_host_path=follow_workspace.workspace_dir,
+        run_dir=changed_workspace.run_dir,
+        workspace_host_path=changed_workspace.workspace_dir,
     )
 
-    with pytest.raises(WorkingMemoryError, match="source evidence changed"):
-        attach_working_memory(follow, "source-run", runs_root=runs_root)
+    attach_working_memory(changed, "source-run", runs_root=runs_root)
 
-    assert follow.working_memory == []
+    assert changed.working_memory_source_run_id == "source-run"
+    assert changed.working_memory == [
+        {"path": "contract.txt", "line_start": 1, "line_end": 1, "excerpt": "port=8142"}
+    ]
+    assert changed.metrics["working_memory_candidates"] == 1
 
 
 def test_working_memory_rejects_unverifiable_reference(tmp_path) -> None:

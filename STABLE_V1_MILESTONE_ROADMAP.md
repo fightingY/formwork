@@ -1495,6 +1495,40 @@ workspace 生命周期。
 全量 `pytest` 509 passed，`ruff` / `mypy` 通过。按 CLAUDE.md 约定：`experimental` 能力只有在确定性测试
 + `acceptance/` 真实模型验收归档后才能升 `stable`，故本节只宣称「已实现」、暂不夸大。
 
+### V5.1：记忆子系统改造（L0→L3 金字塔 + 检索注入，experimental）
+
+方案文档：[`docs/V5_1_MEMORY_REDESIGN_PLAN.md`](docs/V5_1_MEMORY_REDESIGN_PLAN.md)。
+
+目标：把「三个互不相干、靠哈希仪式撑着的记忆半成品」（feedback 规则本 / working memory / compaction）
+换成有明确语义的四层记忆金字塔 —— **L0** 会话 transcript + turn trace → **L1** 原子记忆 → **L2**
+场景知识块 → **L3** 核心画像。回合末用一次 LLM 调用把 L1 提炼进 SQLite（FTS5 检索）；按阈值把 L1
+升维成 L2/L3（persona + scenario）；回合开始双轨注入（L2/L3 进 system 缓存轨、L1 进每轮
+`<relevant-memories>` 块），全程优雅降级、失败不阻断。丢弃 working-memory 的四重 SHA 证据仪式。
+
+分阶段 P0→P4 落地：
+
+- **P0 L1 提炼 + SQLite/FTS5 + 降级**：新 `memory/l1.py`（`L1Distiller`/`MemoryStore`，每项目一个
+  `.minicc/memory/<project-hash>.db`，四表 `memories`/`memories_fts`/`scenarios`/`persona`）、
+  `MemoryTurnHook` 挂在 turn 末、`<relevant-memories>` 注入 + 预算、提炼/召回/入库全程降级。
+- **P1 L3 persona 升维 + 双轨注入**：`memory/escalation.py` 的 `PersonaEscalator`（project 级
+  `preference`/`constraint` 确认 ≥3 或显式强调词「以后都/记得/规则是/总是/从来不/记住」触发一次
+  LLM 合成），手写 JSONL 与自动 L3 合并 view（手写优先）；L3 进 system 缓存轨（stable prefix 尾部）。
+- **P2 L2 scenario 升维**：`ScenarioEscalator` 按 `source.file` 主题聚类 ≥5 条 L1 触发
+  `{scenario,summary,recipe}` 总结，并入 system 缓存轨。
+- **P3 LLM dedup + 可选 embedding**：`memory/dedup.py` 的 `L1Deduper`（store/skip/update/merge
+  四动作）；可选 `Embedder = Callable[[str], list[float]]` 走 RRF 融合，无则退回纯 BM25。
+- **P4 评测重写 + 跨会话验收 + 删哈希仪式**：`memory/working.py` 删掉 file/excerpt/payload/project
+  digest 四重哈希与 `WorkingMemoryError`-abort，改为失败跳过（记 `working_memory_invalid_adoptions`
+  指标、**绝不 raise**）；`scope:project` 跨会话连续性（新 session 无需重读即召回旧记忆）用确定性
+  测试落位。
+
+当前状态（2026-08-23）：**已实现（experimental，尚未真实模型验收）**。P0–P4 全部落地并通过确定性测试
+（`ScriptedProvider` / fake provider 驱动，不调真实 Provider），新增 `tests/test_l1_memory.py`、
+`test_escalation.py`、`test_scenario.py`、`test_dedup.py`、`test_embedding.py` 与一份 `scope:project`
+跨会话验收用例；`ruff` / `mypy` / 全量 `pytest` 573 passed，`acceptance/` 与既有 run/suite 零改动
+（trace/ledger 的 SHA 锚定是另一子系统，未动）。按 CLAUDE.md 约定，`experimental` 只有在确定性测试
++ `acceptance/` 真实模型验收归档后才能升 `stable`，故本节只宣称「已实现」、暂不夸大。
+
 ### Sandbox Runtime 生命周期治理（当前小步迭代）
 
 目标：在不引入 Compose、容器池、标签清理平台或多运行时的前提下，把现有“一次
@@ -1544,7 +1578,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                             |
                                       |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
                                       |                                                        |
-                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness -> V4.1 provider refactor with multi-upstream degradation contract (已归档) -> V4.2 benchmark execution convergence (回合上限 + 收尾自述，已实现) -> V5.0 会话式改造 (Session + Chat + Web，experimental)
+                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness -> V4.1 provider refactor with multi-upstream degradation contract (已归档) -> V4.2 benchmark execution convergence (回合上限 + 收尾自述，已实现) -> V5.0 会话式改造 (Session + Chat + Web，experimental) -> V5.1 记忆子系统改造 (L0→L3 金字塔 + 检索注入，experimental)
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |

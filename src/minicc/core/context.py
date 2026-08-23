@@ -9,7 +9,18 @@ from typing import Literal
 from minicc.core.protocol import action_to_json
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.memory.compaction import CompactionError, ContextCompactor
+from minicc.memory.escalation import render_persona, render_scenarios
 from minicc.memory.feedback import FeedbackMemory
+from minicc.memory.l1 import (
+    DEFAULT_MAX_CHARS_PER_MEMORY,
+    DEFAULT_MAX_RESULTS,
+    DEFAULT_MAX_SCENARIOS,
+    DEFAULT_MAX_TOTAL_CHARS,
+    MemoryStore,
+    PersonaEntry,
+    format_relevant_memories,
+    recall_memories,
+)
 from minicc.memory.working import working_memory_context
 from minicc.prompts.agent import (
     HYBRID_PREFIX_SUFFIX,
@@ -55,6 +66,10 @@ class ContextBuilder:
         feedback_memory: FeedbackMemory | None = None,
         trace: TraceRecorder | None = None,
         semantic_compactor: ContextCompactor | None = None,
+        memory_store: MemoryStore | None = None,
+        memory_max_results: int = DEFAULT_MAX_RESULTS,
+        memory_max_chars_per_memory: int = DEFAULT_MAX_CHARS_PER_MEMORY,
+        memory_max_total_chars: int = DEFAULT_MAX_TOTAL_CHARS,
     ) -> None:
         self.config = config or ContextConfig()
         if self.config.compaction_strategy not in {"disabled", "deterministic", "semantic"}:
@@ -74,6 +89,10 @@ class ContextBuilder:
         self.feedback_memory = feedback_memory
         self.trace = trace
         self.semantic_compactor = semantic_compactor
+        self.memory_store = memory_store
+        self.memory_max_results = memory_max_results
+        self.memory_max_chars_per_memory = memory_max_chars_per_memory
+        self.memory_max_total_chars = memory_max_total_chars
         self._previous_messages_by_run: dict[str, list[dict[str, str]]] = {}
 
     def build_messages(
@@ -426,6 +445,11 @@ class ContextBuilder:
         trajectory: list[TrajectoryStep],
     ) -> list[str]:
         dynamic_context: list[str] = []
+        # L1 tool-retrieval track: recalled memories go at the very top of the
+        # per-turn context (plan §4.4), ahead of the stable run context.
+        l1_context = self._l1_memory_context(state)
+        if l1_context:
+            dynamic_context.append(l1_context)
         if state.prompt_namespace:
             dynamic_context.append(f"Prompt namespace: {state.prompt_namespace}")
         dynamic_context.extend(self._repository_context(state))
@@ -455,6 +479,94 @@ class ContextBuilder:
         if trajectory:
             dynamic_context.append("Recent trajectory:\n" + self.format_trajectory(trajectory))
         return dynamic_context
+
+    def _l1_memory_context(self, state: RunState) -> str:
+        """Recall L1 memories for the current goal and render a bounded block.
+
+        Best effort: a recall miss or an absent/short store returns ``""`` so
+        the turn proceeds unchanged (plan §4.5).
+        """
+        if self.memory_store is None:
+            return ""
+        result = recall_memories(
+            self.memory_store,
+            state.goal,
+            scope="project",
+            limit=self.memory_max_results,
+        )
+        state.metrics["l1_memories_recalled"] = len(result.memories)
+        if not result.ok:
+            state.metrics["memory_recall_failed"] = 1
+            return ""
+        block = format_relevant_memories(
+            result.memories,
+            max_chars_per_memory=self.memory_max_chars_per_memory,
+            max_total_chars=self.memory_max_total_chars,
+        )
+        if not block:
+            return ""
+        state.metrics["l1_memories_injected"] = len(result.memories)
+        return block
+
+    def _l3_persona_context(self, state: RunState) -> str:
+        """Render the merged L3 persona view into the system cache track.
+
+        The view merges the human-written seed (feedback JSONL rules, always
+        first so manual wins) with the auto-synthesized persona from the store
+        (plan §3.1).  Best effort: an absent store or a read failure yields the
+        manual seed alone and never raises.
+        """
+        entries = self._manual_persona_entries()
+        if self.memory_store is not None:
+            try:
+                entries.extend(self.memory_store.list_persona())
+            except Exception:  # noqa: BLE001 — degrade to manual seed only
+                entries = list(entries)
+        if not entries:
+            state.metrics["l3_persona_injected"] = 0
+            return ""
+        state.metrics["l3_persona_injected"] = len(entries)
+        return render_persona(entries)
+
+    def _manual_persona_entries(self) -> list[PersonaEntry]:
+        """Materialize the human-written seed from feedback rules (plan §3.1).
+
+        ``prefer`` rules map to ``style``; ``never``/``caution`` map to the
+        safety-critical ``hard_rule``.  A single manual entry keeps the view
+        compact; it is never persisted (rebuilt each turn from the JSONL).
+        """
+        if self.feedback_memory is None:
+            return []
+        try:
+            rules = self.feedback_memory.load_rules()
+        except Exception:  # noqa: BLE001 — a broken rules file must not block
+            return []
+        prefer = "; ".join(rule.rule for rule in rules if rule.type == "prefer")
+        hard_rule = "; ".join(rule.rule for rule in rules if rule.type in ("never", "caution"))
+        if not prefer and not hard_rule:
+            return []
+        return [PersonaEntry(style=prefer, hard_rule=hard_rule, origin="manual", confidence=1.0)]
+
+    def _l2_scenario_context(self, state: RunState) -> str:
+        """Render L2 scenarios into the system cache track (plan §3.1).
+
+        Scenarios are low-frequency and ride the cached prefix alongside persona;
+        injection is capped to ``DEFAULT_MAX_SCENARIOS`` so a long-lived project
+        cannot grow the stable prefix unbounded.  Best effort, never raises.
+        """
+        if self.memory_store is None:
+            state.metrics["l2_scenarios_injected"] = 0
+            return ""
+        try:
+            scenarios = self.memory_store.list_scenarios(limit=DEFAULT_MAX_SCENARIOS)
+        except Exception:  # noqa: BLE001 — degrade, no scenarios
+            state.metrics["l2_scenarios_injected"] = 0
+            return ""
+        if not scenarios:
+            state.metrics["l2_scenarios_injected"] = 0
+            return ""
+        state.metrics["l2_scenarios_injected"] = len(scenarios)
+        return render_scenarios(scenarios)
 
     def _instruction_context(self, state: RunState) -> list[str]:
         context: list[str] = []
@@ -579,6 +691,12 @@ class ContextBuilder:
             {"role": "user", "content": "\n\n".join(self._stable_run_context(state))},
         ]
         stable_prefix_messages = len(messages)
+        # L1 tool-retrieval track sits just past the cacheable stable prefix:
+        # it is per-turn (recall depends on the current goal), so it must not
+        # be counted into ``stable_prefix_messages`` (plan §4.4).
+        l1_context = self._l1_memory_context(state)
+        if l1_context:
+            messages.insert(stable_prefix_messages, {"role": "user", "content": l1_context})
         # Prior-turn conversation rows are per-turn context, not stable prefix:
         # they must not be counted into the cacheable prefix.
         messages.extend(self._session_history_messages(state))
@@ -599,10 +717,25 @@ class ContextBuilder:
 
     def _system_prefix(self, state: RunState) -> str:
         if state.metrics.get("profile") == "hybrid-v3.6":
-            return STABLE_PREFIX + HYBRID_PREFIX_SUFFIX
-        if state.metrics.get("profile") == "multi-agent-v4":
-            return STABLE_PREFIX + MULTI_AGENT_PREFIX_SUFFIX
-        return STABLE_PREFIX
+            prefix = STABLE_PREFIX + HYBRID_PREFIX_SUFFIX
+        elif state.metrics.get("profile") == "multi-agent-v4":
+            prefix = STABLE_PREFIX + MULTI_AGENT_PREFIX_SUFFIX
+        else:
+            prefix = STABLE_PREFIX
+        # L3 persona + L2 scenario ride the system cache track (plan §3.1):
+        # they are appended to the stable prefix so they stay prompt-cached and
+        # only invalidate when the escalation passes actually change them (rare,
+        # threshold-triggered).
+        blocks: list[str] = []
+        persona_block = self._l3_persona_context(state)
+        if persona_block:
+            blocks.append(persona_block)
+        scenario_block = self._l2_scenario_context(state)
+        if scenario_block:
+            blocks.append(scenario_block)
+        if blocks:
+            prefix += "\n\n" + "\n\n".join(blocks)
+        return prefix
 
     def _session_history_messages(self, state: RunState) -> list[dict[str, str]]:
         """Prior-turn conversation rows carried on ``state.session_history``.

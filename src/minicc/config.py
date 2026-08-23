@@ -145,6 +145,25 @@ class ToolingSettings:
 
 
 @dataclass(frozen=True)
+class MemorySettings:
+    """V5.1 L0→L3 memory subsystem (see ``docs/V5_1_MEMORY_REDESIGN_PLAN.md``).
+
+    ``enabled`` is the master switch for L1 distillation; ``persona_confirm_threshold``
+    and ``scenario_cluster_threshold`` gate the L3/L2 escalation passes.
+    """
+
+    enabled: bool = True
+    distill_every_n_turns: int = 1
+    max_results: int = 5
+    max_chars_per_memory: int = 500
+    max_total_chars: int = 4_000
+    recall_timeout_sec: float = 5.0
+    persona_confirm_threshold: int = 3
+    scenario_cluster_threshold: int = 5
+    embedding_enabled: bool = False
+
+
+@dataclass(frozen=True)
 class Settings:
     sandbox: SandboxSettings
     budget: BudgetSettings
@@ -158,6 +177,7 @@ class Settings:
     project: ProjectSettings = field(default_factory=ProjectSettings)
     workspace: WorkspaceSettings = field(default_factory=WorkspaceSettings)
     tooling: ToolingSettings = field(default_factory=ToolingSettings)
+    memory: MemorySettings = field(default_factory=MemorySettings)
 
     @property
     def default_route(self) -> ProviderRoute:
@@ -192,6 +212,7 @@ def load_settings() -> Settings:
     project_config = _dict_at(config, "project")
     workspace_config = _dict_at(config, "workspace")
     tooling_config = _dict_at(config, "tooling")
+    memory_config = _dict_at(config, "memory")
 
     fallback_api_key = os.getenv("MINICC_API_KEY")
     routes = _parse_providers(config, fallback_api_key=fallback_api_key)
@@ -275,6 +296,21 @@ def load_settings() -> Settings:
             profile=_str_config(tooling_config, "profile", "baseline-bash"),
             max_parallel_tool_calls=_int_config(tooling_config, "max_parallel_tool_calls", 4),
             max_tool_calls_per_step=_int_config(tooling_config, "max_tool_calls_per_step", 16),
+        ),
+        memory=MemorySettings(
+            enabled=_bool_config(memory_config, "enabled", True),
+            distill_every_n_turns=_int_config(memory_config, "distill_every_n_turns", 1),
+            max_results=_int_config(memory_config, "max_results", 5),
+            max_chars_per_memory=_int_config(memory_config, "max_chars_per_memory", 500),
+            max_total_chars=_int_config(memory_config, "max_total_chars", 4_000),
+            recall_timeout_sec=_float_config(memory_config, "recall_timeout_sec", 5.0),
+            persona_confirm_threshold=_int_config(
+                memory_config, "persona_confirm_threshold", 3
+            ),
+            scenario_cluster_threshold=_int_config(
+                memory_config, "scenario_cluster_threshold", 5
+            ),
+            embedding_enabled=_bool_config(memory_config, "embedding_enabled", False),
         ),
     )
 

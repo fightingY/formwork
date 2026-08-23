@@ -73,9 +73,11 @@ Stable V3.2 将目标相关 Skill catalog 与 commit-bound Feedback rules 的
 测试。最终四维报告覆盖系统回归 15 runs、Context 24 runs、Memory 27 runs、Resume 1 run，
 所有 claim 均携带配置、run ID、原始 artifact 和复跑命令。归档见 `acceptance/stable-v3.0/`。
 
-上下文与记忆采用分层设计：运行态 trajectory/state summary 只服务当前 run；显式
-working memory 通过 `final.memory` 声明文件行区间，并在 follow-up 时校验文件、哈希和项目快照；
-Feedback Memory 只提供项目级 `never`/`prefer`/`caution` 规则选择。
+上下文与记忆采用分层设计：运行态 trajectory/state summary 只服务当前 run。V5.1 已把记忆重构成
+L0→L3 金字塔（experimental，尚未真实模型验收）：L0 是会话 transcript + 每轮 run 的 turn trace；
+L1 在每轮结束用一次 LLM 提炼原子记忆进 SQLite/FTS5，按阈值升维成 L2 scenario / L3 persona，回合
+开始双轨注入（L2/L3 走 system 缓存轨、L1 走每轮 `<relevant-memories>` 检索块），全程优雅降级；
+working-memory 的四重 SHA 证据仪式已删除、改为失败跳过。手写 Feedback JSONL 保留为 L3 persona 的人写种子。
 
 Stable V3.1 新增显式触发的离线
 Meta Review：`minicc meta-review <run_id>` 读取已结束 run 的不可变证据，在独立
@@ -752,8 +754,11 @@ src/minicc/
   skills/
     registry.py       # SkillRegistry：多来源 catalog、YAML 校验、哈希冻结与按需加载
   memory/
-    feedback.py       # FeedbackMemory：项目级 never/prefer/caution 规则选择
-    working.py        # 显式 working memory：ground、snapshot、attach 与完整性校验
+    l1.py             # V5.1 L1：L1Distiller 提炼 + MemoryStore（SQLite/FTS5 + 可选 embedding/RRF） + MemoryTurnHook
+    escalation.py     # V5.1 L2/L3：PersonaEscalator / ScenarioEscalator 阈值升维
+    dedup.py          # V5.1 L1 去重：L1Deduper（store/skip/update/merge）
+    feedback.py       # FeedbackMemory：项目级 never/prefer/caution 规则选择（L3 persona 人写种子）
+    working.py        # 显式 working memory：ground、snapshot、attach（已删哈希仪式，失败跳过）
     compaction.py     # deterministic / semantic context compaction
   trace/
     recorder.py       # TraceRecorder：JSONL event 记录

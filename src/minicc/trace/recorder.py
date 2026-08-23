@@ -309,7 +309,6 @@ class TraceRecorder:
                     "path": item.get("path"),
                     "line_start": item.get("line_start"),
                     "line_end": item.get("line_end"),
-                    "excerpt_sha256": item.get("excerpt_sha256"),
                 }
                 for item in items
             ],

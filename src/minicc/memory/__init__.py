@@ -4,7 +4,6 @@ from minicc.memory.compaction import CompactionError, CompactionResult, Semantic
 
 __all__ = ["CompactionError", "CompactionResult", "SemanticCompactor"]
 from minicc.memory.working import (
-    WorkingMemoryError,
     attach_working_memory,
     ground_memory_references,
     working_memory_context,
@@ -12,7 +11,6 @@ from minicc.memory.working import (
 )
 
 __all__ = [
-    "WorkingMemoryError",
     "attach_working_memory",
     "ground_memory_references",
     "working_memory_context",

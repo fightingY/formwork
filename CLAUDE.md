@@ -65,6 +65,7 @@ V5 会话层（experimental）叠在 run/eval **之上**（Project → Session �
 12. **`core/session_store.py`（`SessionStore`）** —— `.minicc/sessions/<id>/{session.json, transcript.jsonl, runs/<run_id>/}`；`transcript.jsonl` append-only、`seq` 单调、`role:user/assistant`，是唯一事实源。
 13. **`core/session_engine.py`（`SessionEngine`）** —— 可重入 turn loop：注入 `loop_factory` 组装 `AgentLoop`，注入 `on_approval` 切同步/延迟审批，`on_turn_end` 是 V5.1 L1 蒸馏 seam。每轮 = 一个 `run_id`，仍落 trace/metrics。
 14. **`server/chat.py`（`serve_chat` / `ChatBroker`）** —— 纯标准库 `ThreadingHTTPServer` + SSE 单页聊天前端；turn 走 `submit_turn`/`resolve_turn` 纯函数，审批/deny 走 HTTP endpoint。steer 是 best-effort 追加 redirect。
+15. **`memory/`（V5.1 L0→L3 记忆金字塔，experimental）** —— `l1.py`（`L1Distiller`/`MemoryStore`：每项目一个 `.minicc/memory/<project-hash>.db`，FTS5 检索 + 可选 embedding/RRF）、`escalation.py`（`PersonaEscalator`/`ScenarioEscalator`，阈值触发 L3 persona / L2 scenario）、`dedup.py`（`L1Deduper` store/skip/update/merge）、以及保留的 `feedback.py`（手写 L3 种子）、`working.py`（**已删四重哈希，改为失败跳过**）、`compaction.py`。`MemoryTurnHook` 挂在 `SessionEngine.on_turn_end`；双轨注入：L2/L3 进 system 缓存轨（stable prefix 尾部）、L1 进每轮 `<relevant-memories>` 块。全程优雅降级、失败不阻断。
 
 **安全 = 双模式分工**：会话在真实工作目录直跑 + 审批链 + git 回滚；run/eval 的隔离拷贝（快照复制 + `diff.patch`）保留为块状模式专用。
 
@@ -74,7 +75,7 @@ V5 会话层（experimental）叠在 run/eval **之上**（Project → Session �
 - **`hybrid-v3.6`** —— 增加 `tool_calls` action（`read`/`edit`/`write`/`bash`）和 `ToolCallScheduler`：`read` 可并行，`edit`/`write`/`bash` 是排他屏障；FS 工具用 `expected_hash` 做乐观版本校验（`core/tooling.py`）。
 - **`multi-agent-v4`** —— 增加 `delegate` action → `WorkflowCoordinator`（`multi_agent.py`）按依赖顺序、有界并发地跑子任务（角色 `scout`/`planner`/`worker`/`reviewer`），用 `WorkspaceWriteLease` 保证单写者，带能力画像（`runtime.py`）。子任务通过 `minicc childrun` 的 stdin/stdout JSONL 运行。用 `minicc run --profile multi-agent-v4` 才会启用真实子模型编排。
 
-`evals/` 放 eval runner（`runner.py`）、case 发现（`case.py`）、断言（`assertions.py`），以及每个实验一个报告构建模块（cache/compaction/memory/guidance/meta-review/release）。`skills/`、`memory/`（feedback/working/compaction）、`meta/`（离线 Meta Review）、`server/`（`web.py` 只读 trace viewer + `chat.py` Web 聊天）是更窄的子系统。
+`evals/` 放 eval runner（`runner.py`）、case 发现（`case.py`）、断言（`assertions.py`），以及每个实验一个报告构建模块（cache/compaction/memory/guidance/meta-review/release）。`skills/`、`memory/`（l1/escalation/dedup/feedback/working/compaction）、`meta/`（离线 Meta Review）、`server/`（`web.py` 只读 trace viewer + `chat.py` Web 聊天）是更窄的子系统。
 
 ## Eval、证据与发布治理
 
