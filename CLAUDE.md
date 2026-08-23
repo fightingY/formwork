@@ -35,6 +35,7 @@ uv build                                 # 构建 sdist/wheel
 - `run "<goal>"` —— 让 agent 循环执行一个目标。常用参数：`--source-dir`（把外部仓库隔离复制进来）、`--execute-local`（改成宿主机执行而非 Docker）、`--no-workspace-copy`、`--verify-command`（可重复，绑定 Runtime Completion Gate）、`--profile {baseline-bash,hybrid-v3.6,multi-agent-v4}`、`--interrupt-after-steps N`、`--follow-up-from <run_id>`。
 - `eval <cases_dir>` —— 跑 eval case；`--repeat N`、`--case NAME`（可重复）、`--execute-local`、`--release-gate`。
 - `resume / approve / deny <run_id>` —— Stop-and-Resume 的 HITL 闭环（`resume --from-checkpoint` 改为从 checkpoint 恢复）。
+- `session new|list|show|rename|switch|resume …` —— V5 会话骨架（experimental），`chat [--session <id>] [--port N]` 起会话 REPL 或纯标准库 Web 聊天（`--port` 走 `server/chat.py` 的 SSE + 单页前端）。每轮仍是一个 `run_id`，`transcript.jsonl` 为唯一事实源。
 - `models <route> [--probe-key KEY] [--json]` —— 对某条 route 做有界 `GET /models` 模型发现（对目录外中转站也可列模型）。
 - `traces`、`transcript <trace.jsonl>`、`web`（只读 trace viewer）、`cleanup`（默认 dry-run，`--apply` 才删）、`meta-review <run_id>`、`childrun`（V4 子进程传输的内部命令）。
 - 实验/验收报告命令：`release-report`、`compaction-report`、`cache-probe`、`cache-report`、`cache-utilization-report`、`memory-eval`、`memory-report`、`guidance-report`、`meta-review-report`。
@@ -59,13 +60,21 @@ uv build                                 # 构建 sdist/wheel
 10. **`sandbox/`** —— `workspace.py`（复制 + `diff.patch`）、`docker_runner.py`、`local_runner.py`、`observation.py`（命令结果归一成 `Observation`）、`artifact_store.py`。
 11. **`trace/` + `core/ledger.py` + `core/run_catalog.py`** —— 证据：`trace.jsonl`（recorder）、`metrics.json`、`run_report.json/.md`、suite manifest/report、版本索引。schema v2、不可变、SHA-256 锚定。
 
+V5 会话层（experimental）叠在 run/eval **之上**（Project → Session → Turn → Run → Message），不改变上面的 loop：
+
+12. **`core/session_store.py`（`SessionStore`）** —— `.minicc/sessions/<id>/{session.json, transcript.jsonl, runs/<run_id>/}`；`transcript.jsonl` append-only、`seq` 单调、`role:user/assistant`，是唯一事实源。
+13. **`core/session_engine.py`（`SessionEngine`）** —— 可重入 turn loop：注入 `loop_factory` 组装 `AgentLoop`，注入 `on_approval` 切同步/延迟审批，`on_turn_end` 是 V5.1 L1 蒸馏 seam。每轮 = 一个 `run_id`，仍落 trace/metrics。
+14. **`server/chat.py`（`serve_chat` / `ChatBroker`）** —— 纯标准库 `ThreadingHTTPServer` + SSE 单页聊天前端；turn 走 `submit_turn`/`resolve_turn` 纯函数，审批/deny 走 HTTP endpoint。steer 是 best-effort 追加 redirect。
+
+**安全 = 双模式分工**：会话在真实工作目录直跑 + 审批链 + git 回滚；run/eval 的隔离拷贝（快照复制 + `diff.patch`）保留为块状模式专用。
+
 有**三套 tooling profile**，由 `tooling.profile` 选择（见 `core/tooling.py`、`core/loop.py`、`multi_agent.py`、`runtime.py`）：
 
 - **`baseline-bash`**（默认）—— 只有 `bash`/`ask`/`final`/`skill`，走 `BashExecutor`。
 - **`hybrid-v3.6`** —— 增加 `tool_calls` action（`read`/`edit`/`write`/`bash`）和 `ToolCallScheduler`：`read` 可并行，`edit`/`write`/`bash` 是排他屏障；FS 工具用 `expected_hash` 做乐观版本校验（`core/tooling.py`）。
 - **`multi-agent-v4`** —— 增加 `delegate` action → `WorkflowCoordinator`（`multi_agent.py`）按依赖顺序、有界并发地跑子任务（角色 `scout`/`planner`/`worker`/`reviewer`），用 `WorkspaceWriteLease` 保证单写者，带能力画像（`runtime.py`）。子任务通过 `minicc childrun` 的 stdin/stdout JSONL 运行。用 `minicc run --profile multi-agent-v4` 才会启用真实子模型编排。
 
-`evals/` 放 eval runner（`runner.py`）、case 发现（`case.py`）、断言（`assertions.py`），以及每个实验一个报告构建模块（cache/compaction/memory/guidance/meta-review/release）。`skills/`、`memory/`（feedback/working/compaction）、`meta/`（离线 Meta Review）、`server/`（纯标准库 trace viewer）是更窄的子系统。
+`evals/` 放 eval runner（`runner.py`）、case 发现（`case.py`）、断言（`assertions.py`），以及每个实验一个报告构建模块（cache/compaction/memory/guidance/meta-review/release）。`skills/`、`memory/`（feedback/working/compaction）、`meta/`（离线 Meta Review）、`server/`（`web.py` 只读 trace viewer + `chat.py` Web 聊天）是更窄的子系统。
 
 ## Eval、证据与发布治理
 

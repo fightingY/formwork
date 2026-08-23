@@ -56,6 +56,14 @@ V3.6 已把结构化 hybrid 工具面与有界多工具调度归档为确定性�
 仍标 experimental（见下文）。以下 V2.x/V3.x 逐段是历史验收叙事，保留为“简历数字→原始证据”的
 关联链，结论仍只属于对应归档版本。
 
+V5.0（experimental）在 run/eval 之上新增会话（Session）层：多轮对话，每轮仍是一个 `run_id`，
+仍产出 trace/metrics，`transcript.jsonl` 为唯一事实源。`minicc chat --host 127.0.0.1 --port 8000`
+启动纯标准库 Web 聊天（SSE + 单页前端），`minicc session …` 走 CLI 多轮。安全叙事改为**双模式分工**：
+会话在真实工作目录直跑 + 审批链 + git 回滚；run/eval 的隔离拷贝（快照复制 + `diff.patch`）保留为
+块状模式专用。该层已确定性实现（全量 509 passed、ruff/mypy 通过），但按 experimental→stable 约定
+尚未做真实模型验收归档；完整方案见
+[`docs/V5_0_SESSION_CHAT_REMODEL_PLAN.md`](docs/V5_0_SESSION_CHAT_REMODEL_PLAN.md)。
+
 Stable V3.2 将目标相关 Skill catalog 与 commit-bound Feedback rules 的
 确定性选择升格为 stable。Stable V3.1.1 的 CI、覆盖率、lint、类型检查、构建检查和发布治理继续
 生效。底层 Harness

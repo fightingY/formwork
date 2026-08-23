@@ -565,6 +565,7 @@ class ContextBuilder:
     ) -> list[dict[str, str]]:
         return [
             {"role": "system", "content": self._system_prefix(state)},
+            *self._session_history_messages(state),
             {"role": "user", "content": "\n\n".join(self._dynamic_context(state, trajectory))},
         ]
 
@@ -578,6 +579,9 @@ class ContextBuilder:
             {"role": "user", "content": "\n\n".join(self._stable_run_context(state))},
         ]
         stable_prefix_messages = len(messages)
+        # Prior-turn conversation rows are per-turn context, not stable prefix:
+        # they must not be counted into the cacheable prefix.
+        messages.extend(self._session_history_messages(state))
         if state.state_summary:
             messages.append({"role": "user", "content": f"State summary:\n{state.state_summary}"})
         for step in trajectory:
@@ -599,6 +603,17 @@ class ContextBuilder:
         if state.metrics.get("profile") == "multi-agent-v4":
             return STABLE_PREFIX + MULTI_AGENT_PREFIX_SUFFIX
         return STABLE_PREFIX
+
+    def _session_history_messages(self, state: RunState) -> list[dict[str, str]]:
+        """Prior-turn conversation rows carried on ``state.session_history``.
+
+        Backward compatible: with no session attached the list is empty and this
+        is a no-op, so run/eval keep their single-goal message shape.
+        """
+        return [
+            {"role": str(message.get("role", "user")), "content": str(message.get("content", ""))}
+            for message in state.session_history
+        ]
 
     def _build_messages_with_trajectory(
         self,

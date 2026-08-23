@@ -95,6 +95,11 @@ class RunState:
     capability_profile: str = "root"
     depth: int = 0
     lease_epoch: int | None = None
+    # V5 session transport: prior-turn conversation rows (["role","content"])
+    # injected into context.  NOT persisted to state.json -- transcript.jsonl is
+    # the single source of truth for conversation history (plan §5.1).  Populated
+    # by SessionEngine from SessionStore.history_messages before each turn runs.
+    session_history: list[dict[str, str]] = field(default_factory=list)
 
     @classmethod
     def start(
@@ -124,6 +129,9 @@ class RunState:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        # Conversation history lives only in transcript.jsonl (V5 §5.1); the run's
+        # own state.json must not carry a second copy of it.
+        data.pop("session_history", None)
         for key in ["run_dir", "artifacts_dir", "workspace_host_path"]:
             if data[key] is not None:
                 data[key] = str(data[key])

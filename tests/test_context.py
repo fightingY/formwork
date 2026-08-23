@@ -619,3 +619,43 @@ def test_force_compact_returns_false_on_empty_trajectory() -> None:
     state = RunState.start("Empty")
 
     assert builder.force_compact(state, []) is False
+
+
+def test_session_history_injected_in_rebuild_layout() -> None:
+    state = RunState.start("Fix bug")
+    state.session_history = [
+        {"role": "user", "content": "what is this?"},
+        {"role": "assistant", "content": "a login bug"},
+    ]
+
+    messages = ContextBuilder().build_messages(state, [])
+
+    assert messages[0] == {"role": "system", "content": STABLE_PREFIX}
+    assert messages[1] == {"role": "user", "content": "what is this?"}
+    assert messages[2] == {"role": "assistant", "content": "a login bug"}
+    assert messages[3]["role"] == "user"
+    assert "Goal: Fix bug" in messages[3]["content"]
+
+
+def test_session_history_injected_after_stable_prefix_in_append_layout() -> None:
+    builder = ContextBuilder(ContextConfig(prompt_layout="append"))
+    state = RunState.start("Fix bug")
+    state.session_history = [{"role": "user", "content": "prior"}]
+
+    messages = builder.build_messages(state, [])
+
+    # stable prefix = [system, stable user context], then history, then nothing else.
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert "Goal: Fix bug" in messages[1]["content"]
+    assert messages[2] == {"role": "user", "content": "prior"}
+
+
+def test_session_history_empty_is_backward_compatible() -> None:
+    state = RunState.start("Run tests")
+    messages = ContextBuilder().build_messages(state, [])
+
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert "Goal: Run tests" in messages[1]["content"]

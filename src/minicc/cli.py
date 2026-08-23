@@ -45,6 +45,8 @@ from minicc.core.retry import RetryingTurnProvider
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.runner import ModelTurnRunner
 from minicc.core.session import SessionManager
+from minicc.core.session_engine import SessionEngine
+from minicc.core.session_store import SessionNotFoundError, SessionStore
 from minicc.core.state import RunState, state_path_for_run
 from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
 from minicc.core.verification import CommandCompletionVerifier, CompletionVerifier
@@ -634,6 +636,48 @@ def build_parser() -> argparse.ArgumentParser:
     web_parser.set_defaults(handler=web_command)
     childrun_parser = subparsers.add_parser("childrun", help="Run a V4 child over stdin/stdout JSONL.")
     childrun_parser.set_defaults(handler=childrun_command)
+
+    # --- V5 experimental: conversation sessions (docs/V5_0_SESSION_CHAT_REMODEL_PLAN.md) ---
+    session_parser = subparsers.add_parser(
+        "session", help="Manage conversation sessions (V5, experimental)."
+    )
+    session_sub = session_parser.add_subparsers(dest="session_subcommand")
+    session_new = session_sub.add_parser("new", help="Create a new session.")
+    session_new.add_argument("--project-root", type=Path, default=None, help="Project directory (default: cwd).")
+    session_new.add_argument("--title", default="", help="Optional session title.")
+    session_new.set_defaults(handler=session_command)
+    session_list = session_sub.add_parser("list", help="List all sessions.")
+    session_list.set_defaults(handler=session_command)
+    session_show = session_sub.add_parser("show", help="Show one session's transcript.")
+    session_show.add_argument("session_id")
+    session_show.set_defaults(handler=session_command)
+    session_rename = session_sub.add_parser("rename", help="Rename a session.")
+    session_rename.add_argument("session_id")
+    session_rename.add_argument("title")
+    session_rename.set_defaults(handler=session_command)
+    for name, help_text in (("switch", "Set the current session."), ("resume", "Point to a session to continue.")):
+        sub = session_sub.add_parser(name, help=help_text)
+        sub.add_argument("session_id")
+        sub.set_defaults(handler=session_command)
+
+    chat_parser = subparsers.add_parser(
+        "chat", help="Start a conversational chat REPL against a session (V5, experimental)."
+    )
+    chat_parser.add_argument("--project-root", type=Path, default=None, help="Project directory (default: cwd).")
+    chat_parser.add_argument(
+        "--session",
+        "--resume",
+        dest="session_id",
+        default=None,
+        help="Session id to continue; defaults to the current (switched) session, else a new one.",
+    )
+    chat_parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Serve the web chat UI on this port instead of the terminal REPL.",
+    )
+    chat_parser.set_defaults(handler=chat_command)
     return parser
 
 
@@ -1009,6 +1053,196 @@ def deny_command(args: argparse.Namespace) -> int:
         return 2
     session.deny(state, args.reason)
     print(f"Denied pending action for run {args.run_id}. Use `uv run minicc resume {args.run_id}` to continue.")
+    return 0
+
+
+# --- V5 conversation sessions (experimental) ---------------------------------
+# `session` manages the persisted conversation records; `chat` runs the
+# re-entrant REPL backed by SessionEngine.  Both are marked experimental until
+# deterministic tests + real-model acceptance land (CLAUDE.md convention).
+
+
+def _session_store() -> SessionStore:
+    return SessionStore()
+
+
+def _current_session_path() -> Path:
+    return Path.cwd() / ".minicc" / "sessions" / "current"
+
+
+def _current_session_id() -> str | None:
+    path = _current_session_path()
+    if not path.exists():
+        return None
+    value = path.read_text(encoding="utf-8").strip()
+    return value or None
+
+
+def _set_current_session_id(session_id: str) -> None:
+    path = _current_session_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(session_id + "\n", encoding="utf-8")
+
+
+def _show_session(store: SessionStore, session_id: str) -> int:
+    try:
+        record = store.load(session_id)
+    except SessionNotFoundError:
+        print(f"Session not found: {session_id}", file=sys.stderr)
+        return 2
+    print(f"session: {record.session_id}")
+    print(f"project: {record.project_root}")
+    print(f"title:   {record.title or '(untitled)'}")
+    print(f"turns:   {len(record.turns)}")
+    print("--- transcript ---")
+    transcript = store.read_transcript(session_id)
+    if not transcript:
+        print("(empty)")
+    for message in transcript:
+        print(f"[{message.role}] {message.content}")
+    return 0
+
+
+def session_command(args: argparse.Namespace) -> int:
+    store = _session_store()
+    sub = args.session_subcommand
+
+    if sub == "new":
+        project_root = args.project_root or Path.cwd()
+        record = store.create(project_root, title=args.title)
+        _set_current_session_id(record.session_id)
+        print(f"Created session {record.session_id}")
+        print(f"  project: {record.project_root}")
+        if record.title:
+            print(f"  title:   {record.title}")
+        print("Continue with: uv run minicc chat --session " + record.session_id)
+        return 0
+
+    if sub == "list":
+        current = _current_session_id()
+        records = store.list_sessions()
+        if not records:
+            print("No sessions yet. Create one with: uv run minicc session new")
+            return 0
+        for record in records:
+            marker = "*" if record.session_id == current else " "
+            title = record.title or "(untitled)"
+            print(f"{marker} {record.session_id}  {record.updated_at}  {len(record.turns)} turn(s)  {title}")
+            print(f"    project: {record.project_root}")
+        return 0
+
+    if sub == "show":
+        return _show_session(store, args.session_id)
+
+    if sub == "rename":
+        try:
+            record = store.rename(args.session_id, args.title)
+        except SessionNotFoundError:
+            print(f"Session not found: {args.session_id}", file=sys.stderr)
+            return 2
+        print(f"Renamed {record.session_id} -> {record.title}")
+        return 0
+
+    if sub in {"switch", "resume"}:
+        try:
+            store.load(args.session_id)
+        except SessionNotFoundError:
+            print(f"Session not found: {args.session_id}", file=sys.stderr)
+            return 2
+        _set_current_session_id(args.session_id)
+        print(f"Now using session {args.session_id}. Continue with: uv run minicc chat")
+        return 0
+
+    print("Missing session subcommand.", file=sys.stderr)
+    return 2
+
+
+def chat_command(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    provider = _build_provider_or_print_error(settings)
+    if provider is None:
+        return 2
+    store = _session_store()
+    project_root = (args.project_root or Path.cwd()).resolve()
+    if not project_root.is_dir():
+        print(f"Project root does not exist: {project_root}", file=sys.stderr)
+        return 2
+
+    session_id = args.session_id or _current_session_id()
+    if session_id is not None and not store.exists(session_id):
+        print(f"Session not found: {session_id}", file=sys.stderr)
+        return 2
+    if session_id is None:
+        record = store.create(project_root)
+        _set_current_session_id(record.session_id)
+        session_id = record.session_id
+        print(f"Created session {session_id} (project: {project_root})")
+
+    executor: BashExecutor = LocalCommandExecutor()
+
+    def loop_factory(state: RunState) -> AgentLoop:
+        _attach_repository_context(state, state.workspace_host_path or project_root)
+        return _build_loop(
+            provider,
+            executor,
+            settings=settings,
+            session=SessionManager(),
+            state=state,
+        )
+
+    if args.port is not None:
+        from minicc.server.chat import serve_chat
+
+        print(f"Serving chat for session {session_id} (project: {project_root})")
+
+        def engine_factory() -> SessionEngine:
+            # Deferred mode: no on_approval callback, so a gated destructive
+            # command pauses the turn as waiting_approval and the web UI
+            # resolves it through the approve/deny endpoints.
+            return SessionEngine(store, loop_factory=loop_factory, executor=executor)
+
+        serve_chat(store=store, engine_factory=engine_factory, port=args.port)
+        return 0
+
+    def on_approval(state: RunState) -> str:
+        command = state.pending_action.command if state.pending_action else ""
+        question = state.approval_question or command
+        sys.stdout.write(f"approve? [{question}] (y/n/deny <reason>): ")
+        sys.stdout.flush()
+        line = sys.stdin.readline()
+        if line == "":
+            return "deny"
+        line = line.strip().lower()
+        if line in {"y", "yes", "approve"}:
+            return "approve"
+        if line in {"n", "no", "deny"}:
+            return "deny"
+        return f"deny: {line}"
+
+    engine = SessionEngine(
+        store,
+        loop_factory=loop_factory,
+        executor=executor,
+        on_approval=on_approval,
+    )
+    print("Chat mode (experimental): type a message; empty line or Ctrl-D exits.")
+    print("Run in a real project directory; destructive commands ask for approval.")
+    while True:
+        sys.stdout.write("you> ")
+        sys.stdout.flush()
+        line = sys.stdin.readline()
+        if line == "":
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            turn = engine.submit_turn(session_id, line)
+        except Exception as exc:  # one bad turn must not kill the REPL
+            print(f"Turn failed: {exc}", file=sys.stderr)
+            continue
+        print(f"agent> {turn.assistant_reply}")
+        print(f"       [run {turn.run_id}, status {turn.status}]")
     return 0
 
 

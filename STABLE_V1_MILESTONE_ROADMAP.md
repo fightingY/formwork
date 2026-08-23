@@ -1467,6 +1467,34 @@ gitignored、需密钥、不进 acceptance。
 3. `acceptance/` 与既有 run/suite 原始证据零改动；不覆盖任何 suite/report。
 4. 真实模型 smoke 仅可选、gitignored、需密钥，不进 acceptance。
 
+### V5.0：会话式改造（Session + Chat + Web，experimental）
+
+方案文档：[`docs/V5_0_SESSION_CHAT_REMODEL_PLAN.md`](docs/V5_0_SESSION_CHAT_REMODEL_PLAN.md)，
+记忆线依赖 [`docs/V5_1_MEMORY_REDESIGN_PLAN.md`](docs/V5_1_MEMORY_REDESIGN_PLAN.md)。
+
+目标：在 run/eval 之上叠一层 **会话（Session）**，把「一次性 goal→run」改成「多轮对话→每轮一个
+run_id，仍产出 trace/metrics」。整体五层模型为 Project → Session → Turn → Run → Message；
+`transcript.jsonl` 是唯一事实源（append-only JSONL，`seq` 单调，`role:user/assistant`），
+`session.json` 只存元数据。**安全 = 双模式分工**：会话走「真实工作目录直跑 + 审批链 + git 回滚」，
+run/eval 保留既有隔离拷贝（快照复制 + `diff.patch`）作为块状模式专用，二者解耦执行隔离与
+workspace 生命周期。
+
+按 P0→P1→P2→P3 落地：
+
+- **P0 会话骨架 + 多轮 loop**：`core/session_store.py`（`.minicc/sessions/<id>/{session.json,transcript.jsonl,runs/<run_id>/}`，
+  session_id `YYYYMMDD-HHMMSS-<8hex>`）、`core/session_engine.py`（可重入 turn loop，注入
+  `loop_factory` / `on_approval` / `on_turn_end`）、`session` 命令族、`build_messages` 改读 transcript
+  （**向后兼容**：无 transcript 时退回单 goal，eval 不红）。
+- **P1 聊天工作区 + 安全适配**：真实目录直跑、审批链继续 run 内 cycle、run/eval 隔离拷贝仍保留。
+- **P2 Web chat server + steer/append**：`server/chat.py`（纯标准库 `ThreadingHTTPServer` + SSE +
+  单页前端），turn 通过 `submit_turn` / `resolve_turn` 纯函数驱动，steer 为 best-effort 追加 redirect。
+- **P3 记忆挂接**：只落 `TurnEndHook` seam（`memory_turn_end_hook_errors` 指标），L1 蒸馏留待 V5.1。
+
+当前状态（2026-08-23）：**已实现（experimental，尚未真实模型验收）**。P0–P3 全部落地并通过确定性
+测试（`ScriptedProvider` / `RecordingExecutor` / `PolicyChain([ApprovalPolicy])` 驱动，不调 Provider），
+全量 `pytest` 509 passed，`ruff` / `mypy` 通过。按 CLAUDE.md 约定：`experimental` 能力只有在确定性测试
++ `acceptance/` 真实模型验收归档后才能升 `stable`，故本节只宣称「已实现」、暂不夸大。
+
 ### Sandbox Runtime 生命周期治理（当前小步迭代）
 
 目标：在不引入 Compose、容器池、标签清理平台或多运行时的前提下，把现有“一次
@@ -1516,7 +1544,7 @@ archive/long-run-11-of-60 (5d7f163，仅归档)
                                       |                             |
                                       |                             +-> V3.0 -> V3.1 -> V3.1.1 -> V3.2
                                       |                                                        |
-                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness -> V4.1 provider refactor with multi-upstream degradation contract (已归档) -> V4.2 benchmark execution convergence (回合上限 + 收尾自述，已实现)
+                                      |                                                        +-> V3.3 real-repo demo -> V3.4 minimal real-project eval -> V3.5 public benchmark and controlled experiments -> V3.6 hybrid FS/Shell tools + bounded multi-tool scheduling -> V4.0 experimental multi-agent harness -> V4.1 provider refactor with multi-upstream degradation contract (已归档) -> V4.2 benchmark execution convergence (回合上限 + 收尾自述，已实现) -> V5.0 会话式改造 (Session + Chat + Web，experimental)
                                       |                             |
                                       |                             +-> V2.1 compaction
                                       |                                    |
