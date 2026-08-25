@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -16,11 +17,33 @@ from minicc.policy.base import PolicyDecision
 @dataclass
 class TraceRecorder:
     path: Path | None = None
+    capture_model_responses: bool = True
     events: list[dict[str, Any]] = field(default_factory=list)
+    _sequence: int = field(default=0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.events:
+            self._sequence = max(
+                (int(event.get("sequence", index)) for index, event in enumerate(self.events, 1)),
+                default=0,
+            )
+        if self.path is not None and self.path.is_file() and not self.events:
+            try:
+                for index, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), 1):
+                    try:
+                        value = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(value, dict):
+                        self._sequence = max(self._sequence, int(value.get("sequence", index)))
+            except OSError:
+                self._sequence = 0
 
     def record(self, event_type: str, state: RunState | None = None, **payload: Any) -> None:
         event: dict[str, Any] = {
             "event": event_type,
+            "trace_schema_version": 1,
+            "sequence": self._sequence + 1,
             "created_at": datetime.now(UTC).isoformat(),
         }
         if state is not None:
@@ -28,6 +51,7 @@ class TraceRecorder:
             event["status"] = state.status
         event.update(_jsonable(payload))
         self.events.append(event)
+        self._sequence += 1
 
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,6 +90,8 @@ class TraceRecorder:
             "model_response",
             state,
             response_preview=text[:1000],
+            response_text=text if self.capture_model_responses else None,
+            response_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             latency_ms=latency_ms,
             attempt_count=max(int(attempt_count or 1), 1),
             retry_reasons=list(retry_reasons),

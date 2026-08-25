@@ -130,6 +130,13 @@ from minicc.sandbox.workspace import (
 from minicc.skills.registry import SkillRegistry, default_skill_roots
 from minicc.trace.metrics import write_metrics
 from minicc.trace.recorder import TraceRecorder, trace_path_for
+from minicc.trace.replay import (
+    ReplayError,
+    compare_fresh_replay,
+    create_replay_case,
+    create_replay_case_from_eval_case,
+    run_deterministic_replay,
+)
 from minicc.trace.report import write_run_report
 from minicc.trace.transcript import project_trace
 
@@ -576,6 +583,33 @@ def build_parser() -> argparse.ArgumentParser:
     transcript_parser.add_argument("--output-dir", type=Path, default=None)
     transcript_parser.set_defaults(handler=transcript_command)
 
+    replay_parser = subparsers.add_parser(
+        "replay",
+        help="Package a run as a replay case or execute deterministic/fresh replay.",
+    )
+    replay_sub = replay_parser.add_subparsers(dest="replay_subcommand")
+    replay_create = replay_sub.add_parser(
+        "create", help="Create an immutable replay case from a completed run."
+    )
+    replay_create.add_argument("run_id", help="Run id below .minicc/runs, or a run directory path.")
+    replay_create.add_argument("--output-dir", type=Path, default=None)
+    replay_create.add_argument("--overwrite", action="store_true")
+    replay_create.set_defaults(handler=replay_create_command)
+
+    replay_run = replay_sub.add_parser(
+        "run", help="Run deterministic replay, optionally followed by a fresh Runtime replay."
+    )
+    replay_run.add_argument("case", type=Path, help="Replay case directory or case.json path.")
+    replay_run.add_argument("--fresh", action="store_true", help="Also rerun the current Runtime.")
+    replay_run.add_argument("--execute-local", action="store_true", help="Use local execution instead of Docker for fresh replay.")
+    replay_run.add_argument("--docker-image", default=None, help="Override the Docker image for fresh replay.")
+    replay_run.add_argument("--profile", choices=("baseline-bash", "hybrid-v3.6", "multi-agent-v4"), default=None)
+    replay_run.add_argument("--verify-command", action="append", default=[], help="Pre-bound verifier command for fresh replay; repeatable.")
+    replay_run.add_argument("--verification-timeout-sec", type=int, default=120)
+    replay_run.add_argument("--output-dir", type=Path, default=None)
+    replay_run.add_argument("--json", action="store_true", dest="json_output")
+    replay_run.set_defaults(handler=replay_run_command)
+
     cleanup_parser = subparsers.add_parser(
         "cleanup",
         help="List unreferenced old runs; delete only when --apply is supplied.",
@@ -768,6 +802,154 @@ def transcript_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def replay_create_command(args: argparse.Namespace) -> int:
+    raw = Path(str(args.run_id))
+    try:
+        if raw.is_file() and raw.name in {"case.yaml", "case.yml"}:
+            case_dir = create_replay_case_from_eval_case(
+                raw,
+                output_dir=args.output_dir,
+                overwrite=bool(args.overwrite),
+            )
+        elif raw.is_dir() and (raw / "case.yaml").is_file() and not (raw / "state.json").is_file():
+            case_dir = create_replay_case_from_eval_case(
+                raw,
+                output_dir=args.output_dir,
+                overwrite=bool(args.overwrite),
+            )
+        else:
+            run_dir = raw if raw.is_dir() else Path.cwd() / ".minicc" / "runs" / str(args.run_id)
+            case_dir = create_replay_case(
+                run_dir,
+                output_dir=args.output_dir,
+                overwrite=bool(args.overwrite),
+            )
+    except (ReplayError, OSError) as exc:
+        print(f"Replay case creation failed: {exc}", file=sys.stderr)
+        return 1
+    manifest = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+    print(f"replay_case: {case_dir}")
+    print(f"case_id: {manifest.get('case_id', case_dir.name)}")
+    print(f"deterministic_eligible: {manifest.get('deterministic_eligible', False)}")
+    print(f"fresh_eligible: {manifest.get('fresh_eligible', False)}")
+    return 0
+
+
+def replay_run_command(args: argparse.Namespace) -> int:
+    case = Path(args.case)
+    if case.name == "case.json":
+        case = case.parent
+    case = case.resolve()
+    output_dir = args.output_dir.resolve() if args.output_dir else case
+    try:
+        deterministic = run_deterministic_replay(case, output_dir=output_dir)
+    except (ReplayError, OSError, ValueError) as exc:
+        print(f"Deterministic replay failed: {exc}", file=sys.stderr)
+        return 1
+
+    fresh = None
+    fresh_return_code = 0
+    if args.fresh:
+        manifest_path = case / "case.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            goal = str(manifest.get("goal") or "")
+            fixture = case / "workspace"
+            if not goal or not fixture.is_dir():
+                raise ReplayError("Fresh replay requires a goal and a workspace fixture.")
+            if manifest.get("fresh_eligible") is not True:
+                raise ReplayError("Replay case does not contain a usable baseline workspace fixture.")
+        except (OSError, json.JSONDecodeError, ReplayError) as exc:
+            print(f"Fresh replay setup failed: {exc}", file=sys.stderr)
+            return 1
+
+        before = {
+            path.name
+            for path in (Path.cwd() / ".minicc" / "runs").iterdir()
+            if path.is_dir()
+        } if (Path.cwd() / ".minicc" / "runs").is_dir() else set()
+        run_args = argparse.Namespace(
+            goal=goal,
+            milestone="replay",
+            source_dir=fixture,
+            execute_local=bool(args.execute_local),
+            verify_command=list(
+                args.verify_command
+                or manifest.get("verification_commands")
+                or []
+            ),
+            verification_timeout_sec=(
+                int(args.verification_timeout_sec)
+                if args.verification_timeout_sec != 120
+                else int(manifest.get("verification_timeout_sec") or 120)
+            ),
+            no_workspace_copy=False,
+            docker_image=args.docker_image,
+            stream=None,
+            profile=args.profile or manifest.get("profile"),
+            follow_up_from=None,
+            interrupt_after_steps=None,
+        )
+        fresh_return_code = run_command(run_args)
+        runs_root = Path.cwd() / ".minicc" / "runs"
+        candidates = [
+            path for path in runs_root.iterdir()
+            if path.is_dir() and path.name not in before and (path / "state.json").is_file()
+        ] if runs_root.is_dir() else []
+        if not candidates:
+            print("Fresh replay did not produce a run directory.", file=sys.stderr)
+            return 1
+        fresh_run = max(candidates, key=lambda path: path.stat().st_mtime)
+        try:
+            fresh = compare_fresh_replay(case, fresh_run, output_dir=output_dir)
+        except (ReplayError, OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"Fresh replay comparison failed: {exc}", file=sys.stderr)
+            return 1
+
+    case_manifest = json.loads((case / "case.json").read_text(encoding="utf-8"))
+    deterministic_required = case_manifest.get("source_kind") != "eval_case"
+    combined = {
+        "schema_version": 1,
+        "case_id": deterministic.case_id,
+        "passed": (
+            (deterministic.passed or not deterministic_required)
+            and (fresh.passed if fresh is not None else deterministic_required)
+        ),
+        "deterministic_required": deterministic_required,
+        "modes": {
+            "deterministic": deterministic.report,
+            "fresh": fresh.report if fresh is not None else None,
+        },
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    combined_path = output_dir / "replay_report.json"
+    combined_path.write_text(json.dumps(combined, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    combined_md = [
+        f"# Replay Report: `{deterministic.case_id}`",
+        "",
+        f"- Overall passed: `{combined['passed']}`",
+        f"- Deterministic passed: `{deterministic.passed}`",
+    ]
+    if fresh is not None:
+        combined_md.append(f"- Fresh passed: `{fresh.passed}`")
+    combined_md.extend([
+        "",
+        f"- Deterministic report: `{deterministic.report_path.name}`",
+        *([f"- Fresh report: `{fresh.report_path.name}"] if fresh is not None else []),
+    ])
+    (output_dir / "replay_report.md").write_text("\n".join(combined_md) + "\n", encoding="utf-8")
+    if args.json_output:
+        print(json.dumps(combined, ensure_ascii=False, indent=2))
+    else:
+        print(f"replay_case: {case}")
+        print(f"deterministic_status: {'PASS' if deterministic.passed else 'FAIL'}")
+        if fresh is not None:
+            print(f"fresh_status: {'PASS' if fresh.passed else 'FAIL'}")
+            print(f"fresh_run: {fresh.report.get('fresh_run_dir', '')}")
+        print(f"replay_report: {combined_path}")
+    return 0 if combined["passed"] and fresh_return_code == 0 else 1
+
+
 def run_command(args: argparse.Namespace) -> int:
     settings = load_settings()
     if getattr(args, "profile", None):
@@ -821,6 +1003,8 @@ def run_command(args: argparse.Namespace) -> int:
         state.metrics["completion_verifier_sha256"] = hashlib.sha256(
             verifier_payload
         ).hexdigest()
+        state.metrics["completion_verifier_commands"] = list(verification_commands)
+        state.metrics["completion_verifier_timeout_sec"] = verification_timeout_sec
     result = None
     try:
         follow_up_from = getattr(args, "follow_up_from", None)
