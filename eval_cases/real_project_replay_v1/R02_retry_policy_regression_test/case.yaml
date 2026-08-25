@@ -1,0 +1,35 @@
+name: R02_retry_policy_regression_test
+capability: real_project_boundary_testing
+proves: regression test authoring for retry exhaustion and invalid input
+prompt: >
+  RetryPolicy 是从 MyHeiMaDianPing 缓存删除规则中抽取出的纯 Java 组件，业务实现已经正确。
+  请只完成 RetryPolicyBoundaryTest.java，写一组可执行的边界回归测试，覆盖：最后一个有效
+  retryCount、恰好耗尽、超过耗尽值，以及负数输入必须抛出 IllegalArgumentException。
+  不得修改 RetryPolicy.java 或 verify.sh。完成后运行 sh verify.sh。
+fixture: fixture
+sandbox_mode: locked
+budget:
+  max_bash_actions: 12
+  max_action_timeout_sec: 30
+workspace:
+  writable_paths: [RetryPolicyBoundaryTest.java]
+assertions:
+  - type: command
+    command: sh verify.sh
+  - type: diff_allowlist
+    paths: [RetryPolicyBoundaryTest.java]
+  - type: max_changed_files
+    value: 1
+provenance:
+  source_repo: D:/Code/MyHeiMaDianPing
+  source_commit: 489cfb9732554a6705a8faf30fec8abb73f299f7
+  source_files: [src/main/java/com/hmdp/dto/CacheDeleteMessage.java]
+  extraction: dependency-free retry policy slice with a deliberately missing test
+showcase:
+  title: Retry policy regression test authoring
+  verifier: sh verify.sh
+  responses:
+    - '{"type":"bash","command":"sh verify.sh","purpose":"confirm the regression test is still TODO"}'
+    - '{"type":"bash","command":"printf ''%s\\n'' ''public final class RetryPolicyBoundaryTest {'' ''    private static void eq(long e, long a) { if (e != a) throw new AssertionError(); }'' ''    private static void throwsIAE() { try { RetryPolicy.delayForRetryCount(-1); throw new AssertionError(); } catch (IllegalArgumentException expected) { } }'' ''    public static void main(String[] args) { eq(1, RetryPolicy.delayForRetryCount(0)); eq(1800, RetryPolicy.delayForRetryCount(4)); eq(-1, RetryPolicy.delayForRetryCount(5)); eq(-1, RetryPolicy.delayForRetryCount(6)); throwsIAE(); }'' ''}'' > RetryPolicyBoundaryTest.java","purpose":"write executable boundary regression coverage"}'
+    - '{"type":"bash","command":"sh verify.sh","purpose":"run boundary and mutant checks"}'
+    - '{"type":"final","answer":"Added tests for valid retries, exhaustion, overflow, and negative input; verifier and mutant checks pass."}'

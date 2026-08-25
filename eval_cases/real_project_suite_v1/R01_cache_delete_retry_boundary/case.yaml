@@ -24,3 +24,17 @@ assertions:
   - type: max_changed_files
     value: 1
 proves: "Agent 能在真实缓存重试语义中定位状态更新顺序错误，并通过独立 Java 行为验证。"
+provenance:
+  source_repo: D:/Code/MyHeiMaDianPing
+  source_commit: 489cfb9732554a6705a8faf30fec8abb73f299f7
+  source_files:
+    - src/main/java/com/hmdp/dto/CacheDeleteMessage.java
+  extraction: dependency-free Java slice preserving the retry boundary contract
+showcase:
+  title: Cache deletion retry boundary fix
+  verifier: python verify.py
+  responses:
+    - '{"type":"bash","command":"python verify.py","purpose":"reproduce the retry scheduling failure"}'
+    - '{"type":"bash","command":"python -c \"from pathlib import Path; p=Path(''CacheDeleteMessage.java''); s=p.read_text(); s=s.replace(''return RETRY_DELAYS[retryCount];'', ''return RETRY_DELAYS[Math.min(retryCount, RETRY_DELAYS.length - 1)];''); p.write_text(s)\"","purpose":"fix the retry boundary and terminal scheduling"}'
+    - '{"type":"bash","command":"python verify.py","purpose":"verify the corrected retry schedule"}'
+    - '{"type":"final","answer":"Fixed the retry index boundary and verified all five delay steps plus exhaustion."}'

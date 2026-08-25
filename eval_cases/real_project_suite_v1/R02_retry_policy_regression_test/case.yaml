@@ -24,3 +24,17 @@ assertions:
   - type: max_changed_files
     value: 1
 proves: "Agent 补出的测试不只会通过正确实现，还能识别最大重试次数和异常类型的边界 mutant。"
+provenance:
+  source_repo: D:/Code/MyHeiMaDianPing
+  source_commit: 489cfb9732554a6705a8faf30fec8abb73f299f7
+  source_files:
+    - src/main/java/com/hmdp/dto/CacheDeleteMessage.java
+  extraction: dependency-free retry policy slice and a missing boundary regression test
+showcase:
+  title: Retry policy regression test authoring
+  verifier: python verify.py
+  responses:
+    - '{"type":"bash","command":"python verify.py","purpose":"confirm the regression test is still TODO"}'
+    - '{"type":"bash","command":"python -c \"from pathlib import Path; Path(''RetryPolicyBoundaryTest.java'').write_text(''public final class RetryPolicyBoundaryTest {\\n    private static void eq(long e, long a) { if (e != a) throw new AssertionError(e + \\\" != \\\" + a); }\\n    private static void throwsIAE() { try { RetryPolicy.delayForRetryCount(-1); throw new AssertionError(); } catch (IllegalArgumentException expected) { } }\\n    public static void main(String[] args) { eq(1, RetryPolicy.delayForRetryCount(0)); eq(1800, RetryPolicy.delayForRetryCount(4)); eq(-1, RetryPolicy.delayForRetryCount(5)); eq(-1, RetryPolicy.delayForRetryCount(6)); throwsIAE(); }\\n}\\n'')\"","purpose":"add executable retry boundary regression coverage"}'
+    - '{"type":"bash","command":"python verify.py","purpose":"run the boundary test and mutant checks"}'
+    - '{"type":"final","answer":"Added boundary tests for valid retries, exhaustion, overflow, and negative input; verifier and mutant checks pass."}'

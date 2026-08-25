@@ -1,0 +1,35 @@
+name: R01_cache_delete_retry_boundary
+capability: real_project_cache_debugging
+proves: cache deletion retry scheduling boundary and exhaustion behavior
+prompt: >
+  这是从 MyHeiMaDianPing 缓存删除消息中抽取的最小复现。线上约定五次重试依次延迟
+  1、5、30、300、1800 秒，但当前第一次重试被安排成了 5 秒，最后一次也没有更新时间。
+  请定位计数与调度的边界错误并做最小修复。只能修改 CacheDeleteMessage.java，
+  不要改 verify.sh。完成后运行 sh verify.sh。
+fixture: fixture
+sandbox_mode: locked
+budget:
+  max_bash_actions: 12
+  max_action_timeout_sec: 30
+workspace:
+  writable_paths: [CacheDeleteMessage.java]
+assertions:
+  - type: command
+    command: sh verify.sh
+  - type: diff_allowlist
+    paths: [CacheDeleteMessage.java]
+  - type: max_changed_files
+    value: 1
+provenance:
+  source_repo: D:/Code/MyHeiMaDianPing
+  source_commit: 489cfb9732554a6705a8faf30fec8abb73f299f7
+  source_files: [src/main/java/com/hmdp/dto/CacheDeleteMessage.java]
+  extraction: dependency-free slice preserving the source retry contract
+showcase:
+  title: Cache deletion retry boundary fix
+  verifier: sh verify.sh
+  responses:
+    - '{"type":"bash","command":"sh verify.sh","purpose":"reproduce the retry scheduling failure"}'
+    - '{"type":"bash","command":"perl -0pi -e ''s/retryCount\\+\\+;\\s*long delaySeconds = getNextDelaySeconds\\(\\);/long delaySeconds = getNextDelaySeconds();\\n        retryCount++;/'' CacheDeleteMessage.java","purpose":"compute the delay before advancing the retry state"}'
+    - '{"type":"bash","command":"sh verify.sh","purpose":"verify all delay steps and exhaustion"}'
+    - '{"type":"final","answer":"Fixed the retry index boundary and verified all five delay steps plus exhaustion."}'

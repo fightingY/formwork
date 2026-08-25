@@ -116,6 +116,10 @@ def create_replay_case(
         "source_run_dir": str(source),
         "goal": str(state.get("goal") or ""),
         "profile": str((state.get("metrics") or {}).get("profile") or "baseline-bash"),
+        "action_defaults": {
+            "timeout_sec": int((state.get("metrics") or {}).get("max_action_timeout_sec") or 60),
+            "max_tool_calls": int((state.get("metrics") or {}).get("max_tool_calls_per_step") or 16),
+        },
         "source_status": str(state.get("status") or "unknown"),
         "verification_commands": list((state.get("metrics") or {}).get("completion_verifier_commands") or []),
         "verification_timeout_sec": int((state.get("metrics") or {}).get("completion_verifier_timeout_sec") or 120),
@@ -292,7 +296,14 @@ def run_deterministic_replay(
             protocol_replay_ok = False
             continue
         try:
-            replayed_action = action_to_dict(parse_action(response_text))
+            defaults = manifest.get("action_defaults") or {}
+            replayed_action = action_to_dict(
+                parse_action(
+                    response_text,
+                    default_timeout_sec=int(defaults.get("timeout_sec") or 60),
+                    max_tool_calls=int(defaults.get("max_tool_calls") or 16),
+                )
+            )
         except (TypeError, ValueError):
             replayed_action = None
         parsed_event = next(

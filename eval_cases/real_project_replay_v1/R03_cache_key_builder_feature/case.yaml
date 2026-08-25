@@ -1,0 +1,39 @@
+name: R03_cache_key_builder_feature
+capability: real_project_cache_feature
+proves: locale-stable Redis search-key normalization and input validation
+prompt: >
+  MyHeiMaDianPing 目前大量使用字符串拼接 Redis key。请完成 ShopCacheKeyBuilder.searchKey，
+  为商铺搜索缓存生成稳定 key。契约是：keyword 去掉首尾空白、连续空白折叠为一个连字符、
+  使用 Locale.ROOT 转小写；typeId 必须大于 0，page 必须大于 0，keyword 不能为空；
+  结果格式为 cache:shop:search:<typeId>:<normalized-keyword>:p<page>。
+  保持 shopKey 的现有行为。只能修改 ShopCacheKeyBuilder.java，不要改 verify.sh。
+  完成后运行 sh verify.sh。
+fixture: fixture
+sandbox_mode: locked
+budget:
+  max_bash_actions: 12
+  max_action_timeout_sec: 30
+workspace:
+  writable_paths: [ShopCacheKeyBuilder.java]
+assertions:
+  - type: command
+    command: sh verify.sh
+  - type: diff_allowlist
+    paths: [ShopCacheKeyBuilder.java]
+  - type: max_changed_files
+    value: 1
+provenance:
+  source_repo: D:/Code/MyHeiMaDianPing
+  source_commit: 489cfb9732554a6705a8faf30fec8abb73f299f7
+  source_files:
+    - src/main/java/com/hmdp/utils/RedisConstants.java
+    - src/main/java/com/hmdp/service/impl/ShopServiceImpl.java
+  extraction: dependency-free cache-key component derived from shop cache usage
+showcase:
+  title: Shop search cache-key normalization
+  verifier: sh verify.sh
+  responses:
+    - '{"type":"bash","command":"sh verify.sh","purpose":"reproduce normalization and validation failures"}'
+    - '{"type":"bash","command":"cat > ShopCacheKeyBuilder.java <<''EOF''\nimport java.util.Locale;\n\npublic final class ShopCacheKeyBuilder {\n    private static final String SHOP_PREFIX = \"cache:shop:\";\n    private static final String SEARCH_PREFIX = \"cache:shop:search:\";\n    private ShopCacheKeyBuilder() {}\n    public static String shopKey(long shopId) { return SHOP_PREFIX + shopId; }\n    public static String searchKey(String keyword, long typeId, int page) {\n        if (keyword == null || typeId <= 0 || page <= 0) throw new IllegalArgumentException();\n        keyword = keyword.trim().replaceAll(\"\\\\s+\", \"-\").toLowerCase(Locale.ROOT);\n        if (keyword.isEmpty()) throw new IllegalArgumentException();\n        return SEARCH_PREFIX + typeId + \":\" + keyword + \":p\" + page;\n    }\n}\nEOF\n","purpose":"implement the Redis search-key contract"}'
+    - '{"type":"bash","command":"sh verify.sh","purpose":"verify locale, normalization, and parameter boundaries"}'
+    - '{"type":"final","answer":"Implemented locale-stable normalization, whitespace folding, and positive parameter validation; verifier passes."}'

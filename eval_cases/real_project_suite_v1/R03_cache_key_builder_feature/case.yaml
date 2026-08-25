@@ -25,3 +25,18 @@ assertions:
   - type: max_changed_files
     value: 1
 proves: "Agent 能实现带规范化、参数校验和兼容性约束的小型真实缓存功能。"
+provenance:
+  source_repo: D:/Code/MyHeiMaDianPing
+  source_commit: 489cfb9732554a6705a8faf30fec8abb73f299f7
+  source_files:
+    - src/main/java/com/hmdp/utils/RedisConstants.java
+    - src/main/java/com/hmdp/service/impl/ShopServiceImpl.java
+  extraction: dependency-free cache-key component derived from shop cache usage
+showcase:
+  title: Shop search cache-key normalization
+  verifier: python verify.py
+  responses:
+    - '{"type":"bash","command":"python verify.py","purpose":"reproduce the cache-key contract failures"}'
+    - '{"type":"bash","command":"python -c \"from pathlib import Path; p=Path(''ShopCacheKeyBuilder.java''); s=p.read_text(); old=''return SEARCH_PREFIX + typeId + \\\":\\\" + keyword.toLowerCase(Locale.ROOT) + \\\":p\\\" + page;''; new=''if (keyword == null || typeId <= 0 || page <= 0) throw new IllegalArgumentException();\\n        keyword = keyword.trim().replaceAll(\\\"\\\\\\\\s+\\\", \\\"-\\\").toLowerCase(Locale.ROOT);\\n        if (keyword.isEmpty()) throw new IllegalArgumentException();\\n        return SEARCH_PREFIX + typeId + \\\":\\\" + keyword + \\\":p\\\" + page;''; p.write_text(s.replace(old, new))\"","purpose":"normalize and validate the Redis search key contract"}'
+    - '{"type":"bash","command":"python verify.py","purpose":"verify locale, normalization, and parameter boundaries"}'
+    - '{"type":"final","answer":"Implemented locale-stable normalization, whitespace folding, and positive parameter validation; verifier passes."}'
