@@ -1,0 +1,28 @@
+name: simple-linked-list
+capability: fixed_public_python_regression
+proves: linked-list mutation, iteration, and reversal
+prompt: |
+  Complete LinkedList.pop and LinkedList.reversed while preserving the Node
+  and iterator contracts. Empty pop returns None and reversal returns a new list.
+fixture: fixture
+sandbox_mode: locked
+budget:
+  max_bash_actions: 20
+  max_action_timeout_sec: 30
+workspace:
+  writable_paths: [simple_linked_list.py]
+initial_verify:
+  type: python_verifier
+  path: verify.py
+  sha256: 20e71377dacdfce030603ec386e93a1385014462570725f60ffeaa3568ec3c70
+  expect_exit_code: 1
+assertions:
+  - type: python_verifier
+    path: verify.py
+    sha256: 20e71377dacdfce030603ec386e93a1385014462570725f60ffeaa3568ec3c70
+    timeout_sec: 120
+  - type: diff_allowlist
+    paths: [simple_linked_list.py]
+  - type: max_changed_files
+    value: 1
+cleanup_workspace: true

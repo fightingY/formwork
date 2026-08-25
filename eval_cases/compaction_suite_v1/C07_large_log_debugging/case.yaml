@@ -1,0 +1,24 @@
+name: V21_C07_large_log_debugging
+capability: long_output_handling
+fixture: ../../capability_suite_v1/C07_large_log_debugging/fixture
+prompt: "测试会产生很长日志。请定位第一个真正的失败原因并修复。"
+sandbox_mode: locked
+budget:
+  max_bash_actions: 30
+context:
+  max_prompt_chars: 1
+  recent_turns: 1
+  summary_max_chars: 3000
+  retention_markers: ["src/validator.py", "GOOD-123", "python -m unittest discover -s tests"]
+assertions:
+  - type: command
+    command: "python -m unittest discover -s tests"
+    expect_exit_code: 0
+  - type: trace_contains_event
+    event_type: artifact_written
+  - type: metric_at_least
+    name: artifact_bytes
+    value: 20000
+  - type: diff_allowlist
+    paths: ["src/"]
+proves: "V2.1 在长日志任务中保留关键文件、根因和 artifact pointer。"

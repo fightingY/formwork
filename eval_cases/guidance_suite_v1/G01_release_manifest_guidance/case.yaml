@@ -1,0 +1,20 @@
+name: G01_release_manifest_guidance
+capability: relevant_guidance_selection
+prompt: >
+  修复 release manifest 的兼容性回归，使生成结果符合本仓库已经约定的格式。
+  只修改业务实现，禁止联网或安装依赖；完成后运行项目规定的验证并返回 final。
+sandbox_mode: locked
+workspace:
+  writable_paths: ["src/release_manifest.py"]
+budget:
+  max_bash_actions: 20
+assertions:
+  - type: command
+    command: "python -m unittest discover -s tests"
+    expect_exit_code: 0
+  - type: file_contains
+    path: src/release_manifest.py
+    patterns: ["release_id", "sorted"]
+  - type: diff_allowlist
+    paths: ["src/release_manifest.py"]
+proves: "相关 Skill/Feedback 指引能被选择并帮助完成 release manifest 兼容性修复。"

@@ -1,0 +1,23 @@
+schema_version: 1
+suite_id: v3.5-public-benchmark
+status: frozen
+provider:
+  name: deepseek
+  model: deepseek-v4-flash
+  temperature: 0
+sandbox:
+  mode: locked
+  implementation: docker
+budget:
+  max_bash_actions: 20
+  max_action_timeout_sec: 30
+repeat: 3
+denominator: 18
+execution_order:
+  - wordy
+  - scale-generator
+  - variable-length-quantity
+  - go-counting
+  - simple-linked-list
+  - rest-api
+

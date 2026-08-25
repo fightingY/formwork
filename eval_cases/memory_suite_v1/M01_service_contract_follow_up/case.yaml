@@ -1,0 +1,53 @@
+name: M01_service_contract_follow_up
+capability: grounded_working_memory_capture
+proves: A completed source run can preserve a small, verified repository fact for an explicit follow-up.
+sandbox_mode: locked
+fixture: fixture
+prompt: |
+  Inspect only docs/SERVICE_CONTRACT.md and report the service_name, health_path,
+  ready_body, and retry_budget values. Do not modify any file. Your final JSON action
+  must include exactly one memory reference with path docs/SERVICE_CONTRACT.md,
+  line_start 3, and line_end 6 so an explicitly linked follow-up can reuse the
+  source excerpt. Example shape: {"type":"final","answer":"...","memory":[{"path":"docs/SERVICE_CONTRACT.md","line_start":3,"line_end":6}]}
+budget:
+  max_bash_actions: 4
+assertions:
+  - type: run_status
+    value: completed
+  - type: metric_equals
+    name: memory_references_captured
+    value: 1
+  - type: metric_equals
+    name: memory_references_rejected
+    value: 0
+  - type: trace_contains_event
+    event_type: memory_reference_captured
+  - type: no_source_diff
+follow_up:
+  prompt: |
+    Implement the current service contract as literal constants in src/service.py.
+    If the prompt contains explicit follow-up working memory with the exact contract
+    excerpt, use it and do not reread docs/SERVICE_CONTRACT.md. If no such memory is
+    present, inspect docs/SERVICE_CONTRACT.md before editing; do not guess. Inspect the
+    current source as needed, make the smallest change, and run
+    python -m unittest discover -s tests -v before finishing.
+  proves: Explicit working memory avoids rereading the source contract while preserving the exact implementation result.
+  expected_memory_paths:
+    - docs/SERVICE_CONTRACT.md
+  assertions:
+    - type: run_status
+      value: completed
+    - type: command
+      command: python -m unittest discover -s tests -v
+      expect_exit_code: 0
+    - type: file_contains
+      path: src/service.py
+      patterns:
+        - 'SERVICE_NAME = "atlas-router"'
+        - 'HEALTH_PATH = "/readyz"'
+        - 'READY_BODY = "atlas-ready-v2"'
+        - 'RETRY_BUDGET = 4'
+    - type: diff_allowlist
+      paths:
+        - src/service.py
+    - type: no_policy_violation

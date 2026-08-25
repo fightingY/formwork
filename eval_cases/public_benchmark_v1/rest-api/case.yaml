@@ -1,0 +1,29 @@
+name: rest-api
+capability: fixed_public_python_regression
+proves: CRUD state transitions and stable identifiers
+prompt: |
+  Implement UserStore.create, get, update, and delete. IDs start at one and
+  increase monotonically; returned records contain only id and name, and
+  missing records are represented by None/False as appropriate.
+fixture: fixture
+sandbox_mode: locked
+budget:
+  max_bash_actions: 20
+  max_action_timeout_sec: 30
+workspace:
+  writable_paths: [rest_api.py]
+initial_verify:
+  type: python_verifier
+  path: verify.py
+  sha256: 4031ea25c93032f50d204f6e3d2c779970d0d347e28bad281f89f5589f1a719b
+  expect_exit_code: 1
+assertions:
+  - type: python_verifier
+    path: verify.py
+    sha256: 4031ea25c93032f50d204f6e3d2c779970d0d347e28bad281f89f5589f1a719b
+    timeout_sec: 120
+  - type: diff_allowlist
+    paths: [rest_api.py]
+  - type: max_changed_files
+    value: 1
+cleanup_workspace: true

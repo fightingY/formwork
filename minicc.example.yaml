@@ -1,0 +1,99 @@
+# miniCC 配置模板。复制本文件为 `minicc.yaml` 后按需修改。
+# `minicc.yaml` 已被 .gitignore 忽略、不会进 git/GitHub，所以真密钥可以直接填在
+# 它的 `api_key:` 里；本 `minicc.example.yaml` 会被提交，只留变量名占位、不放真密钥。
+
+project:
+  milestone: v4.1
+
+# V4.1：多上游路由注册表。key 即 route 名；每条 route 一套独立的
+# base_url / api_key_env(或 api_key) / model / timeout / retry_policy，换上游 = 改一行
+# （default_provider 或环境变量 MINICC_PROVIDER）。
+#
+# 密钥写法（写在本地 minicc.yaml，别写进本模板；两种都支持直填真密钥）：
+#   api_key: sk-xxx            # 直接填真密钥
+#   api_key_env: XXX_API_KEY   # 环境变量名；直接填密钥值也行（找不到同名变量时就把值当密钥）
+providers:
+  # 主上游（默认 route）：硅基流动。
+  siliconflow:
+    base_url: https://api.siliconflow.cn/v1
+    api_key_env: SILICONFLOW_API_KEY
+    model: deepseek-ai/DeepSeek-V4-Pro
+    json_mode: true
+    # 模型上下文窗口（可选）：绑定压缩触发阈值（context.threshold_ratio）与保留尾部
+    # （context.retain_ratio），用 token 计量；缺省则回退 context.max_prompt_chars 的字符阈值。
+    # 按所选模型的实际窗口填（示例按 128K 写一个值）。
+    context_window: 131072
+
+  # 备用上游：阿里云百炼（OpenAI 兼容模式）。
+  bailian:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: BAILIAN_API_KEY
+    model: qwen-plus
+    json_mode: true
+
+  # 备用上游：私人中转站示例。
+  relay-private:
+    base_url: https://relay.example.com/v1
+    api_key_env: RELAY_PRIVATE_API_KEY
+    model: deepseek-chat
+    headers: {}          # 可选：中转站额外头
+
+# 无 failover 时的主 route；也可被环境变量 MINICC_PROVIDER 覆盖。
+default_provider: siliconflow
+
+# 可选：最外层降级链（在以下失败码上切换到下一 route）。默认关闭（failover 是可选
+# 最外层调度器，不是默认姿势）。
+# failover:
+#   chain: [siliconflow, bailian, relay-private]
+#   on: [QUOTA, AUTH, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
+#   max_hops: 2
+
+# V4 child / scout / planner / reviewer 子模型走哪条 route；省略 provider 则回退
+# default_provider，可再用 model 覆盖该 route 的默认模型。
+child:
+  provider: siliconflow
+  model: deepseek-ai/DeepSeek-V4-Flash
+
+workspace:
+  ignored_allowlist: []
+
+tooling:
+  profile: baseline-bash
+  max_parallel_tool_calls: 4
+  max_tool_calls_per_step: 16
+
+sandbox:
+  image: python@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e38295747e49ac0
+  mode: locked
+  cpus: "1"
+  memory: 1g
+  pids_limit: 256
+  network: none
+
+budget:
+  max_bash_actions: 30
+  max_seconds: 900
+  max_turns: 0
+  max_action_timeout_sec: 120
+
+context:
+  max_prompt_chars: 120000
+  recent_turns: 6
+  artifact_preview_chars: 12000
+  summary_max_chars: 12000
+  field_preview_chars: 4000
+  compaction_strategy: deterministic
+  semantic_max_input_chars: 60000
+  # 绑定模型上下文窗口时的压缩触发/保留比例（token 计量，对齐 dsh 默认 0.8/0.16）；
+  # 无 route 的 context_window 时这些被忽略，回退 max_prompt_chars 字符阈值。
+  threshold_ratio: 0.8
+  retain_ratio: 0.16
+  # CONTEXT_OVERFLOW（413/上下文超长）时的「强制压缩+重试」上限（0 = 关闭恢复）。
+  max_overflow_retries: 1
+  # Keep the full append-only history until the prompt budget triggers one compaction.
+  prompt_layout: append_until_compaction
+
+policy:
+  require_approval_for_network: true
+  deny_sudo: true
+  require_approval_for_destructive: true

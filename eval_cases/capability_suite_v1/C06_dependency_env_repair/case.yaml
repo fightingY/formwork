@@ -1,0 +1,18 @@
+name: C06_dependency_env_repair
+capability: environment_repair
+prompt: >
+  当前项目测试需要项目配置声明 pytest 依赖。请修复项目配置，
+  让测试命令保持可运行，不要改业务代码。
+sandbox_mode: locked
+budget:
+  max_bash_actions: 20
+assertions:
+  - type: file_contains
+    path: pyproject.toml
+    patterns: ["pytest"]
+  - type: command
+    command: "python -m unittest discover -s tests"
+    expect_exit_code: 0
+  - type: diff_allowlist
+    paths: ["pyproject.toml"]
+proves: "Agent 能修复项目依赖声明这类环境配置问题。"

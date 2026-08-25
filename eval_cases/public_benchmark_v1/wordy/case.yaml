@@ -1,0 +1,29 @@
+name: wordy
+capability: fixed_public_python_regression
+proves: parsing and operator precedence
+prompt: |
+  Implement answer(question) for the word problem exercise. Handle plus, minus,
+  multiplied by, divided by, and left-to-right precedence where multiplication
+  and division bind before addition and subtraction.
+fixture: fixture
+sandbox_mode: locked
+budget:
+  max_bash_actions: 20
+  max_action_timeout_sec: 30
+workspace:
+  writable_paths: [wordy.py]
+initial_verify:
+  type: python_verifier
+  path: verify.py
+  sha256: 09ba16ed9ffefe5f73bb1fe16fddef376c4a06b57bb084d02bd7bd0d6b80316d
+  expect_exit_code: 1
+assertions:
+  - type: python_verifier
+    path: verify.py
+    sha256: 09ba16ed9ffefe5f73bb1fe16fddef376c4a06b57bb084d02bd7bd0d6b80316d
+    timeout_sec: 120
+  - type: diff_allowlist
+    paths: [wordy.py]
+  - type: max_changed_files
+    value: 1
+cleanup_workspace: true

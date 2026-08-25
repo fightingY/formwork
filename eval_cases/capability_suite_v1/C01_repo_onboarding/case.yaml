@@ -1,0 +1,21 @@
+name: C01_repo_onboarding
+capability: repo_understanding
+prompt: >
+  请理解这个 Python CLI 仓库，不修改源码，并在仓库根目录创建 ONBOARDING.md 文件。
+  文件必须逐字使用以下五个 Markdown 二级标题：
+  `## 入口`、`## 核心模块`、`## 测试命令`、`## 运行命令`、`## 风险`。
+  创建后最多读取验证一次；确认五个标题存在后立即返回 final，不要重复检查。
+sandbox_mode: locked
+workspace:
+  writable_paths: ["ONBOARDING.md"]
+budget:
+  max_bash_actions: 20
+assertions:
+  - type: file_exists
+    path: ONBOARDING.md
+  - type: file_contains
+    path: ONBOARDING.md
+    patterns: ["入口", "核心模块", "测试命令", "运行命令", "风险"]
+  - type: no_source_diff
+    paths: ["src/", "tests/"]
+proves: "Agent 能在不改源码的情况下完成仓库理解和交接文档。"

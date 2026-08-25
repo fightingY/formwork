@@ -1,0 +1,40 @@
+name: R02_retry_policy_regression_test
+capability: real_project_test_writing
+prompt: >
+  RetryPolicy 是从 MyHeiMaDianPing 的缓存删除重试规则中抽取出的纯 Java 组件，业务实现已经正确。
+  请只完成 RetryPolicyBoundaryTest.java，写一组可执行的边界回归测试，覆盖：最后一个有效
+  retryCount、恰好耗尽、超过耗尽值，以及负数输入必须抛出 IllegalArgumentException。
+  不得修改 RetryPolicy.java 或 verify.py。完成后运行 python verify.py。
+sandbox_mode: local
+workspace:
+  writable_paths: ["RetryPolicyBoundaryTest.java"]
+budget:
+  max_bash_actions: 20
+completion_gate: true
+cleanup_workspace: true
+initial_verify:
+  command: "python verify.py"
+  expect_exit_code: 1
+assertions:
+  - type: command
+    command: "python verify.py"
+    expect_exit_code: 0
+  - type: diff_allowlist
+    paths: ["RetryPolicyBoundaryTest.java"]
+  - type: max_changed_files
+    value: 1
+proves: "Agent 补出的测试不只会通过正确实现，还能识别最大重试次数和异常类型的边界 mutant。"
+provenance:
+  source_repo: D:/Code/MyHeiMaDianPing
+  source_commit: 489cfb9732554a6705a8faf30fec8abb73f299f7
+  source_files:
+    - src/main/java/com/hmdp/dto/CacheDeleteMessage.java
+  extraction: dependency-free retry policy slice and a missing boundary regression test
+showcase:
+  title: Retry policy regression test authoring
+  verifier: python verify.py
+  responses:
+    - '{"type":"bash","command":"python verify.py","purpose":"confirm the regression test is still TODO"}'
+    - '{"type":"bash","command":"python -c \"from pathlib import Path; Path(''RetryPolicyBoundaryTest.java'').write_text(''public final class RetryPolicyBoundaryTest {\\n    private static void eq(long e, long a) { if (e != a) throw new AssertionError(e + \\\" != \\\" + a); }\\n    private static void throwsIAE() { try { RetryPolicy.delayForRetryCount(-1); throw new AssertionError(); } catch (IllegalArgumentException expected) { } }\\n    public static void main(String[] args) { eq(1, RetryPolicy.delayForRetryCount(0)); eq(1800, RetryPolicy.delayForRetryCount(4)); eq(-1, RetryPolicy.delayForRetryCount(5)); eq(-1, RetryPolicy.delayForRetryCount(6)); throwsIAE(); }\\n}\\n'')\"","purpose":"add executable retry boundary regression coverage"}'
+    - '{"type":"bash","command":"python verify.py","purpose":"run the boundary test and mutant checks"}'
+    - '{"type":"final","answer":"Added boundary tests for valid retries, exhaustion, overflow, and negative input; verifier and mutant checks pass."}'

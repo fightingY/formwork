@@ -1,0 +1,29 @@
+name: scale-generator
+capability: fixed_public_python_regression
+proves: chromatic scale boundary and enharmonic handling
+prompt: |
+  Implement chromatic_scale(tonic, intervals) for a twelve-note chromatic scale.
+  Return note names beginning at tonic and apply m (minor second) intervals;
+  preserve the tonic spelling for flat and sharp inputs.
+fixture: fixture
+sandbox_mode: locked
+budget:
+  max_bash_actions: 20
+  max_action_timeout_sec: 30
+workspace:
+  writable_paths: [scale_generator.py]
+initial_verify:
+  type: python_verifier
+  path: verify.py
+  sha256: 009c7611b4090c84823a7fb729b90ab4fa57bd909a1aa72e3fed7849e72a959c
+  expect_exit_code: 1
+assertions:
+  - type: python_verifier
+    path: verify.py
+    sha256: 009c7611b4090c84823a7fb729b90ab4fa57bd909a1aa72e3fed7849e72a959c
+    timeout_sec: 120
+  - type: diff_allowlist
+    paths: [scale_generator.py]
+  - type: max_changed_files
+    value: 1
+cleanup_workspace: true

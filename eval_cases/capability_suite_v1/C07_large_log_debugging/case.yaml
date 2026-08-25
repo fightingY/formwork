@@ -1,0 +1,100 @@
+name: C07_large_log_debugging
+capability: long_output_handling
+prompt: >
+  按以下顺序完成一次真实的长日志故障调查，每一步都提供下一步所需的新证据。
+  先单独运行 `python -m unittest discover -s tests`；不要 tee、重定向或自己创建日志，
+  runner 会在输出过长时返回权威 artifact 路径。随后只运行
+  `grep -m 1 -n 'FIRST_CAUSAL_FAILURE' .minicc_artifacts/stdout_0001.txt`
+  定位最早的结构化根因；该记录已经完整给出 contract 路径和
+  rule 标识，不要再用 head、tail 或 sed 复查相邻噪声。随后用独立回合运行
+  `cat VALIDATION_CONTRACT.md`，从 contract 的 `binding_test` 字段发现并独立运行
+  `cat tests/test_validator.py`，再沿 test 的 import 独立运行 `cat src/validator.py`。
+  三个读取命令必须保持该顺序且不能合并、跳过，也不要使用 find 或列目录。以 contract
+  和 binding test 为准，仅修改 `src/validator.py` 并做通用的最小修复。修改必须是一个
+  独立的 `cat > src/validator.py << 'EOF'` heredoc 动作，终止 `EOF` 后不得拼接其他命令；
+  tests、contract、artifact、import path 和 test runner 都是只读边界。
+
+  Evidence and verification contract: The observation preview is only an index into the saved
+  command artifact, never a substitute for the complete output. The earliest structured causal
+  record is authoritative even when thousands of noise lines and a later unittest summary are
+  also present. Preserve both its contract path and rule identifier in the reasoning. The
+  lexical contract intentionally delegates the public API binding, non-text behavior, and
+  executable examples to its `binding_test`; that test's import identifies the implementation.
+  Read those three authorities in that discovery order with the three standalone `cat` commands
+  above so each evidence source remains independently attributable. A constant return,
+  example-specific branch, compatibility alias, weakened suffix validation, broad exception
+  handler, or modification outside `src/validator.py` is not a valid repair. The source edit and
+  each verification are separate evidence boundaries: finish the edit action and inspect its
+  observation before issuing any test command; never append a test to the edit with a newline,
+  semicolon, pipe, `&&`, or another shell operator. After the edit, run the focused command
+  `python -m unittest tests.test_validator -v` by itself in the next turn. If it passes, run
+  `python -m unittest discover -s tests` by itself as the final release check; do not combine the
+  two commands. The runner's exit code and observation are authoritative. When that final command
+  exits zero, do not inspect its artifact, repeat a search, or re-read any file: answer final
+  immediately with the causal rule, changed file, focused result, and full-suite result. Every
+  prescribed read, repair, and test contributes distinct evidence, while an unchanged repeated
+  command or duplicate file read does not. This ordered evidence trail is also the incident
+  handoff: another engineer must be able to reconstruct why the first failure was causal, why the
+  contract overruled surrounding noise, why the patch stayed inside its declared boundary, and
+  which focused and full checks established recovery. Report only observations produced by this
+  run; do not infer success from code appearance or from an earlier command.
+sandbox_mode: locked
+workspace:
+  writable_paths: ["src/validator.py"]
+budget:
+  max_bash_actions: 30
+context:
+  artifact_preview_chars: 1200
+assertions:
+  - type: command
+    command: "python -m unittest discover -s tests"
+    expect_exit_code: 0
+  - type: trace_contains_event
+    event_type: artifact_written
+  - type: metric_at_least
+    name: artifact_bytes
+    value: 20000
+  - type: metric_equals
+    name: turns
+    value: 9
+  - type: metric_equals
+    name: bash_actions
+    value: 8
+  - type: metric_equals
+    name: file_read_actions
+    value: 3
+  - type: metric_equals
+    name: search_actions
+    value: 1
+  - type: metric_equals
+    name: repeated_file_reads
+    value: 0
+  - type: metric_equals
+    name: repeated_searches
+    value: 0
+  - type: trace_action_shape
+    actions:
+      - command: "python -m unittest discover -s tests"
+        expect_exit_code: 1
+        artifact_ids: ["art_0001"]
+      - command: "grep -m 1 -n 'FIRST_CAUSAL_FAILURE' .minicc_artifacts/stdout_0001.txt"
+        expect_exit_code: 0
+      - command: "cat VALIDATION_CONTRACT.md"
+        expect_exit_code: 0
+      - command: "cat tests/test_validator.py"
+        expect_exit_code: 0
+      - command: "cat src/validator.py"
+        expect_exit_code: 0
+      - heredoc_write:
+          path: "src/validator.py"
+          delimiter: "EOF"
+        expect_exit_code: 0
+      - command: "python -m unittest tests.test_validator -v"
+        expect_exit_code: 0
+      - command: "python -m unittest discover -s tests"
+        expect_exit_code: 0
+  - type: diff_allowlist
+    paths: ["src/validator.py"]
+  - type: max_changed_files
+    value: 1
+proves: "Agent 能在长输出中依赖 artifact 定位结构化根因，独立核对只读 contract/tests/source，并跨越 P1 滑窗边界完成修复。"

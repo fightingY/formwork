@@ -1,0 +1,17 @@
+name: C05_refactor_without_behavior_change
+capability: refactoring
+prompt: >
+  将重复的配置读取逻辑抽取成一个函数，保持外部行为不变。
+  请确保测试通过，并避免扩大改动范围。
+sandbox_mode: locked
+budget:
+  max_bash_actions: 25
+assertions:
+  - type: command
+    command: "python -m unittest discover -s tests"
+    expect_exit_code: 0
+  - type: diff_allowlist
+    paths: ["src/config.py", "tests/"]
+  - type: max_changed_files
+    value: 2
+proves: "Agent 能做有边界的重构，并用测试证明行为不变。"

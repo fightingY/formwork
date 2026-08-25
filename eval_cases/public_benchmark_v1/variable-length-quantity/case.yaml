@@ -1,0 +1,28 @@
+name: variable-length-quantity
+capability: fixed_public_python_regression
+proves: integer encoding, decoding, and byte boundaries
+prompt: |
+  Implement encode and decode for MIDI variable-length quantities. Support
+  values from zero through 0x0fffffff and reject malformed input sensibly.
+fixture: fixture
+sandbox_mode: locked
+budget:
+  max_bash_actions: 20
+  max_action_timeout_sec: 30
+workspace:
+  writable_paths: [variable_length_quantity.py]
+initial_verify:
+  type: python_verifier
+  path: verify.py
+  sha256: 22c15e369f1676576db8d7a556bde17b259f431b7c004fb10a5adeb9bbe67bf7
+  expect_exit_code: 1
+assertions:
+  - type: python_verifier
+    path: verify.py
+    sha256: 22c15e369f1676576db8d7a556bde17b259f431b7c004fb10a5adeb9bbe67bf7
+    timeout_sec: 120
+  - type: diff_allowlist
+    paths: [variable_length_quantity.py]
+  - type: max_changed_files
+    value: 1
+cleanup_workspace: true

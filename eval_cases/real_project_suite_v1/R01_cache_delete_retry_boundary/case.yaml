@@ -1,0 +1,40 @@
+name: R01_cache_delete_retry_boundary
+capability: real_project_debugging
+prompt: >
+  这是从 MyHeiMaDianPing 缓存删除消息中抽取的最小复现。线上约定五次重试依次延迟
+  1、5、30、300、1800 秒，但当前第一次重试被安排成了 5 秒，最后一次也没有更新时间。
+  请定位计数与调度的边界错误并做最小修复。只能修改 CacheDeleteMessage.java，
+  不要改 verify.py。完成后运行 python verify.py。
+sandbox_mode: local
+workspace:
+  writable_paths: ["CacheDeleteMessage.java"]
+budget:
+  max_bash_actions: 20
+completion_gate: true
+cleanup_workspace: true
+initial_verify:
+  command: "python verify.py"
+  expect_exit_code: 1
+assertions:
+  - type: command
+    command: "python verify.py"
+    expect_exit_code: 0
+  - type: diff_allowlist
+    paths: ["CacheDeleteMessage.java"]
+  - type: max_changed_files
+    value: 1
+proves: "Agent 能在真实缓存重试语义中定位状态更新顺序错误，并通过独立 Java 行为验证。"
+provenance:
+  source_repo: D:/Code/MyHeiMaDianPing
+  source_commit: 489cfb9732554a6705a8faf30fec8abb73f299f7
+  source_files:
+    - src/main/java/com/hmdp/dto/CacheDeleteMessage.java
+  extraction: dependency-free Java slice preserving the retry boundary contract
+showcase:
+  title: Cache deletion retry boundary fix
+  verifier: python verify.py
+  responses:
+    - '{"type":"bash","command":"python verify.py","purpose":"reproduce the retry scheduling failure"}'
+    - '{"type":"bash","command":"python -c \"from pathlib import Path; p=Path(''CacheDeleteMessage.java''); s=p.read_text(); s=s.replace(''return RETRY_DELAYS[retryCount];'', ''return RETRY_DELAYS[Math.min(retryCount, RETRY_DELAYS.length - 1)];''); p.write_text(s)\"","purpose":"fix the retry boundary and terminal scheduling"}'
+    - '{"type":"bash","command":"python verify.py","purpose":"verify the corrected retry schedule"}'
+    - '{"type":"final","answer":"Fixed the retry index boundary and verified all five delay steps plus exhaustion."}'

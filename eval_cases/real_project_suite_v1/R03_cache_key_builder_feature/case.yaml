@@ -1,0 +1,42 @@
+name: R03_cache_key_builder_feature
+capability: real_project_feature_work
+prompt: >
+  MyHeiMaDianPing 目前大量使用字符串拼接 Redis key。请完成 ShopCacheKeyBuilder.searchKey，
+  为商铺搜索缓存生成稳定 key。契约是：keyword 去掉首尾空白、连续空白折叠为一个连字符、
+  使用 Locale.ROOT 转小写；typeId 必须大于 0，page 必须大于 0，keyword 不能为空；
+  结果格式为 cache:shop:search:<typeId>:<normalized-keyword>:p<page>。
+  保持 shopKey 的现有行为。只能修改 ShopCacheKeyBuilder.java，不要改 verify.py。
+sandbox_mode: local
+workspace:
+  writable_paths: ["ShopCacheKeyBuilder.java"]
+budget:
+  max_bash_actions: 25
+completion_gate: true
+cleanup_workspace: true
+initial_verify:
+  command: "python verify.py"
+  expect_exit_code: 1
+assertions:
+  - type: command
+    command: "python verify.py"
+    expect_exit_code: 0
+  - type: diff_allowlist
+    paths: ["ShopCacheKeyBuilder.java"]
+  - type: max_changed_files
+    value: 1
+proves: "Agent 能实现带规范化、参数校验和兼容性约束的小型真实缓存功能。"
+provenance:
+  source_repo: D:/Code/MyHeiMaDianPing
+  source_commit: 489cfb9732554a6705a8faf30fec8abb73f299f7
+  source_files:
+    - src/main/java/com/hmdp/utils/RedisConstants.java
+    - src/main/java/com/hmdp/service/impl/ShopServiceImpl.java
+  extraction: dependency-free cache-key component derived from shop cache usage
+showcase:
+  title: Shop search cache-key normalization
+  verifier: python verify.py
+  responses:
+    - '{"type":"bash","command":"python verify.py","purpose":"reproduce the cache-key contract failures"}'
+    - '{"type":"bash","command":"python -c \"from pathlib import Path; p=Path(''ShopCacheKeyBuilder.java''); s=p.read_text(); old=''return SEARCH_PREFIX + typeId + \\\":\\\" + keyword.toLowerCase(Locale.ROOT) + \\\":p\\\" + page;''; new=''if (keyword == null || typeId <= 0 || page <= 0) throw new IllegalArgumentException();\\n        keyword = keyword.trim().replaceAll(\\\"\\\\\\\\s+\\\", \\\"-\\\").toLowerCase(Locale.ROOT);\\n        if (keyword.isEmpty()) throw new IllegalArgumentException();\\n        return SEARCH_PREFIX + typeId + \\\":\\\" + keyword + \\\":p\\\" + page;''; p.write_text(s.replace(old, new))\"","purpose":"normalize and validate the Redis search key contract"}'
+    - '{"type":"bash","command":"python verify.py","purpose":"verify locale, normalization, and parameter boundaries"}'
+    - '{"type":"final","answer":"Implemented locale-stable normalization, whitespace folding, and positive parameter validation; verifier passes."}'
