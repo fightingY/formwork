@@ -270,7 +270,7 @@ def test_load_settings_requires_api_key(tmp_path, monkeypatch) -> None:
 
 
 def test_load_settings_api_key_env_accepts_direct_key(tmp_path, monkeypatch) -> None:
-    # api_key_env 找不到同名环境变量时，把值本身当密钥（本地 minicc.yaml 可直填真密钥）。
+    # api_key_env 找不到同名环境变量时，把值本身当密钥（仅用于覆盖兼容行为的测试）。
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MINICC_API_KEY", raising=False)
     (tmp_path / "minicc.yaml").write_text(
@@ -279,14 +279,14 @@ providers:
   primary:
     base_url: https://provider.test/v1
     model: test-model
-    api_key_env: sk-secret-real-key-123456
+    api_key_env: test-inline-key
 default_provider: primary
 """,
         encoding="utf-8",
     )
 
     settings = load_settings()
-    assert settings.default_route.api_key == "sk-secret-real-key-123456"
+    assert settings.default_route.api_key == "test-inline-key"
 
 
 def test_load_settings_accepts_valid_env_name(tmp_path, monkeypatch) -> None:

@@ -25,6 +25,11 @@ coverage.xml
 .env.*
 !.env.example
 minicc.yaml
+minicc.local.yaml
+*.local.yaml
+*.local.yml
+*.pem
+*.key
 
 # miniCC runtime data
 .minicc/
@@ -36,6 +41,8 @@ artifacts/
 # Editor and OS files
 .idea/
 .vscode/
+.claude/
+.codex/
 *.swp
 *.swo
 .DS_Store
