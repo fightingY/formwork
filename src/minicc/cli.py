@@ -721,6 +721,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Serve the web chat UI on this port instead of the terminal REPL.",
     )
     chat_parser.set_defaults(handler=chat_command)
+
+    web_ops_parser = subparsers.add_parser(
+        "web-ops", help="Serve the web ops console for run/eval/replay/models (experimental)."
+    )
+    web_ops_parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
+    web_ops_parser.add_argument("--port", type=int, default=8766, help="Port to bind.")
+    web_ops_parser.set_defaults(handler=web_ops_command)
     return parser
 
 
@@ -3181,6 +3188,13 @@ def web_command(args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
     )
+    return 0
+
+
+def web_ops_command(args: argparse.Namespace) -> int:
+    from minicc.server.ops import serve_ops
+
+    serve_ops(host=args.host, port=args.port)
     return 0
 
 
