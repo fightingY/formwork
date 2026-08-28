@@ -4,7 +4,7 @@ import email.utils
 import json
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 from urllib.parse import urlparse
@@ -86,6 +86,9 @@ class CompletionOptions:
     include_usage: bool = True
     json_mode: bool = True
     max_tokens: int | None = None
+    # Optional UI hook. The provider still returns one complete response for
+    # protocol parsing; callers may use deltas for progressive display.
+    on_text_delta: Callable[[str], None] | None = None
 
 
 class ModelProvider(Protocol):
@@ -338,7 +341,9 @@ class OpenAICompatibleProvider:
 
         started = time.perf_counter()
         try:
-            raw, text, usage_raw = self._request_once(payload, stream=options.stream)
+            raw, text, usage_raw = self._request_once(
+                payload, stream=options.stream, on_text_delta=options.on_text_delta
+            )
         except ProviderError as exc:
             if (
                 options.json_mode
@@ -349,7 +354,9 @@ class OpenAICompatibleProvider:
                 # implement native JSON mode. Fall back — within this same
                 # visible attempt — to local extraction, without a config edit.
                 payload.pop("response_format", None)
-                raw, text, usage_raw = self._request_once(payload, stream=options.stream)
+                raw, text, usage_raw = self._request_once(
+                    payload, stream=options.stream, on_text_delta=options.on_text_delta
+                )
             else:
                 raise
 
@@ -375,9 +382,10 @@ class OpenAICompatibleProvider:
         payload: dict[str, Any],
         *,
         stream: bool,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> tuple[dict[str, Any], str, Mapping[str, Any] | None]:
         if stream:
-            return self._complete_stream(payload)
+            return self._complete_stream(payload, on_text_delta=on_text_delta)
         raw = self._post_json(payload)
         usage_raw = raw.get("usage") if isinstance(raw, dict) else None
         return raw, extract_chat_text(raw), usage_raw
@@ -449,6 +457,8 @@ class OpenAICompatibleProvider:
     def _complete_stream(
         self,
         payload: dict[str, Any],
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> tuple[dict[str, Any], str, Mapping[str, Any] | None]:
         chunks: list[dict[str, Any]] = []
         content_parts: list[str] = []
@@ -491,7 +501,10 @@ class OpenAICompatibleProvider:
                         delta = choice.get("delta") or {}
                         piece = delta.get("content")
                         if piece:
-                            content_parts.append(str(piece))
+                            text_piece = str(piece)
+                            content_parts.append(text_piece)
+                            if on_text_delta is not None:
+                                on_text_delta(text_piece)
             if timed_out:
                 raise ProviderError(
                     failure=LlmFailure(

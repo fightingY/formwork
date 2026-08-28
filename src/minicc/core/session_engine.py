@@ -81,7 +81,14 @@ class SessionEngine:
         self._on_approval = on_approval
         self._on_turn_end = on_turn_end
 
-    def submit_turn(self, session_id: str, user_message: str) -> SessionTurnResult:
+    def submit_turn(
+        self,
+        session_id: str,
+        user_message: str,
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
+        on_progress: Callable[[dict[str, object]], None] | None = None,
+    ) -> SessionTurnResult:
         """Run one conversational turn for ``session_id`` and persist it."""
         record = self.store.load(session_id)
         history = self.store.history_messages(session_id)
@@ -95,6 +102,8 @@ class SessionEngine:
         # Prior turns ride along on the state so ContextBuilder can inject them;
         # transcript.jsonl remains the single source of truth (plan §5.1).
         state.session_history = history
+        state.text_delta_callback = on_text_delta
+        state.progress_callback = on_progress
 
         loop_result = self._run_turn(state)
         reply = self._assistant_reply(state)
@@ -121,7 +130,15 @@ class SessionEngine:
 
         return result
 
-    def resolve_turn(self, session_id: str, run_id: str, decision: str) -> SessionTurnResult:
+    def resolve_turn(
+        self,
+        session_id: str,
+        run_id: str,
+        decision: str,
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
+        on_progress: Callable[[dict[str, object]], None] | None = None,
+    ) -> SessionTurnResult:
         """Resume a turn that paused on a destructive-approval gate.
 
         Loads the run (``goal`` = the turn's user message), applies the
@@ -130,6 +147,8 @@ class SessionEngine:
         """
         state = load_run_state(self.store.session_runs_dir(session_id) / run_id / "state.json")
         state.session_history = self.store.history_messages(session_id)
+        state.text_delta_callback = on_text_delta
+        state.progress_callback = on_progress
 
         if state.pending_action is None:
             raise ValueError(f"Run {run_id} has no pending action to resolve.")

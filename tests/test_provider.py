@@ -379,10 +379,14 @@ def test_complete_stream_aggregates_chunks(monkeypatch) -> None:
         model="model",
     )
 
-    response = provider.complete([], options=CompletionOptions(stream=True))
+    deltas: list[str] = []
+    response = provider.complete(
+        [], options=CompletionOptions(stream=True, on_text_delta=deltas.append)
+    )
 
     assert response.text == '{"type":"final","answer":"done"}'
     assert response.usage.total_tokens == 2
+    assert "".join(deltas) == response.text
 
 
 def test_retry_after_ms_explicit_header() -> None:

@@ -696,45 +696,46 @@ def render_ops_index() -> str:
 
 
 _OPS_INDEX_HTML = """<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>miniCC Ops Console</title>
   <style>
-    :root {
-      --bg: #f6f7f9; --panel: #ffffff; --ink: #18222f; --muted: #66717f;
-      --line: #d8dee7; --accent: #0f766e; --accent-soft: #d9f0ed; --danger: #b42318;
-      --warn-bg: #fff2d6;
-    }
+    :root { --bg:#f4f6f8; --panel:#fff; --ink:#16202a; --muted:#6b7785; --line:#dbe2e8;
+      --accent:#0b7a75; --accent-soft:#e4f4f1; --accent-dark:#075e5b; --danger:#b42318;
+      --warn-bg:#fff8e8; --shadow:0 1px 2px rgba(16,24,40,.05); }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
-      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink);
+      font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
     button, input, select, textarea { font: inherit; }
-    button { border: 1px solid var(--line); background: var(--panel); border-radius: 6px;
-      padding: 7px 11px; cursor: pointer; }
-    button:hover { border-color: var(--accent); }
-    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:6px;
+      padding:8px 12px; cursor:pointer; transition:background .15s,border-color .15s,opacity .15s; }
+    button:hover:not(:disabled) { border-color:var(--accent); background:#f7fbfb; }
+    button:disabled { cursor:not-allowed; opacity:.55; }
+    button.primary { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }
+    button.primary:hover:not(:disabled) { background:var(--accent-dark); }
     button.danger { color: var(--danger); border-color: var(--danger); }
-    input, select, textarea { border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px;
-      width: 100%; background: #fff; }
+    input, select, textarea { border:1px solid var(--line); border-radius:6px; padding:9px 10px;
+      width:100%; background:#fff; outline:none; }
+    input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(11,122,117,.12); }
     label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
     .app { display: grid; grid-template-rows: auto auto 1fr; min-height: 100vh; }
-    header { display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px;
+      padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); box-shadow:var(--shadow); }
     h1 { margin: 0; font-size: 18px; }
     .subtle { color: var(--muted); font-size: 12px; }
-    nav.tabs { display: flex; gap: 4px; padding: 8px 18px 0; background: var(--panel);
+    nav.tabs { display:flex; gap:4px; padding:8px 20px 0; background:var(--panel);
       border-bottom: 1px solid var(--line); }
     nav.tabs button { border-radius: 6px 6px 0 0; border-bottom-color: var(--panel); }
     nav.tabs button.active { background: var(--accent-soft); border-color: var(--accent);
       color: var(--accent); font-weight: 600; }
-    main { padding: 18px; overflow: auto; }
+    main { padding:20px; overflow:auto; }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
-    .grid2 { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
-    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-      padding: 14px; margin-bottom: 14px; }
+    .grid2 { display:grid; grid-template-columns:minmax(300px,380px) 1fr; gap:18px; align-items:start; max-width:1440px; margin:0 auto; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+      padding:16px; margin-bottom:16px; box-shadow:var(--shadow); }
     .card h2 { margin: 0 0 10px; font-size: 14px; }
     .field-grid { display: grid; gap: 10px; }
     .row { display: flex; gap: 8px; align-items: center; }
@@ -744,7 +745,7 @@ _OPS_INDEX_HTML = """<!doctype html>
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
     .job-list { display: grid; gap: 6px; max-height: 220px; overflow: auto; margin-bottom: 10px; }
-    .job-item { width: 100%; text-align: left; padding: 8px 10px; display: grid; gap: 2px; }
+    .job-item { width:100%; text-align:left; padding:10px 11px; display:grid; gap:2px; border-color:transparent; }
     .job-item.active { border-color: var(--accent); background: #f0fbf9; }
     .job-id { font-family: monospace; font-size: 12px; }
     .status-badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
@@ -752,15 +753,16 @@ _OPS_INDEX_HTML = """<!doctype html>
     .status-queued, .status-running { background: #e0ecff; color: #1d4ed8; }
     .status-completed { background: #dcf5e6; color: #087443; }
     .status-failed { background: #fde2e1; color: var(--danger); }
-    .approval-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-      padding: 10px 12px; border-radius: 8px; background: var(--warn-bg); margin-bottom: 10px; }
+    .approval-bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+      padding:12px; border-radius:8px; background:var(--warn-bg); margin-bottom:12px; border:1px solid #efd9a6; }
     .approval-bar .grow { flex: 1; min-width: 200px; }
     .approval-command { font-family: monospace; color: var(--danger); overflow-wrap: anywhere; }
     .log { background: #0f172a; color: #d7e2ea; font-family: monospace; font-size: 12px;
       border-radius: 8px; padding: 10px; max-height: 360px; overflow: auto; white-space: pre-wrap; }
     .empty { color: var(--muted); padding: 10px 0; }
     .hidden { display: none !important; }
-    textarea.mono { font-family: monospace; min-height: 60px; }
+    textarea.mono { font-family:monospace; min-height:60px; }
+    @media (max-width:900px) { main { padding:14px; } .grid2 { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>

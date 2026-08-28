@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ class TraceRecorder:
     path: Path | None = None
     capture_model_responses: bool = True
     events: list[dict[str, Any]] = field(default_factory=list)
+    on_event: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False, compare=False)
     _sequence: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -52,6 +54,13 @@ class TraceRecorder:
         event.update(_jsonable(payload))
         self.events.append(event)
         self._sequence += 1
+
+        if self.on_event is not None:
+            try:
+                self.on_event(dict(event))
+            except Exception:
+                # UI observers are best effort and must never affect the run.
+                pass
 
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)

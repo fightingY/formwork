@@ -1389,6 +1389,7 @@ def chat_command(args: argparse.Namespace) -> int:
             settings=settings,
             session=SessionManager(),
             state=state,
+            stream=True,
             memory_store=memory_store,
         )
 
@@ -1684,7 +1685,10 @@ def _build_loop(
         if callable(start_session):
             start_session(state.run_id)
     skill_workspace = state.workspace_host_path if state and state.workspace_host_path else Path.cwd()
-    trace = TraceRecorder(trace_path_for(state)) if state is not None else TraceRecorder()
+    trace = TraceRecorder(
+        trace_path_for(state) if state is not None else None,
+        on_event=state.progress_callback if state is not None else None,
+    )
     if state is not None and state.repository_profile and not state.metrics.get(
         "repository_profile_trace_recorded"
     ):
@@ -1802,6 +1806,7 @@ def _build_loop(
                 stream=False if stream is None else stream,
                 include_usage=True,
                 json_mode=settings.default_route.json_mode,
+                on_text_delta=None,
             ),
             interrupt_after_steps=interrupt_after_steps,
             profile=profile,

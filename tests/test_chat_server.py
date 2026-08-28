@@ -71,6 +71,42 @@ def test_chat_index_renders_single_page_with_sse() -> None:
     assert "EventSource" in html
     assert "steerInput" in html
     assert "approveBtn" in html
+    assert 'id="viewOps"' in html
+    assert 'id="opsView"' in html
+    assert 'src="/ops"' in html
+    assert "task-card" in html
+    assert "addActivity" in html
+    assert "Trace #" not in html
+
+def test_progress_event_projects_trace_to_user_activity() -> None:
+    from minicc.server.chat import progress_event
+
+    assert progress_event(
+        {"event": "sandbox_exec_started", "sequence": 4, "run_id": "run-1"}
+    ) is None
+    assert progress_event({"event": "unknown"}) is None
+
+
+def test_progress_event_prefers_model_progress_over_lifecycle_labels() -> None:
+    from minicc.server.chat import progress_event
+
+    event = progress_event(
+        {
+            "event": "action_parsed",
+            "run_id": "run-2",
+            "action": {
+                "type": "tool_calls",
+                "progress": "我先读取入口和配置，确认请求如何进入执行链。",
+            },
+        }
+    )
+    assert event == {
+        "type": "activity",
+        "label": "我先读取入口和配置，确认请求如何进入执行链。",
+        "event": "agent_progress",
+        "run_id": "run-2",
+    }
+    assert progress_event({"event": "model_response", "run_id": "run-2"}) is None
 
 
 def test_sessions_and_transcript_payloads(tmp_path) -> None:
@@ -87,6 +123,38 @@ def test_sessions_and_transcript_payloads(tmp_path) -> None:
     assert transcript[0]["role"] == "user"
     assert transcript[0]["content"] == "hi"
     assert transcript[0]["seq"] == 1
+
+
+def test_transcript_payload_recovers_public_progress_from_uncommitted_run(tmp_path) -> None:
+    from minicc.server.chat import transcript_payload
+
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create(tmp_path / "project")
+    run_dir = store.session_runs_dir(record.session_id) / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "trace.jsonl").write_text(
+        '{"event":"run_started","run_id":"run-1","goal":"检查秒杀入口","status":"running"}\n'
+        '{"event":"action_parsed","run_id":"run-1","action":{"type":"tool_calls",'
+        '"progress":"我先读取入口和 Lua 脚本，确认库存校验链路。"}}\n',
+        encoding="utf-8",
+    )
+    (run_dir / "state.json").write_text(
+        '{"run_id":"run-1","goal":"检查秒杀入口","status":"running"}',
+        encoding="utf-8",
+    )
+
+    payload = transcript_payload(store, record.session_id)
+    assert payload == [
+        {
+            "seq": 1,
+            "run_id": "run-1",
+            "role": "user",
+            "content": "检查秒杀入口",
+            "activities": ["我先读取入口和 Lua 脚本，确认库存校验链路。"],
+            "run_status": "running",
+            "in_progress": True,
+        }
+    ]
 
 
 def test_safety_guards_reject_path_traversal() -> None:

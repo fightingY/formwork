@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -100,6 +101,9 @@ class RunState:
     # the single source of truth for conversation history (plan §5.1).  Populated
     # by SessionEngine from SessionStore.history_messages before each turn runs.
     session_history: list[dict[str, str]] = field(default_factory=list)
+    # Runtime-only UI hook; never persisted into state.json.
+    text_delta_callback: Callable[[str], None] | None = field(default=None, repr=False, compare=False)
+    progress_callback: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def start(
@@ -132,6 +136,8 @@ class RunState:
         # Conversation history lives only in transcript.jsonl (V5 §5.1); the run's
         # own state.json must not carry a second copy of it.
         data.pop("session_history", None)
+        data.pop("text_delta_callback", None)
+        data.pop("progress_callback", None)
         for key in ["run_dir", "artifacts_dir", "workspace_host_path"]:
             if data[key] is not None:
                 data[key] = str(data[key])

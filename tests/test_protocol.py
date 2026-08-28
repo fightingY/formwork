@@ -18,6 +18,25 @@ def test_parse_bash_action_defaults_timeout() -> None:
     assert action == BashAction(command="pytest -q", timeout_sec=60, purpose="run tests")
 
 
+def test_parse_action_preserves_user_facing_progress_without_exposing_it_as_command() -> None:
+    action = parse_action(
+        '{"type":"bash","command":"pytest -q","purpose":"run tests",'
+        '"progress":"我先跑基线测试，确认后续改动没有引入回归。"}'
+    )
+    assert isinstance(action, BashAction)
+    assert action.progress == "我先跑基线测试，确认后续改动没有引入回归。"
+    assert action_to_dict(action)["progress"] == "我先跑基线测试，确认后续改动没有引入回归。"
+
+
+def test_parse_tool_calls_accepts_progress() -> None:
+    action = parse_action(
+        '{"type":"tool_calls","progress":"我先读取入口文件，确认调用链。",'
+        '"calls":[{"id":"r1","tool":"read","arguments":{"path":"src/app.py"}}]}'
+    )
+    assert action.progress == "我先读取入口文件，确认调用链。"
+    assert action_to_dict(action)["progress"] == "我先读取入口文件，确认调用链。"
+
+
 def test_parse_ask_action() -> None:
     action = parse_action('{"type":"ask","question":"Allow network access?"}')
 

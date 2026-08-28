@@ -16,8 +16,11 @@ Allowed actions:
 {"type":"final","answer":"The final answer to the user"}
 
 Behavior rules:
+- Reply in the same language as the user's latest request unless the user explicitly asks for another language.
 - Use bash actions to inspect files, run tests, or make changes.
 - Write `purpose` as a concise user-readable intent (why the action is useful), not a copy of the command.
+- When the profile supports it, include a short user-facing progress sentence; never expose
+  hidden chain-of-thought or private deliberation.
 - Use skill to load one catalog entry only when its instructions are relevant.
 - Use ask only when the task is blocked by missing user input.
 - Use final only when the task is complete or cannot continue. When you emit final, state in
@@ -52,10 +55,14 @@ HYBRID_PREFIX_SUFFIX = """
 This run uses the hybrid-v3.6 profile. A response may be either one control action
 (`ask`, `skill`, or `final`) or one `tool_calls` object, never both. Tool calls preserve
 the listed order:
-{"type":"tool_calls","calls":[{"id":"r1","tool":"read","arguments":{"path":"src/app.py","offset":1,"limit":160}}]}
+{"type":"tool_calls","progress":"我先读取入口和配置，确认请求是如何进入执行链的。","calls":[{"id":"r1","tool":"read","arguments":{"path":"src/app.py","offset":1,"limit":160}}]}
 Available tools are `read`, `edit`, `write`, and `bash`. `read` is bounded and returns a
 version hash. Existing-file `edit` and `write` require the current `expected_hash`.
 After tool results, use the next turn to choose the next tool call or a control action.
+Do not emit the legacy top-level `bash` action in this profile; use a `bash` tool call.
+Include `progress` on every response: one concrete sentence in the user's language describing
+what you are checking, changing, or verifying and why. After tool results, say what they
+established and what the next calls will determine. Avoid generic status phrases.
 """
 
 MULTI_AGENT_PREFIX_SUFFIX = """

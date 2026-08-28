@@ -16,6 +16,7 @@ class BashAction:
     timeout_sec: int = 60
     purpose: str = ""
     type: Literal["bash"] = "bash"
+    progress: str = ""
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class ToolCall:
 class ToolCallsAction:
     calls: tuple[ToolCall, ...]
     type: Literal["tool_calls"] = "tool_calls"
+    progress: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,12 +60,14 @@ class DelegateAction:
 class AskAction:
     question: str
     type: Literal["ask"] = "ask"
+    progress: str = ""
 
 
 @dataclass(frozen=True)
 class SkillAction:
     name: str
     type: Literal["skill"] = "skill"
+    progress: str = ""
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,7 @@ class FinalAction:
     answer: str
     memory: tuple[MemoryReference, ...] = ()
     type: Literal["final"] = "final"
+    progress: str = ""
 
 
 Action = BashAction | SkillAction | AskAction | FinalAction | ToolCallsAction | DelegateAction
@@ -162,13 +167,16 @@ def _unwrap_model_json(text: str) -> str:
 
 def action_to_dict(action: Action) -> dict[str, Any]:
     if isinstance(action, ToolCallsAction):
-        return {
+        data = {
             "type": "tool_calls",
             "calls": [
                 {"id": call.id, "tool": call.tool, "arguments": dict(call.arguments)}
                 for call in action.calls
             ],
         }
+        if action.progress:
+            data["progress"] = action.progress
+        return data
     if isinstance(action, DelegateAction):
         return {
             "type": "delegate",
@@ -189,6 +197,8 @@ def action_to_dict(action: Action) -> dict[str, Any]:
         }
     data = asdict(action)
     action_type = data.pop("type")
+    if not data.get("progress"):
+        data.pop("progress", None)
     if action_type == "final" and not data.get("memory"):
         data.pop("memory", None)
     elif action_type == "final":
@@ -204,7 +214,7 @@ def _parse_tool_calls(
     max_tool_calls: int,
 ) -> ToolCallsAction:
     calls = payload.get("calls")
-    if set(payload) != {"type", "calls"}:
+    if set(payload) - {"type", "calls", "progress"}:
         raise ProtocolError(
             "tool_calls cannot be mixed with control-action fields.", raw_text=raw_text
         )
@@ -249,7 +259,8 @@ def _parse_tool_calls(
                 if key in normalized and not isinstance(normalized[key], str):
                     raise ProtocolError(f"bash.{key} must be a string when provided.", raw_text=raw_text)
         parsed.append(ToolCall(id=call_id, tool=tool, arguments=normalized))
-    return ToolCallsAction(calls=tuple(parsed))
+    progress = _parse_progress(payload, raw_text)
+    return ToolCallsAction(calls=tuple(parsed), progress=progress)
 
 
 def _parse_delegate(payload: dict[str, Any], raw_text: str) -> DelegateAction:
@@ -401,14 +412,14 @@ def _parse_bash(
     if not isinstance(purpose, str):
         raise ProtocolError("bash.purpose must be a string when provided.", raw_text=raw_text)
 
-    return BashAction(command=command.strip(), timeout_sec=timeout_sec, purpose=purpose.strip())
+    return BashAction(command=command.strip(), timeout_sec=timeout_sec, purpose=purpose.strip(), progress=_parse_progress(payload, raw_text))
 
 
 def _parse_ask(payload: dict[str, Any], raw_text: str) -> AskAction:
     question = payload.get("question")
     if not isinstance(question, str) or not question.strip():
         raise ProtocolError("ask.question must be a non-empty string.", raw_text=raw_text)
-    return AskAction(question=question.strip())
+    return AskAction(question=question.strip(), progress=_parse_progress(payload, raw_text))
 
 
 def _parse_skill(payload: dict[str, Any], raw_text: str) -> SkillAction:
@@ -418,7 +429,7 @@ def _parse_skill(payload: dict[str, Any], raw_text: str) -> SkillAction:
     normalized = name.strip().lower()
     if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", normalized) is None:
         raise ProtocolError("skill.name is not a valid catalog name.", raw_text=raw_text)
-    return SkillAction(name=normalized)
+    return SkillAction(name=normalized, progress=_parse_progress(payload, raw_text))
 
 
 def _parse_final(payload: dict[str, Any], raw_text: str) -> FinalAction:
@@ -431,7 +442,19 @@ def _parse_final(payload: dict[str, Any], raw_text: str) -> FinalAction:
     if len(raw_memory) > 8:
         raise ProtocolError("final.memory supports at most 8 references.", raw_text=raw_text)
     memory = tuple(_parse_memory_reference(item, raw_text) for item in raw_memory)
-    return FinalAction(answer=answer.strip(), memory=memory)
+    return FinalAction(answer=answer.strip(), memory=memory, progress=_parse_progress(payload, raw_text))
+
+
+def _parse_progress(payload: dict[str, Any], raw_text: str) -> str:
+    progress = payload.get("progress", "")
+    if progress is None:
+        return ""
+    if not isinstance(progress, str):
+        raise ProtocolError("progress must be a string when provided.", raw_text=raw_text)
+    progress = progress.strip()
+    if len(progress) > 600:
+        raise ProtocolError("progress must be at most 600 characters.", raw_text=raw_text)
+    return progress
 
 
 def _parse_memory_reference(value: Any, raw_text: str) -> MemoryReference:
