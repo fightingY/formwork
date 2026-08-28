@@ -43,7 +43,7 @@ from minicc.core.provider import (
     ProviderRegistry,
 )
 from minicc.core.retry import RetryingTurnProvider
-from minicc.core.run_catalog import RunCatalog, index_acceptance_history
+from minicc.core.run_catalog import RunCatalog
 from minicc.core.runner import ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.session_engine import SessionEngine
@@ -666,10 +666,6 @@ def build_parser() -> argparse.ArgumentParser:
     guidance_report_parser.add_argument("--release-gate", action="store_true")
     guidance_report_parser.set_defaults(handler=guidance_report_command)
 
-    web_parser = subparsers.add_parser("web", help="Serve a read-only trace viewer.")
-    web_parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
-    web_parser.add_argument("--port", type=int, default=8765, help="Port to bind.")
-    web_parser.set_defaults(handler=web_command)
     # --- V5 experimental: conversation sessions (docs/V5_0_SESSION_CHAT_REMODEL_PLAN.md) ---
     session_parser = subparsers.add_parser(
         "session", help="Manage conversation sessions (V5, experimental)."
@@ -704,20 +700,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Session id to continue; defaults to the current (switched) session, else a new one.",
     )
-    chat_parser.add_argument(
-        "--port",
-        type=int,
-        default=None,
-        help="Serve the web chat UI on this port instead of the terminal REPL.",
-    )
     chat_parser.set_defaults(handler=chat_command)
-
-    web_ops_parser = subparsers.add_parser(
-        "web-ops", help="Serve the web ops console for run/eval/replay/models (experimental)."
-    )
-    web_ops_parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
-    web_ops_parser.add_argument("--port", type=int, default=8766, help="Port to bind.")
-    web_ops_parser.set_defaults(handler=web_ops_command)
     return parser
 
 
@@ -1389,25 +1372,6 @@ def chat_command(args: argparse.Namespace) -> int:
             stream=True,
             memory_store=memory_store,
         )
-
-    if args.port is not None:
-        from minicc.server.chat import serve_chat
-
-        print(f"Serving chat for session {session_id} (project: {project_root})")
-
-        def engine_factory() -> SessionEngine:
-            # Deferred mode: no on_approval callback, so a gated destructive
-            # command pauses the turn as waiting_approval and the web UI
-            # resolves it through the approve/deny endpoints.
-            return SessionEngine(
-                store,
-                loop_factory=loop_factory,
-                executor=executor,
-                on_turn_end=memory_hook,
-            )
-
-        serve_chat(store=store, engine_factory=engine_factory, port=args.port)
-        return 0
 
     def on_approval(state: RunState) -> str:
         command = state.pending_action.command if state.pending_action else ""
@@ -3156,32 +3120,6 @@ def traces_command(args: argparse.Namespace) -> int:
                 print(f"  metrics: {metrics_path}")
     if not found:
         print(f"No trace files found under {runs_root}.")
-    return 0
-
-
-def web_command(args: argparse.Namespace) -> int:
-    from minicc.server.app import serve_trace_viewer
-
-    settings = load_settings()
-    project_root = Path.cwd()
-    versions_root = project_root / ".minicc" / "versions"
-    catalog = RunCatalog(versions_root)
-    index_acceptance_history(project_root, catalog)
-    catalog.ensure_version(settings.project.milestone)
-    serve_trace_viewer(
-        runs_root=project_root / ".minicc" / "runs",
-        versions_root=versions_root,
-        current_milestone=settings.project.milestone,
-        host=args.host,
-        port=args.port,
-    )
-    return 0
-
-
-def web_ops_command(args: argparse.Namespace) -> int:
-    from minicc.server.ops import serve_ops
-
-    serve_ops(host=args.host, port=args.port)
     return 0
 
 
