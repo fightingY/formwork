@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from minicc.core.ledger import write_artifact_index
+from minicc.core.protocol import PROTOCOL_SCHEMA_VERSION
 from minicc.evals.memory_ab import MemoryABResult, write_memory_ab_report
 from minicc.evals.memory_acceptance import (
     REQUIRED_MEMORY_CASES,
@@ -231,7 +232,7 @@ def _run_evidence(
     files["agent_report"].write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": PROTOCOL_SCHEMA_VERSION,
                 "run_id": run_id,
                 "status": "completed",
                 "task_success": True,
@@ -245,7 +246,7 @@ def _run_evidence(
     files["run_report"].write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": PROTOCOL_SCHEMA_VERSION,
                 "run_id": run_id,
                 "suite_id": suite_id,
                 "stage": "formal_acceptance",

@@ -8,6 +8,7 @@ from minicc.core.provider import (
     LlmFailure,
     ModelResponse,
     ModelUsage,
+    NativeToolCall,
     ProviderError,
     RetryPolicy,
 )
@@ -19,10 +20,11 @@ from minicc.trace.recorder import TraceRecorder
 
 def _ok_response() -> ModelResponse:
     return ModelResponse(
-        text='{"type":"final","answer":"done"}',
+        text="",
         raw={},
         usage=ModelUsage(prompt_tokens=1),
         latency_ms=1,
+        tool_calls=(NativeToolCall(id="f1", name="final", arguments='{"answer":"done"}'),),
     )
 
 
@@ -69,7 +71,7 @@ def test_retries_transient_then_succeeds() -> None:
         state, [{"role": "user", "content": "hi"}]
     )
 
-    assert turn.action is not None
+    assert len(turn.actions) == 1
     assert provider.calls == 3
     assert state.metrics["provider_request_attempts"] == 3
     assert state.metrics["provider_retried_requests"] == 1
@@ -113,7 +115,7 @@ def test_always_mode_retries_past_cap() -> None:
         RetryPolicy(mode="always", max_retries=1),
     ).next_turn(state, [])
 
-    assert turn.action is not None
+    assert len(turn.actions) == 1
     assert provider.calls == 6
     assert state.metrics["provider_request_attempts"] == 6
     assert state.metrics["provider_retried_requests"] == 1

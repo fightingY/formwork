@@ -71,12 +71,26 @@ class ModelUsage:
 
 
 @dataclass(frozen=True)
+class NativeToolCall:
+    """One native ``message.tool_calls[i]`` entry, arguments kept as raw JSON text.
+
+    Parsing ``arguments`` into a dict is the adapter layer's job (``core.protocol``),
+    not the provider's — the provider only reports what the upstream API returned.
+    """
+
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
 class ModelResponse:
     text: str
     raw: dict[str, Any]
     usage: ModelUsage
     latency_ms: int
     finish_reason: str | None = None
+    tool_calls: tuple[NativeToolCall, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -86,6 +100,12 @@ class CompletionOptions:
     include_usage: bool = True
     json_mode: bool = True
     max_tokens: int | None = None
+    # Native OpenAI-style function calling. The agent loop sets ``tools`` (never
+    # ``json_mode``); memory/meta subsystems set ``json_mode`` (never ``tools``) for
+    # their own independent structured-output completions. Both flow through the
+    # same provider/payload construction without conflicting.
+    tools: tuple[dict[str, Any], ...] | None = None
+    tool_choice: str = "required"
     # Optional UI hook. The provider still returns one complete response for
     # protocol parsing; callers may use deltas for progressive display.
     on_text_delta: Callable[[str], None] | None = None
@@ -338,6 +358,9 @@ class OpenAICompatibleProvider:
             # Prefer the provider's native structured-output mode. Local
             # protocol validation still handles truncated responses.
             payload["response_format"] = {"type": "json_object"}
+        if options.tools:
+            payload["tools"] = list(options.tools)
+            payload["tool_choice"] = options.tool_choice
 
         started = time.perf_counter()
         try:
@@ -360,7 +383,8 @@ class OpenAICompatibleProvider:
             else:
                 raise
 
-        if not text.strip():
+        tool_calls = extract_tool_calls(raw)
+        if not text.strip() and not tool_calls:
             raise ProviderError(
                 failure=LlmFailure(
                     message="Provider returned an empty completion",
@@ -375,6 +399,7 @@ class OpenAICompatibleProvider:
             usage=parse_model_usage(usage_raw),
             latency_ms=latency_ms,
             finish_reason=extract_finish_reason(raw),
+            tool_calls=tool_calls,
         )
 
     def _request_once(
@@ -462,6 +487,7 @@ class OpenAICompatibleProvider:
     ) -> tuple[dict[str, Any], str, Mapping[str, Any] | None]:
         chunks: list[dict[str, Any]] = []
         content_parts: list[str] = []
+        tool_call_acc: dict[int, dict[str, Any]] = {}
         usage_raw: Mapping[str, Any] | None = None
         timed_out = False
         client = self._request_client()
@@ -473,6 +499,17 @@ class OpenAICompatibleProvider:
 
         watchdog = threading.Timer(self.stream_idle_timeout_sec, close_client)
         watchdog.daemon = True
+
+        def rearm_watchdog() -> None:
+            # Idle timeout: every received chunk re-arms the watchdog. Only true
+            # silence (no new token/chunk for stream_idle_timeout_sec) trips it —
+            # a healthy stream that keeps emitting tokens is never killed, however
+            # long the total generation takes.
+            nonlocal watchdog
+            watchdog.cancel()
+            watchdog = threading.Timer(self.stream_idle_timeout_sec, close_client)
+            watchdog.daemon = True
+            watchdog.start()
 
         try:
             watchdog.start()
@@ -486,6 +523,7 @@ class OpenAICompatibleProvider:
                 for line in response.iter_lines():
                     if not line:
                         continue
+                    rearm_watchdog()
                     if not line.startswith("data:"):
                         continue
                     data = line.removeprefix("data:").strip()
@@ -505,6 +543,7 @@ class OpenAICompatibleProvider:
                             content_parts.append(text_piece)
                             if on_text_delta is not None:
                                 on_text_delta(text_piece)
+                        _accumulate_tool_call_delta(tool_call_acc, delta.get("tool_calls"))
             if timed_out:
                 raise ProviderError(
                     failure=LlmFailure(
@@ -540,7 +579,11 @@ class OpenAICompatibleProvider:
             if timed_out:
                 self._discard_client(client)
 
-        return {"chunks": chunks, "usage": usage_raw}, "".join(content_parts), usage_raw
+        streamed_tool_calls = _finalize_tool_call_deltas(tool_call_acc)
+        raw: dict[str, Any] = {"chunks": chunks, "usage": usage_raw}
+        if streamed_tool_calls:
+            raw["tool_calls"] = streamed_tool_calls
+        return raw, "".join(content_parts), usage_raw
 
 
 def _body_preview(body: str, limit: int = 500) -> str:
@@ -696,6 +739,77 @@ def extract_chat_text(raw: Mapping[str, Any]) -> str:
             return ""
         return str(content)
     return ""
+
+
+def extract_tool_calls(raw: Mapping[str, Any]) -> tuple[NativeToolCall, ...]:
+    """Read native tool calls from a non-streaming response or an accumulated stream.
+
+    Non-streaming responses carry them at ``choices[0].message.tool_calls``; the
+    streaming leg (``_complete_stream``) accumulates incremental deltas itself and
+    stores the finished list at the top-level ``raw["tool_calls"]`` key instead.
+    """
+    streamed = raw.get("tool_calls")
+    if isinstance(streamed, list):
+        return tuple(_tool_call_from_mapping(item) for item in streamed if isinstance(item, Mapping))
+
+    choices = raw.get("choices") or []
+    if not choices or not isinstance(choices[0], Mapping):
+        return ()
+    message = choices[0].get("message") or {}
+    if not isinstance(message, Mapping):
+        return ()
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return ()
+    return tuple(_tool_call_from_mapping(item) for item in calls if isinstance(item, Mapping))
+
+
+def _tool_call_from_mapping(item: Mapping[str, Any]) -> NativeToolCall:
+    function = item.get("function") or {}
+    return NativeToolCall(
+        id=str(item.get("id") or ""),
+        name=str(function.get("name") or "") if isinstance(function, Mapping) else "",
+        arguments=str(function.get("arguments") or "") if isinstance(function, Mapping) else "",
+    )
+
+
+def _accumulate_tool_call_delta(
+    acc: dict[int, dict[str, Any]],
+    deltas: Any,
+) -> None:
+    """Merge one streamed ``delta.tool_calls`` fragment list into the running accumulator.
+
+    OpenAI streams tool_calls incrementally: the first chunk for a call carries
+    ``index``/``id``/``function.name``; every chunk (including the first) carries a
+    fragment of ``function.arguments`` that must be concatenated in order.
+    """
+    if not isinstance(deltas, list):
+        return
+    for delta in deltas:
+        if not isinstance(delta, Mapping):
+            continue
+        index = delta.get("index")
+        if not isinstance(index, int):
+            continue
+        entry = acc.setdefault(index, {"id": "", "name": "", "arguments": ""})
+        call_id = delta.get("id")
+        if call_id:
+            entry["id"] = str(call_id)
+        function = delta.get("function")
+        if isinstance(function, Mapping):
+            name = function.get("name")
+            if name:
+                entry["name"] = str(name)
+            arguments = function.get("arguments")
+            if arguments:
+                entry["arguments"] += str(arguments)
+
+
+def _finalize_tool_call_deltas(acc: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"id": entry["id"], "function": {"name": entry["name"], "arguments": entry["arguments"]}}
+        for _, entry in sorted(acc.items())
+    ]
 
 
 def extract_finish_reason(raw: Mapping[str, Any]) -> str | None:

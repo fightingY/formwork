@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from math import gcd
 from typing import Any
 
-from minicc.core.protocol import Action, ProtocolError, parse_action
+from minicc.core.protocol import Action, ProtocolError, parse_tool_call
 from minicc.core.provider import CompletionOptions, ModelProvider, ModelUsage
 from minicc.core.state import Observation, RunState
 from minicc.trace.recorder import TraceRecorder
@@ -13,7 +14,6 @@ from minicc.trace.recorder import TraceRecorder
 
 @dataclass(frozen=True)
 class ModelTurnConfig:
-    max_protocol_errors: int = 2
     max_action_timeout_sec: int = 120
     model_options: CompletionOptions = CompletionOptions()
     max_tool_calls_per_step: int = 16
@@ -21,7 +21,7 @@ class ModelTurnConfig:
 
 @dataclass
 class ModelTurn:
-    action: Action | None
+    actions: tuple[Action, ...] = ()
     observation: Observation | None = None
     should_continue: bool = True
 
@@ -39,7 +39,6 @@ class ModelTurnRunner:
             getattr(provider, "provider_name", type(provider).__name__)
         )
         self.config = config or ModelTurnConfig()
-        self.protocol_errors = 0
         self.trace = trace
 
     def next_turn(
@@ -73,52 +72,49 @@ class ModelTurnRunner:
                 response.usage,
                 attempt_count=attempt_count,
                 retry_reasons=retry_reasons,
+                tool_calls=response.tool_calls,
             )
 
-        try:
-            action = parse_action(
-                response.text,
-                max_timeout_sec=self.config.max_action_timeout_sec,
-                max_tool_calls=self.config.max_tool_calls_per_step,
+        if not response.tool_calls:
+            # tool_choice="required" 下 provider 仍未产出 tool_call 违反了 provider 契约
+            # （不是模型可恢复的场景，理论上不该发生）——直接终止 run。旧协议的
+            # "协议错误重试预算"是为文本 JSON 解析失败设计的，原生模式下没有对应场景。
+            state.status = "failed"
+            state.state_summary = (
+                "Run failed because the provider returned no tool_calls despite tool_choice=required."
             )
-            self.protocol_errors = 0
+            observation = Observation(kind="command_error", message=state.state_summary)
             if self.trace is not None:
-                self.trace.action_parsed(state, action)
-            return ModelTurn(action=action)
-        except ProtocolError as exc:
-            if getattr(response, "finish_reason", None) == "length":
-                state.status = "failed"
-                state.state_summary = (
-                    "Run failed because the provider truncated the model response at its "
-                    "output limit (finish_reason=length)."
+                self.trace.observation_created(state, observation)
+            return ModelTurn(actions=(), observation=observation, should_continue=False)
+
+        actions: list[Action] = []
+        for tool_call in response.tool_calls:
+            try:
+                arguments = json.loads(tool_call.arguments) if tool_call.arguments else {}
+                if not isinstance(arguments, dict):
+                    raise ValueError("tool_call.arguments must decode to a JSON object")
+                action = parse_tool_call(
+                    tool_call.id,
+                    tool_call.name,
+                    arguments,
+                    max_timeout_sec=self.config.max_action_timeout_sec,
                 )
+            except (ValueError, ProtocolError) as exc:
+                # 单个 tool_call 参数损坏是运行期可恢复错误（provider 吐出的
+                # function.arguments 不是合法 JSON，或参数校验失败），不终止 run：
+                # 构造合成 observation 反馈给模型，让它在下一轮纠正。
                 observation = Observation(
                     kind="protocol_error",
-                    message=exc.message,
-                    stderr_preview=exc.raw_text[:4000],
+                    message=f"tool_call {tool_call.id} ({tool_call.name}) rejected: {exc}",
                 )
                 if self.trace is not None:
                     self.trace.observation_created(state, observation)
-                return ModelTurn(action=None, observation=observation, should_continue=False)
-            self.protocol_errors += 1
-            state.metrics["protocol_errors"] += 1
-            observation = Observation(
-                kind="protocol_error",
-                message=exc.message,
-                stderr_preview=exc.raw_text[:4000],
-            )
+                return ModelTurn(actions=(), observation=observation)
+            actions.append(action)
             if self.trace is not None:
-                self.trace.action_parsed(state, None)
-                self.trace.observation_created(state, observation)
-            if self.protocol_errors > self.config.max_protocol_errors:
-                state.status = "failed"
-                state.state_summary = "Run failed because the model repeatedly violated the action protocol."
-                return ModelTurn(
-                    action=None,
-                    observation=observation,
-                    should_continue=False,
-                )
-            return ModelTurn(action=None, observation=observation)
+                self.trace.action_parsed(state, action)
+        return ModelTurn(actions=tuple(actions))
 
 
 def _accumulate_usage(

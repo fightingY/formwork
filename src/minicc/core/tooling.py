@@ -12,9 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from minicc.core.protocol import BashAction, ToolCall, ToolCallsAction
+from minicc.core.protocol import ToolCall, bash_action_from_tool_call
 from minicc.core.state import Observation, RunState
-from minicc.runtime import AgentRuntime
 
 ExecutionMode = Literal["parallel", "exclusive"]
 
@@ -184,31 +183,21 @@ class ToolInputError(ValueError):
 
 
 class HybridToolRunner:
-    def __init__(self, bash_executor: Any, fs: FileSystemCapability | None = None, runtime: AgentRuntime | None = None) -> None:
+    def __init__(self, bash_executor: Any, fs: FileSystemCapability | None = None) -> None:
         self.bash_executor = bash_executor
         self.fs = fs or FileSystemCapability()
         self.action_handler: Any | None = None
-        self.runtime = runtime
 
     def execution_mode(self, call: ToolCall) -> ExecutionMode:
         return "parallel" if call.tool == "read" else "exclusive"
 
     def run(self, call: ToolCall, state: RunState) -> ToolResult:
         mode: ExecutionMode = "parallel" if call.tool == "read" else "exclusive"
-        if self.runtime is not None:
-            decision = self.runtime.authorize(call, run_id=state.run_id, task_id=state.run_id)
-            if not decision.allowed:
-                return _error(call, 0, mode, decision.code, decision.reason)
         if call.tool in {"read", "edit", "write"}:
             result = self.fs.run(call, state)
             return ToolResult(result.call_id, result.tool, result.model_order, mode, result.content, result.is_error)
         if call.tool == "bash":
-            args = dict(call.arguments)
-            action = BashAction(
-                command=str(args.get("command", "")),
-                timeout_sec=int(args.get("timeout_sec", 60)),
-                purpose=str(args.get("description", args.get("purpose", "")) or ""),
-            )
+            action = bash_action_from_tool_call(call)
             if self.action_handler is not None:
                 outcome = self.action_handler.handle(action, state)
                 if state.status == "waiting_approval":
@@ -234,7 +223,21 @@ class HybridToolRunner:
                 "kind": observation.kind,
                 "message": observation.message,
             }
-            return ToolResult(call.id, call.tool, 0, mode, content, observation.kind not in {"command_result", "no_output"})
+            if observation.kind == "timeout":
+                # Recoverable partial output: the command was killed but produced
+                # real output before that happened. is_error=False, with a trailing
+                # notice appended so the model knows execution didn't complete
+                # normally. Contrast with pure RPC/middleware tools that have no
+                # partial business data on timeout (none exist yet in this tool
+                # set) — those should stay is_error=True.
+                content["timeout_notice"] = (
+                    f"Command timed out after {observation.duration_ms}ms; "
+                    "output above is whatever was produced before it was stopped."
+                )
+                is_error = False
+            else:
+                is_error = observation.kind not in {"command_result", "no_output"}
+            return ToolResult(call.id, call.tool, 0, mode, content, is_error)
         return _error(call, 0, mode, "UNKNOWN_TOOL", f"Unknown tool: {call.tool}")
 
 
@@ -245,19 +248,19 @@ class ToolCallScheduler:
         self.runner = runner
         self.max_parallel_tool_calls = max_parallel_tool_calls
 
-    def dispatch(self, action: ToolCallsAction, state: RunState) -> list[ToolResult]:
+    def dispatch(self, calls: tuple[ToolCall, ...], state: RunState) -> list[ToolResult]:
         results: list[ToolResult] = []
         index = 0
-        while index < len(action.calls):
-            call = action.calls[index]
+        while index < len(calls):
+            call = calls[index]
             mode = self._execution_mode(call)
             if mode == "exclusive":
                 result = self._run_one(call, state)
                 results.append(_with_order(result, index, mode))
                 index += 1
                 if state.status in {"waiting_approval", "failed", "interrupted"}:
-                    for aborted_index in range(index, len(action.calls)):
-                        aborted = action.calls[aborted_index]
+                    for aborted_index in range(index, len(calls)):
+                        aborted = calls[aborted_index]
                         results.append(
                             ToolResult(
                                 aborted.id,
@@ -274,9 +277,9 @@ class ToolCallScheduler:
                     break
                 continue
             end = index
-            while end < len(action.calls) and self._execution_mode(action.calls[end]) == "parallel":
+            while end < len(calls) and self._execution_mode(calls[end]) == "parallel":
                 end += 1
-            group = list(action.calls[index:end])
+            group = list(calls[index:end])
             results.extend(self._run_parallel_group(group, state, start_index=index))
             index = end
         return results

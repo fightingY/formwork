@@ -18,9 +18,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from minicc.core.protocol import action_to_dict, parse_action
+from minicc.core.protocol import (
+    PROTOCOL_SCHEMA_VERSION,
+    ProtocolError,
+    action_to_dict,
+    parse_tool_call,
+)
 
-REPLAY_SCHEMA_VERSION = 1
+REPLAY_SCHEMA_VERSION = PROTOCOL_SCHEMA_VERSION
 
 
 class ReplayError(ValueError):
@@ -115,7 +120,6 @@ def create_replay_case(
         "source_run_id": run_id,
         "source_run_dir": str(source),
         "goal": str(state.get("goal") or ""),
-        "profile": str((state.get("metrics") or {}).get("profile") or "baseline-bash"),
         "action_defaults": {
             "timeout_sec": int((state.get("metrics") or {}).get("max_action_timeout_sec") or 60),
             "max_tool_calls": int((state.get("metrics") or {}).get("max_tool_calls_per_step") or 16),
@@ -188,7 +192,6 @@ def create_replay_case_from_eval_case(
         "source_kind": "eval_case",
         "source_eval_case": str(source),
         "goal": eval_case.prompt,
-        "profile": "baseline-bash",
         "source_status": "not_run",
         "workspace_mode": "copy",
         "fresh_eligible": True,
@@ -275,11 +278,12 @@ def run_deterministic_replay(
         failures.append("one or more model responses are preview-only")
 
     parsed_actions = [event for event in events if event.get("event") == "action_parsed"]
-    parse_coverage = len(parsed_actions) == len(responses)
+    total_recorded_tool_calls = sum(len(event.get("tool_calls") or []) for event in responses)
+    parse_coverage = len(parsed_actions) == total_recorded_tool_calls
     checks["action_parse_coverage"] = _check(
         parse_coverage,
-        observed={"responses": len(responses), "action_parsed": len(parsed_actions)},
-        detail="every model response has a recorded protocol parse result",
+        observed={"tool_calls": total_recorded_tool_calls, "action_parsed": len(parsed_actions)},
+        detail="every recorded native tool_call has a recorded protocol parse result",
     )
     if not parse_coverage:
         failures.append("model response/action parse coverage is incomplete")
@@ -291,43 +295,47 @@ def run_deterministic_replay(
         if event.get("event") != "model_response":
             continue
         response_index += 1
-        response_text = event.get("response_text")
-        if not isinstance(response_text, str):
-            protocol_replay_ok = False
-            continue
-        try:
-            defaults = manifest.get("action_defaults") or {}
-            replayed_action = action_to_dict(
-                parse_action(
-                    response_text,
-                    default_timeout_sec=int(defaults.get("timeout_sec") or 60),
-                    max_tool_calls=int(defaults.get("max_tool_calls") or 16),
+        recorded_tool_calls = event.get("tool_calls") or []
+        defaults = manifest.get("action_defaults") or {}
+        replayed_actions_accum: list[dict[str, Any]] = []
+        replay_failed = False
+        for tool_call in recorded_tool_calls:
+            try:
+                arguments = json.loads(tool_call.get("arguments") or "{}")
+                if not isinstance(arguments, dict):
+                    raise ValueError("tool_call arguments must decode to a JSON object")
+                replayed_actions_accum.append(
+                    action_to_dict(
+                        parse_tool_call(
+                            str(tool_call.get("id") or ""),
+                            str(tool_call.get("name") or ""),
+                            arguments,
+                            default_timeout_sec=int(defaults.get("timeout_sec") or 60),
+                        )
+                    )
                 )
-            )
-        except (TypeError, ValueError):
-            replayed_action = None
-        parsed_event = next(
-            (
-                candidate
-                for candidate in events[event_index + 1 :]
-                if candidate.get("event") == "action_parsed"
-            ),
-            None,
-        )
-        recorded_action = parsed_event.get("action") if parsed_event else None
-        if replayed_action != recorded_action:
+            except (TypeError, ValueError, ProtocolError):
+                replay_failed = True
+                break
+        replayed_actions: list[dict[str, Any]] | None = None if replay_failed else replayed_actions_accum
+        recorded_actions = [
+            candidate.get("action")
+            for candidate in events[event_index + 1 :]
+            if candidate.get("event") == "action_parsed"
+        ][: len(recorded_tool_calls)]
+        if replayed_actions != recorded_actions:
             protocol_replay_ok = False
             protocol_mismatches.append(
                 {
                     "response_index": response_index,
-                    "replayed": replayed_action,
-                    "recorded": recorded_action,
+                    "replayed": replayed_actions,
+                    "recorded": recorded_actions,
                 }
             )
     checks["protocol_replay"] = _check(
         protocol_replay_ok,
         observed={"responses": len(responses), "mismatches": protocol_mismatches},
-        detail="recorded model responses parse to the recorded actions",
+        detail="recorded native tool_calls parse to the recorded actions",
     )
     if not protocol_replay_ok:
         failures.append("recorded model response does not reproduce its parsed action")

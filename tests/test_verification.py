@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from minicc.core.loop import AgentLoop
 from minicc.core.protocol import BashAction, FinalAction
-from minicc.core.provider import ModelResponse, ModelUsage
+from minicc.core.provider import ModelResponse, ModelUsage, NativeToolCall
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState
 from minicc.core.verification import CommandCompletionVerifier, VerificationResult
@@ -12,14 +13,18 @@ from minicc.core.verification import CommandCompletionVerifier, VerificationResu
 
 @dataclass
 class FinalProvider:
-    responses: list[str]
+    answers: list[str]
 
     def complete(self, messages, *, options=None):
+        answer = self.answers.pop(0)
         return ModelResponse(
-            text=self.responses.pop(0),
+            text="",
             raw={},
             usage=ModelUsage(prompt_tokens=5, completion_tokens=2),
             latency_ms=1,
+            tool_calls=(
+                NativeToolCall(id="f1", name="final", arguments=json.dumps({"answer": answer})),
+            ),
         )
 
 
@@ -54,12 +59,7 @@ def test_loop_rejects_final_and_returns_verification_failure_to_model(tmp_path) 
             return VerificationResult(True, reason="verified")
 
     verifier = RejectOnceVerifier()
-    provider = FinalProvider(
-        [
-            '{"type":"final","answer":"done too early"}',
-            '{"type":"final","answer":"fixed and verified"}',
-        ]
-    )
+    provider = FinalProvider(["done too early", "fixed and verified"])
     state = RunState.start("Fix the task")
 
     result = AgentLoop(
@@ -88,12 +88,7 @@ def test_command_verifier_runs_through_handler_execution_boundary(tmp_path) -> N
             Observation(kind="command_result", exit_code=0, stdout_preview="passed"),
         ]
     )
-    provider = FinalProvider(
-        [
-            '{"type":"final","answer":"first"}',
-            '{"type":"final","answer":"second"}',
-        ]
-    )
+    provider = FinalProvider(["first", "second"])
     state = RunState.start("Verify before completion")
 
     result = AgentLoop(

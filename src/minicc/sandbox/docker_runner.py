@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from minicc.core.protocol import BashAction
+from minicc.core.protocol import BashAction, CodeModeAction
 from minicc.core.state import Observation, RunState
 from minicc.sandbox.artifact_store import ArtifactStore
+from minicc.sandbox.code_mode import CodeModeResult, inject_facade, run_code_mode_script
 from minicc.sandbox.observation import CommandResult, observation_from_command_result
 
 
@@ -118,6 +122,13 @@ class DockerSandboxRunner:
             except Exception:
                 pass
             raise
+        try:
+            inject_facade(container_name)
+        except Exception:
+            # code_mode degrades to unavailable (ActionHandler reports a
+            # recoverable error) if the facade can't be written; the rest of
+            # the run (read/edit/write/bash) is unaffected.
+            pass
         return container_name
 
     def exec(self, *, container_name: str, action: BashAction) -> CommandResult:
@@ -180,27 +191,36 @@ class DockerCommandExecutor:
         artifacts: ArtifactStore,
         artifact_threshold_bytes: int = 50_000,
         preview_chars: int = 12_000,
+        restart_params: dict[str, object] | None = None,
     ) -> None:
         self.runner = runner
         self.artifacts = artifacts
         self.artifact_threshold_bytes = artifact_threshold_bytes
         self.preview_chars = preview_chars
+        # Lazy-restart params (run_id/workspace_dir/artifacts_dir/writable_paths) captured
+        # at construction time from the same values used by the original runner.start()
+        # call. A command timeout no longer hard-fails the run — the container is torn
+        # down and this dict lets the *next* bash call transparently start a fresh one.
+        self.restart_params = restart_params
 
     def run(self, action: BashAction, state: RunState) -> Observation:
         if not state.container_name:
-            return Observation(
-                kind="command_error",
-                message="Docker container is not started for this run.",
-                stderr_preview=action.command,
-            )
+            if self.restart_params is None:
+                return Observation(
+                    kind="command_error",
+                    message="Docker container is not started for this run.",
+                    stderr_preview=action.command,
+                )
+            state.container_name = self.runner.start(**self.restart_params)  # type: ignore[arg-type]
 
         result = self.runner.exec(container_name=state.container_name, action=action)
         if result.timed_out:
+            # Non-terminal: the container was torn down by runner.exec()'s own cleanup()
+            # on timeout, but the run keeps going. is_error normalization for this
+            # observation (partial output + timeout notice, is_error=False) happens
+            # downstream in core/tooling.py. The next bash call lazily restarts the
+            # container above.
             state.container_name = None
-            state.status = "failed"
-            state.state_summary = (
-                "Run failed because the Docker sandbox was terminated after a command timeout."
-            )
         return observation_from_command_result(
             result,
             state=state,
@@ -208,6 +228,66 @@ class DockerCommandExecutor:
             artifact_threshold_bytes=self.artifact_threshold_bytes,
             preview_chars=self.preview_chars,
         )
+
+    def run_code_mode(
+        self,
+        action: CodeModeAction,
+        state: RunState,
+        *,
+        timeout_sec: int,
+        dispatch: Callable[[str, dict[str, Any]], dict[str, Any]],
+    ) -> Observation:
+        """Run a Code Mode script via ``sandbox.code_mode``, reusing the same
+        lazy-restart contract as ``run()`` — a script-level timeout tears the
+        container down (handled inside ``run_code_mode_script``'s watchdog kill)
+        and the next bash/code_mode call restarts it, same as a bash timeout."""
+        if not state.container_name:
+            if self.restart_params is None:
+                return Observation(kind="command_error", message="Docker container is not started for this run.")
+            state.container_name = self.runner.start(**self.restart_params)  # type: ignore[arg-type]
+
+        result = run_code_mode_script(
+            container_name=state.container_name,
+            script=action.script,
+            timeout_sec=timeout_sec,
+            dispatch=dispatch,
+        )
+        if result.timed_out:
+            self.runner.cleanup(state.container_name)
+            state.container_name = None
+        return _observation_from_code_mode_result(result)
+
+
+def _observation_from_code_mode_result(result: CodeModeResult) -> Observation:
+    payload = {
+        "script_exit_code": result.script_exit_code,
+        "script_stdout": result.script_stdout,
+        "tool_calls_made": list(result.tool_calls_made),
+    }
+    if result.timed_out:
+        payload["timeout_notice"] = (
+            "Script timed out; output above is whatever tool calls and stdout were "
+            "produced before it was stopped."
+        )
+        return Observation(
+            kind="timeout",
+            stdout_preview=json.dumps(payload, ensure_ascii=False),
+            message="Code Mode script timed out.",
+        )
+    if result.is_error:
+        payload["traceback"] = result.traceback_text
+        return Observation(
+            kind="command_error",
+            exit_code=result.script_exit_code,
+            stdout_preview=json.dumps(payload, ensure_ascii=False),
+            message=f"Code Mode script failed with exit code {result.script_exit_code}.",
+        )
+    return Observation(
+        kind="command_result",
+        exit_code=0,
+        stdout_preview=json.dumps(payload, ensure_ascii=False),
+        message="Code Mode script exited successfully.",
+    )
 
 
 def _decode_timeout_output(value: str | bytes | None) -> str:

@@ -11,6 +11,7 @@ from minicc.core.provider import (
     LlmFailure,
     ModelResponse,
     ModelUsage,
+    NativeToolCall,
     ProviderError,
     RetryPolicy,
 )
@@ -21,10 +22,11 @@ from minicc.trace.recorder import TraceRecorder
 
 def _ok_response() -> ModelResponse:
     return ModelResponse(
-        text='{"type":"final","answer":"done"}',
+        text="",
         raw={},
         usage=ModelUsage(prompt_tokens=1),
         latency_ms=1,
+        tool_calls=(NativeToolCall(id="f1", name="final", arguments='{"answer":"done"}'),),
     )
 
 
@@ -74,7 +76,7 @@ def test_failover_hops_to_second_route() -> None:
         trace=trace,
     ).next_turn(state, [])
 
-    assert turn.action is not None
+    assert len(turn.actions) == 1
     assert primary.calls == 1
     assert backup.calls == 1
     hops = [event for event in trace.events if event["event"] == "failover/hop"]
@@ -155,7 +157,7 @@ def test_each_route_retries_then_fails_over() -> None:
         trace=trace,
     ).next_turn(state, [])
 
-    assert turn.action is not None
+    assert len(turn.actions) == 1
     assert primary.calls == 2  # 1 + 1 retry，route 级重试从 0 计数
     assert backup.calls == 1
     retry_events = [event for event in trace.events if event["event"] == "llm/retry"]

@@ -52,14 +52,6 @@ class ProviderRoute:
 
 
 @dataclass(frozen=True)
-class ChildProviderConfig:
-    """Selected submodel route (V4 delegate / scout / planner / reviewer)."""
-
-    provider: str
-    model: str | None = None
-
-
-@dataclass(frozen=True)
 class AuxModelConfig:
     """Selected offline aux model (Meta Review / semantic compaction).
 
@@ -139,7 +131,6 @@ class WorkspaceSettings:
 
 @dataclass(frozen=True)
 class ToolingSettings:
-    profile: str = "baseline-bash"
     max_parallel_tool_calls: int = 4
     max_tool_calls_per_step: int = 16
 
@@ -172,7 +163,6 @@ class Settings:
     providers: Mapping[str, ProviderRoute] = field(default_factory=dict)
     default_provider: str = ""
     failover: FailoverConfig | None = None
-    child: ChildProviderConfig | None = None
     aux: AuxModelConfig | None = None
     project: ProjectSettings = field(default_factory=ProjectSettings)
     workspace: WorkspaceSettings = field(default_factory=WorkspaceSettings)
@@ -227,12 +217,6 @@ def load_settings() -> Settings:
                     f"failover.chain references unknown route: {route_name!r}"
                 )
 
-    child = _parse_child(_dict_at(config, "child"), default_provider)
-    if child is not None and child.provider not in routes:
-        raise MisconfigurationError(
-            f"child.provider references unknown route: {child.provider!r}"
-        )
-
     aux = _parse_aux(_dict_at(config, "aux"), default_provider)
     if aux is not None and aux.provider not in routes:
         raise MisconfigurationError(
@@ -284,7 +268,6 @@ def load_settings() -> Settings:
         providers=routes,
         default_provider=default_provider,
         failover=failover,
-        child=child,
         aux=aux,
         project=ProjectSettings(
             milestone=_str_config(project_config, "milestone", ""),
@@ -293,7 +276,6 @@ def load_settings() -> Settings:
             ignored_allowlist=_str_tuple_config(workspace_config, "ignored_allowlist"),
         ),
         tooling=ToolingSettings(
-            profile=_str_config(tooling_config, "profile", "baseline-bash"),
             max_parallel_tool_calls=_int_config(tooling_config, "max_parallel_tool_calls", 4),
             max_tool_calls_per_step=_int_config(tooling_config, "max_tool_calls_per_step", 16),
         ),
@@ -454,14 +436,6 @@ def _parse_failover(raw: Any) -> FailoverConfig | None:
     if max_hops < 0:
         raise MisconfigurationError("failover.max_hops must be non-negative")
     return FailoverConfig(chain=chain, on=on, max_hops=max_hops)
-
-
-def _parse_child(cfg: dict[str, Any], default_provider: str) -> ChildProviderConfig | None:
-    provider = os.getenv("MINICC_CHILD_PROVIDER") or _str_config(cfg, "provider", "")
-    model = os.getenv("MINICC_CHILD_MODEL") or _optional_str(cfg, "model")
-    if not provider and not model:
-        return None
-    return ChildProviderConfig(provider=provider or default_provider, model=model)
 
 
 def _parse_aux(cfg: dict[str, Any], default_provider: str) -> AuxModelConfig | None:

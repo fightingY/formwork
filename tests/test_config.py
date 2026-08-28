@@ -95,9 +95,6 @@ failover:
   chain: [primary, backup]
   on: [RATE_LIMIT, TIMEOUT]
   max_hops: 1
-child:
-  provider: backup
-  model: child-model
 policy:
   require_approval_for_network: false
 project:
@@ -131,9 +128,6 @@ workspace:
     assert settings.failover.chain == ("primary", "backup")
     assert settings.failover.on == ("RATE_LIMIT", "TIMEOUT")
     assert settings.failover.max_hops == 1
-    assert settings.child is not None
-    assert settings.child.provider == "backup"
-    assert settings.child.model == "child-model"
 
     assert settings.sandbox.image == "python:3.12-slim"
     assert settings.sandbox.cpus == "2"
@@ -365,25 +359,6 @@ failover:
     )
 
     with pytest.raises(MisconfigurationError, match="unknown codes"):
-        load_settings()
-
-
-def test_load_settings_child_unknown_route_fails(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MINICC_API_KEY", "sk-key")
-    (tmp_path / "minicc.yaml").write_text(
-        """
-providers:
-  primary:
-    base_url: https://a.test/v1
-    model: m
-child:
-  provider: ghost
-""",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(MisconfigurationError, match="unknown route"):
         load_settings()
 
 

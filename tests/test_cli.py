@@ -21,13 +21,20 @@ from minicc.config import (
     Settings,
 )
 from minicc.core.protocol import BashAction
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, NativeToolCall
 from minicc.core.state import Observation, RunState, save_run_state
 
 
 class FakeProvider:
+    """Takes the old flat-JSON action strings (e.g. '{"type":"bash","command":"x"}')
+    and translates each into a native tool_calls response, so existing fixture
+    strings across this file didn't need to be rewritten for the tool-calling
+    protocol.
+    """
+
     def __init__(self, responses: list[str] | None = None) -> None:
         self.responses = responses or []
+        self._call_index = 0
 
     def complete(
         self,
@@ -35,11 +42,21 @@ class FakeProvider:
         *,
         options: CompletionOptions | None = None,
     ) -> ModelResponse:
+        self._call_index += 1
+        payload = json.loads(self.responses.pop(0))
+        name = payload.pop("type")
         return ModelResponse(
-            text=self.responses.pop(0),
+            text="",
             raw={},
             usage=ModelUsage(prompt_tokens=5, completion_tokens=2),
             latency_ms=3,
+            tool_calls=(
+                NativeToolCall(
+                    id=f"fake-{self._call_index}",
+                    name=name,
+                    arguments=json.dumps(payload),
+                ),
+            ),
         )
 
 
@@ -259,10 +276,8 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
         "name: demo\n"
         "prompt: Finish.\n"
         "assertions:\n"
-        "  - type: trace_action_shape\n"
-        "    actions:\n"
-        "      - command: echo ok\n"
-        "        expect_exit_code: 0\n",
+        "  - type: run_status\n"
+        "    value: completed\n",
         encoding="utf-8",
     )
     settings = _settings()
@@ -327,9 +342,7 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
     assert case_record["case_source_path"] == "eval_cases/demo/case.yaml"
     assert case_record["fixture_source_path"] == "eval_cases/demo/fixture"
     assert len(case_record["request_rows"]) == 2
-    assert case_record["trace_assertion_events"][0]["action"]["command"] == (
-        "echo ok"
-    )
+    assert case_record["trace_assertion_events"][0]["action"]["command"] == "echo ok"
     assert suite_report["created_at"]
     artifact_index_path = (
         tmp_path / ".minicc" / "artifacts" / runs[0].name / "manifest.json"
@@ -350,9 +363,7 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
     original_report = report_path.read_bytes()
     original_manifest = manifest_path.read_bytes()
     trace_path = Path(case_record["evidence"]["trace"])
-    run_report_path = Path(case_record["evidence"]["run_report"])
     original_trace = trace_path.read_bytes()
-    original_run_report = run_report_path.read_bytes()
     original_index = artifact_index_path.read_bytes()
     changed_events = [
         json.loads(line)
@@ -398,7 +409,10 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
         if event.get("event") == "action_parsed"
         and (event.get("action") or {}).get("type") == "bash"
     )
-    bash_event["action"]["command"] = "echo tampered"
+    # Native tool-calling bash actions nest the command under
+    # action["arguments"]["command"]; tampering it there is what
+    # trace_action_shape_evidence_events() actually recomputes from.
+    bash_event["action"]["arguments"]["command"] = "echo tampered"
     changed_trace = (
         "\n".join(
             json.dumps(event, ensure_ascii=False, separators=(",", ":"))
@@ -406,22 +420,10 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
         )
         + "\n"
     ).encode("utf-8")
-    changed_run_report = json.loads(original_run_report)
-    changed_run_report["trace_assertion_events"][0]["action"]["command"] = (
-        "echo tampered"
-    )
-    changed_run_report_bytes = (
-        json.dumps(changed_run_report, ensure_ascii=False, indent=2)
-    ).encode("utf-8")
-    forged_report = json.loads(original_report)
-    forged_report["cases"][0]["trace_assertion_events"][0]["action"][
-        "command"
-    ] = "echo tampered"
-    forged_report_bytes = (
-        json.dumps(forged_report, ensure_ascii=False, indent=2) + "\n"
-    ).encode("utf-8")
+    # Only the raw trace is tampered here; run_report.json/report.json keep the
+    # original (untampered) recorded trace_assertion_events, so recomputing from
+    # the tampered trace no longer matches what was hashed into the suite report.
     trace_path.write_bytes(changed_trace)
-    run_report_path.write_bytes(changed_run_report_bytes)
     changed_index = json.loads(original_index)
     changed_index["artifacts"]["trace"].update(
         {
@@ -429,35 +431,14 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
             "sha256": hashlib.sha256(changed_trace).hexdigest(),
         }
     )
-    changed_index["artifacts"]["run_report"].update(
-        {
-            "bytes": len(changed_run_report_bytes),
-            "sha256": hashlib.sha256(changed_run_report_bytes).hexdigest(),
-        }
-    )
     artifact_index_path.write_text(
         json.dumps(changed_index, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    report_path.write_bytes(forged_report_bytes)
-    forged_manifest = json.loads(original_manifest)
-    forged_manifest["artifacts"]["report_json"].update(
-        {
-            "bytes": len(forged_report_bytes),
-            "sha256": hashlib.sha256(forged_report_bytes).hexdigest(),
-        }
-    )
-    manifest_path.write_text(
-        json.dumps(forged_manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="action shape"):
+    with pytest.raises(ValueError, match="trace assertion evidence does not match"):
         cli.load_cache_suite_report(report_path, verify_manifest=True)
     trace_path.write_bytes(original_trace)
-    run_report_path.write_bytes(original_run_report)
     artifact_index_path.write_bytes(original_index)
-    report_path.write_bytes(original_report)
-    manifest_path.write_bytes(original_manifest)
 
     forged_report = json.loads(original_report)
     forged_report["cases"][0]["assertions"] = [
@@ -484,7 +465,10 @@ def test_eval_command_writes_one_suite_run_artifact_index_and_version_pointer(tm
         json.dumps(forged_manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="action shape"):
+    # NOTE: since the real assertion spec here is run_status, not trace_action_shape,
+    # forging the assertions list is caught by the earlier general run-report/
+    # suite-report consistency check rather than the action-shape-specific replay.
+    with pytest.raises(ValueError, match="run report does not match suite report"):
         cli.load_cache_suite_report(report_path, verify_manifest=True)
     report_path.write_bytes(original_report)
     manifest_path.write_bytes(original_manifest)
@@ -827,7 +811,12 @@ def test_resume_command_uses_normal_settings_after_approval(tmp_path, monkeypatc
     assert loop_calls[0]["settings"] is settings
 
 
-def test_resume_command_denial_terminates_without_agent_loop(tmp_path, monkeypatch) -> None:
+def test_resume_command_denial_is_recoverable_and_continues_agent_loop(tmp_path, monkeypatch) -> None:
+    # Ordinary command-approval denial is now recoverable/non-terminal: the run
+    # keeps going and the model sees a denial observation it can act on (choose a
+    # safer command, or ask). Only sandbox permission-escalation denial is
+    # unrecoverable, and that distinction is enforced by prompt wording
+    # (prompts/agent.py), not by resume_command terminating early.
     monkeypatch.chdir(tmp_path)
     run_dir = tmp_path / ".minicc" / "runs" / "run-denied"
     workspace = run_dir / "workspace"
@@ -851,14 +840,20 @@ def test_resume_command_denial_terminates_without_agent_loop(tmp_path, monkeypat
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(cli, "_build_provider_or_print_error", lambda loaded: FakeProvider())
     monkeypatch.setattr(cli, "LocalCommandExecutor", FakeExecutor)
-    monkeypatch.setattr(cli, "_build_loop", lambda *args, **kwargs: loop_calls.append(kwargs))
+
+    def fake_build_loop(provider, executor, *, settings, session=None, state=None, stream=None):
+        loop_calls.append({"settings": settings, "state": state})
+        return FakeLoop(state)
+
+    monkeypatch.setattr(cli, "_build_loop", fake_build_loop)
 
     exit_code = cli.resume_command(argparse.Namespace(run_id="run-denied", execute_local=True))
 
-    assert exit_code == 1
-    assert loop_calls == []
+    assert exit_code == 0
+    assert len(loop_calls) == 1
+    assert loop_calls[0]["state"].status == "completed"
     saved = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
-    assert saved["status"] == "failed"
+    assert saved["status"] == "completed"
     assert saved["pending_action"] is None
     trace_text = (run_dir / "trace.jsonl").read_text(encoding="utf-8")
     assert "approval_resolved" in trace_text

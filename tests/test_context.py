@@ -22,9 +22,10 @@ def test_context_builder_uses_cache_friendly_stable_prefix() -> None:
 
 
 def test_stable_prefix_requires_safe_action_economy_and_final_verification() -> None:
-    assert "For code-modification goals, use the fewest safe model turns" in STABLE_PREFIX
-    assert "skip redundant pre-change verification" in STABLE_PREFIX
-    assert "authoritative verification" in STABLE_PREFIX
+    normalized = " ".join(STABLE_PREFIX.split())
+    assert "For code-modification goals, use the fewest safe turns" in normalized
+    assert "skip redundant pre-change verification" in normalized
+    assert "authoritative verification" in normalized
 
 
 def test_rebuild_layout_keeps_v21_message_text_and_order() -> None:
@@ -184,7 +185,7 @@ def test_epoch_compaction_uses_hysteresis_and_does_not_reset_again_next_turn() -
             recent_turns=6,
             # 合成预算需留足对稳定前缀长度的余量，否则 prompt 一增长就误触发第二轮压缩；
             # 这里只验证 hysteresis，不验证具体阈值。
-            max_prompt_chars=4_000,
+            max_prompt_chars=6_000,
             summary_max_chars=500,
         )
     )

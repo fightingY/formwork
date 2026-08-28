@@ -10,7 +10,15 @@ from minicc.core.action_handler import ActionHandler
 from minicc.core.checkpoint import CheckpointManager
 from minicc.core.context import ContextBuilder, state_snapshot_text
 from minicc.core.lifecycle import RunLifecycle
-from minicc.core.protocol import BashAction, DelegateAction, ToolCallsAction
+from minicc.core.protocol import (
+    AskAction,
+    BashAction,
+    CodeModeAction,
+    FinalAction,
+    SkillAction,
+    ToolCall,
+    ToolCallBatch,
+)
 from minicc.core.provider import (
     CONTEXT_OVERFLOW,
     CompletionOptions,
@@ -22,7 +30,6 @@ from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.core.tooling import ToolCallScheduler
 from minicc.core.verification import CompletionVerifier
-from minicc.multi_agent import WorkflowCoordinator
 from minicc.policy.base import PolicyChain
 from minicc.trace.recorder import TraceRecorder
 
@@ -58,14 +65,11 @@ class DirectTurnProvider:
 class LoopConfig:
     max_seconds: int = 0
     max_turns: int = 0
-    max_protocol_errors: int = 2
     max_action_timeout_sec: int = 120
     model_options: CompletionOptions = field(default_factory=CompletionOptions)
     interrupt_after_steps: int | None = None
-    profile: str = "baseline-bash"
     max_parallel_tool_calls: int = 4
     max_tool_calls_per_step: int = 16
-    max_concurrent_children: int = 4
 
 
 @dataclass
@@ -88,7 +92,6 @@ class AgentLoop:
         checkpoint_manager: CheckpointManager | None = None,
         completion_verifier: CompletionVerifier | None = None,
         tool_scheduler: ToolCallScheduler | None = None,
-        workflow_coordinator: WorkflowCoordinator | None = None,
         turn_provider_factory: Callable[[ModelTurnRunner], TurnProvider] | None = None,
     ) -> None:
         self.config = config or LoopConfig()
@@ -101,7 +104,6 @@ class AgentLoop:
         self.turn_runner = ModelTurnRunner(
             provider,
             config=ModelTurnConfig(
-                max_protocol_errors=self.config.max_protocol_errors,
                 max_action_timeout_sec=self.config.max_action_timeout_sec,
                 model_options=self.config.model_options,
                 max_tool_calls_per_step=self.config.max_tool_calls_per_step,
@@ -122,9 +124,10 @@ class AgentLoop:
             trace=self.trace,
             completion_verifier=completion_verifier,
             skill_registry=self.context_builder.skill_registry,
+            tool_scheduler=tool_scheduler,
+            code_mode_timeout_sec=self.config.max_action_timeout_sec,
         )
         self.tool_scheduler = tool_scheduler
-        self.workflow_coordinator = workflow_coordinator
         if self.tool_scheduler is not None:
             runner = self.tool_scheduler.runner
             if hasattr(runner, "action_handler"):
@@ -137,7 +140,6 @@ class AgentLoop:
     ) -> AgentLoopResult:
         resumed = trajectory is not None
         trajectory = list(trajectory or [])
-        state.metrics["profile"] = self.config.profile
         state.metrics["max_parallel_tool_calls"] = self.config.max_parallel_tool_calls
         state.metrics["max_tool_calls_per_step"] = self.config.max_tool_calls_per_step
         if resumed:
@@ -185,7 +187,7 @@ class AgentLoop:
             if turn.observation is not None:
                 trajectory.append(
                     TrajectoryStep(
-                        action=turn.action,
+                        action=None,
                         observation=turn.observation,
                         state_snapshot=state_snapshot_text(state),
                     )
@@ -195,116 +197,107 @@ class AgentLoop:
             if not turn.should_continue or state.status != "running":
                 break
 
-            if turn.action is None:
+            if not turn.actions:
                 continue
 
-            if isinstance(turn.action, ToolCallsAction):
-                if self.tool_scheduler is None or self.config.profile != "hybrid-v3.6":
-                    observation = Observation(
-                        kind="protocol_error",
-                        message="tool_calls require the hybrid-v3.6 profile.",
-                    )
-                    trajectory.append(
-                        TrajectoryStep(
-                            action=turn.action,
-                            observation=observation,
-                            state_snapshot=state_snapshot_text(state),
-                        )
-                    )
-                    state.metrics["protocol_errors"] = state.metrics.get("protocol_errors", 0) + 1
-                    self.trace.observation_created(state, observation)
-                    continue
-                for model_order, call in enumerate(turn.action.calls):
-                    self.trace.tool_call(
-                        state,
-                        call_id=call.id,
-                        tool=call.tool,
-                        arguments=dict(call.arguments),
-                        model_order=model_order,
-                        execution_mode="parallel" if call.tool == "read" else "exclusive",
-                    )
-                results = self.tool_scheduler.dispatch(turn.action, state)
-                state.metrics["tool_call_steps"] = state.metrics.get("tool_call_steps", 0) + 1
-                state.metrics["tool_calls"] = state.metrics.get("tool_calls", 0) + len(results)
-                state.metrics["max_parallel_tool_calls"] = self.config.max_parallel_tool_calls
-                ordered_payload = []
-                for result in results:
-                    self.trace.tool_result(state, result)
-                    ordered_payload.append(
-                        {
-                            "call_id": result.call_id,
-                            "tool": result.tool,
-                            "model_order": result.model_order,
-                            "is_error": result.is_error,
-                            "content": result.content,
-                        }
-                    )
-                    metric = f"{result.tool}_tool_calls"
-                    state.metrics[metric] = state.metrics.get(metric, 0) + 1
+            control_actions = [
+                action
+                for action in turn.actions
+                if isinstance(action, (FinalAction, AskAction, SkillAction, CodeModeAction))
+            ]
+            tool_calls = [action for action in turn.actions if isinstance(action, ToolCall)]
+
+            if control_actions and len(turn.actions) > 1:
+                # The model mixed a control tool (final/ask/skill/code_mode) with other
+                # tool calls in the same turn — a run-time-recoverable contract
+                # violation (was a parse-time ProtocolError under the old text-JSON
+                # protocol; here it becomes a non-terminal feedback observation).
                 observation = Observation(
-                    kind=(
-                        "command_error" if any(result.is_error for result in results) else "command_result"
+                    kind="protocol_error",
+                    message=(
+                        "final/ask/skill/code_mode must each be the only call in their turn; "
+                        "this turn mixed a control tool with other tool calls."
                     ),
-                    exit_code=(None if any(result.is_error for result in results) else 0),
-                    stdout_preview=json.dumps(ordered_payload, ensure_ascii=False),
-                    message="Ordered tool results.",
-                    duration_ms=sum(result.duration_ms for result in results),
                 )
                 trajectory.append(
-                    TrajectoryStep(
-                        action=turn.action,
-                        observation=observation,
-                        state_snapshot=state_snapshot_text(state),
-                    )
+                    TrajectoryStep(action=None, observation=observation, state_snapshot=state_snapshot_text(state))
                 )
-                state.last_observation = observation
-                self.session.save(state)
-                self._checkpoint(state, trajectory, "tool_calls_completed")
+                self.trace.observation_created(state, observation)
                 continue
 
-            if isinstance(turn.action, DelegateAction):
-                if self.config.profile != "multi-agent-v4" or self.workflow_coordinator is None:
-                    observation = Observation(kind="protocol_error", message="delegate requires the multi-agent-v4 profile.")
-                    trajectory.append(TrajectoryStep(action=turn.action, observation=observation, state_snapshot=state_snapshot_text(state)))
-                    state.metrics["protocol_errors"] = state.metrics.get("protocol_errors", 0) + 1
-                    self.trace.observation_created(state, observation)
-                    continue
-                state.metrics["delegate_steps"] = state.metrics.get("delegate_steps", 0) + 1
-                state.metrics["workflow_count"] = state.metrics.get("workflow_count", 0) + 1
-                workflow = self.workflow_coordinator.execute(turn.action, parent_run_id=state.run_id, root_run_id=state.root_run_id or state.run_id)
-                state.metrics["child_runs_started"] = state.metrics.get("child_runs_started", 0) + len(turn.action.tasks)
-                state.metrics["child_runs_completed"] = state.metrics.get("child_runs_completed", 0) + sum(result.status == "completed" for result in workflow.results)
-                state.metrics["child_runs_failed"] = state.metrics.get("child_runs_failed", 0) + sum(result.status == "failed" for result in workflow.results)
-                state.metrics["child_runs_cancelled"] = state.metrics.get("child_runs_cancelled", 0) + sum(result.status in {"cancelled", "timeout"} for result in workflow.results)
-                state.metrics["max_concurrent_children"] = max(state.metrics.get("max_concurrent_children", 0), workflow.max_concurrent)
-                observation = Observation(
-                    kind="command_result" if workflow.status == "completed" else "command_error",
-                    stdout_preview=json.dumps(workflow.summary_observation(), ensure_ascii=False),
-                    message="Workflow summary observation.",
-                )
-                trajectory.append(TrajectoryStep(action=turn.action, observation=observation, state_snapshot=state_snapshot_text(state)))
-                state.last_observation = observation
-                self.trace.record("workflow_summary_observation", state, workflow_id=workflow.workflow_id, observation=workflow.summary_observation())
+            if control_actions:
+                action = control_actions[0]
+                outcome = self.action_handler.handle(action, state)
+                trajectory.extend(outcome.steps)
                 self.session.save(state)
-                self._checkpoint(state, trajectory, "workflow_completed")
+                reason = "action_completed"
+                current_status = str(state.status)
+                if current_status == "waiting_approval":
+                    reason = "waiting_approval"
+                elif current_status == "completed":
+                    reason = "run_completed"
+                self._checkpoint(state, trajectory, reason)
+
+                if state.status == "running" and self._should_interrupt(trajectory):
+                    self._interrupt(state, trajectory)
+
+                if not outcome.should_continue:
+                    break
                 continue
 
-            outcome = self.action_handler.handle(turn.action, state)
-            trajectory.extend(outcome.steps)
+            if self.tool_scheduler is None:
+                self.session.fail(state, "Run failed because no tool scheduler is configured to dispatch tool calls.")
+                break
+
+            for model_order, call in enumerate(tool_calls):
+                self.trace.tool_call(
+                    state,
+                    call_id=call.id,
+                    tool=call.tool,
+                    arguments=dict(call.arguments),
+                    model_order=model_order,
+                    execution_mode="parallel" if call.tool == "read" else "exclusive",
+                )
+            results = self.tool_scheduler.dispatch(tuple(tool_calls), state)
+            state.metrics["tool_call_steps"] = state.metrics.get("tool_call_steps", 0) + 1
+            state.metrics["tool_calls"] = state.metrics.get("tool_calls", 0) + len(results)
+            state.metrics["max_parallel_tool_calls"] = self.config.max_parallel_tool_calls
+            ordered_payload = []
+            for result in results:
+                self.trace.tool_result(state, result)
+                ordered_payload.append(
+                    {
+                        "call_id": result.call_id,
+                        "tool": result.tool,
+                        "model_order": result.model_order,
+                        "is_error": result.is_error,
+                        "content": result.content,
+                    }
+                )
+                metric = f"{result.tool}_tool_calls"
+                state.metrics[metric] = state.metrics.get(metric, 0) + 1
+            observation = Observation(
+                kind=(
+                    "command_error" if any(result.is_error for result in results) else "command_result"
+                ),
+                exit_code=(None if any(result.is_error for result in results) else 0),
+                stdout_preview=json.dumps(ordered_payload, ensure_ascii=False),
+                message="Ordered tool results.",
+                duration_ms=sum(result.duration_ms for result in results),
+            )
+            trajectory.append(
+                TrajectoryStep(
+                    action=ToolCallBatch(calls=tuple(tool_calls)),
+                    observation=observation,
+                    state_snapshot=state_snapshot_text(state),
+                )
+            )
+            state.last_observation = observation
             self.session.save(state)
-            reason = "action_completed"
-            current_status = str(state.status)
-            if current_status == "waiting_approval":
-                reason = "waiting_approval"
-            elif current_status == "completed":
-                reason = "run_completed"
-            self._checkpoint(state, trajectory, reason)
+            self._checkpoint(state, trajectory, "tool_calls_completed")
 
             if state.status == "running" and self._should_interrupt(trajectory):
                 self._interrupt(state, trajectory)
-
-            if not outcome.should_continue:
-                break
 
         self.lifecycle.finish(state)
         if state.status == "interrupted":

@@ -1,19 +1,25 @@
+import json
 from dataclasses import dataclass, field
 
 from minicc.core.loop import AgentLoop, DisabledExecutor
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, NativeToolCall
 from minicc.core.session import SessionManager
 from minicc.core.session_engine import SessionEngine, SessionTurnResult
 from minicc.core.session_store import SessionStore
 from minicc.core.state import Observation
+from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
 from minicc.policy.approval import ApprovalPolicy
 from minicc.policy.base import PolicyChain
 
 
 @dataclass
 class ScriptedProvider:
-    replies: list[str]
+    """Replies are ``{"type": <tool name>, **arguments}`` specs, converted into a
+    single native ``tool_calls`` entry per turn (provider-native tool calling)."""
+
+    replies: list[dict[str, object]]
     seen: list[list[dict[str, str]]] = field(default_factory=list)
+    _call_count: int = field(default=0, init=False)
 
     def complete(
         self,
@@ -22,11 +28,16 @@ class ScriptedProvider:
         options: CompletionOptions | None = None,
     ) -> ModelResponse:
         self.seen.append(messages)
+        spec = dict(self.replies.pop(0))
+        name = str(spec.pop("type"))
+        self._call_count += 1
+        call_id = f"call-{self._call_count}"
         return ModelResponse(
-            text=self.replies.pop(0),
+            text="",
             raw={},
             usage=ModelUsage(),
             latency_ms=1,
+            tool_calls=(NativeToolCall(id=call_id, name=name, arguments=json.dumps(spec)),),
         )
 
 
@@ -46,8 +57,8 @@ def test_session_engine_two_turns_persist_transcript_and_history(tmp_path) -> No
     record = store.create(tmp_path / "project")
     provider = ScriptedProvider(
         replies=[
-            '{"type":"final","answer":"first reply"}',
-            '{"type":"final","answer":"second reply"}',
+            {"type": "final", "answer": "first reply"},
+            {"type": "final", "answer": "second reply"},
         ]
     )
     engine = _engine(store, provider)
@@ -79,18 +90,18 @@ def test_session_engine_two_turns_persist_transcript_and_history(tmp_path) -> No
 
 
 def test_session_engine_writes_run_evidence_without_history(tmp_path) -> None:
-    import json
+    import json as _json
 
     store = SessionStore(tmp_path / "sessions")
     record = store.create(tmp_path / "project")
-    provider = ScriptedProvider(replies=['{"type":"final","answer":"done"}'])
+    provider = ScriptedProvider(replies=[{"type": "final", "answer": "done"}])
     engine = _engine(store, provider)
 
     turn = engine.submit_turn(record.session_id, "hello")
 
     state_path = store.session_runs_dir(record.session_id) / turn.run_id / "state.json"
     assert state_path.exists()
-    raw = json.loads(state_path.read_text(encoding="utf-8"))
+    raw = _json.loads(state_path.read_text(encoding="utf-8"))
     # run evidence must not carry a second copy of conversation history (§5.1).
     assert "session_history" not in raw
     assert raw["goal"] == "hello"
@@ -101,7 +112,7 @@ def test_session_engine_writes_run_evidence_without_history(tmp_path) -> None:
 def test_session_engine_waiting_approval_reply_is_question(tmp_path) -> None:
     store = SessionStore(tmp_path / "sessions")
     record = store.create(tmp_path / "project")
-    provider = ScriptedProvider(replies=['{"type":"ask","question":"Pick a test command?"}'])
+    provider = ScriptedProvider(replies=[{"type": "ask", "question": "Pick a test command?"}])
     engine = _engine(store, provider)
 
     turn: SessionTurnResult = engine.submit_turn(record.session_id, "run tests")
@@ -122,6 +133,13 @@ class RecordingExecutor:
         return Observation(kind="command_result", exit_code=0, message="ok")
 
 
+def _bash_tool_scheduler(executor: RecordingExecutor) -> ToolCallScheduler:
+    # Bash always arrives as a native tool_call now, dispatched through the
+    # scheduler; HybridToolRunner routes it through ActionHandler (wired by
+    # AgentLoop) so the policy chain/approval gate still applies.
+    return ToolCallScheduler(HybridToolRunner(executor), max_parallel_tool_calls=4)
+
+
 def _approval_engine(
     store: SessionStore,
     provider: ScriptedProvider,
@@ -136,6 +154,7 @@ def _approval_engine(
             executor,
             session=SessionManager(),
             policy_chain=policy_chain,
+            tool_scheduler=_bash_tool_scheduler(executor),
         )
 
     return SessionEngine(
@@ -151,8 +170,8 @@ def test_session_engine_approval_continues_same_turn(tmp_path) -> None:
     record = store.create(tmp_path / "project")
     provider = ScriptedProvider(
         replies=[
-            '{"type":"bash","command":"rm -rf build","purpose":"clean artifacts"}',
-            '{"type":"final","answer":"cleaned"}',
+            {"type": "bash", "command": "rm -rf build", "purpose": "clean artifacts"},
+            {"type": "final", "answer": "cleaned"},
         ]
     )
     executor = RecordingExecutor()
@@ -169,18 +188,24 @@ def test_session_engine_approval_continues_same_turn(tmp_path) -> None:
     assert transcript[-1].content == "cleaned"
 
 
-def test_session_engine_denial_fails_turn_without_executing(tmp_path) -> None:
+def test_session_engine_denial_resumes_turn_without_executing(tmp_path) -> None:
+    # Non-terminal denial (per the refactored HITL model): the run resumes and
+    # the model gets a chance to react to the denial instead of the turn
+    # failing outright.
     store = SessionStore(tmp_path / "sessions")
     record = store.create(tmp_path / "project")
     provider = ScriptedProvider(
-        replies=['{"type":"bash","command":"rm -rf build","purpose":"clean artifacts"}']
+        replies=[
+            {"type": "bash", "command": "rm -rf build", "purpose": "clean artifacts"},
+            {"type": "final", "answer": "Cannot proceed: the cleanup command was denied."},
+        ]
     )
     executor = RecordingExecutor()
     engine = _approval_engine(store, provider, executor, decision="deny: too risky")
 
     turn = engine.submit_turn(record.session_id, "clean up")
 
-    assert turn.status == "failed"
+    assert turn.status == "completed"
     assert executor.commands == []  # denied commands never run
     assert "denied" in turn.assistant_reply.lower()
 
@@ -198,6 +223,7 @@ def _deferred_engine(
             executor,
             session=SessionManager(),
             policy_chain=policy_chain,
+            tool_scheduler=_bash_tool_scheduler(executor),
         )
 
     return SessionEngine(store, loop_factory=loop_factory, executor=executor)
@@ -208,8 +234,8 @@ def test_session_engine_resolve_turn_after_deferred_approval(tmp_path) -> None:
     record = store.create(tmp_path / "project")
     provider = ScriptedProvider(
         replies=[
-            '{"type":"bash","command":"rm -rf build","purpose":"clean artifacts"}',
-            '{"type":"final","answer":"cleaned"}',
+            {"type": "bash", "command": "rm -rf build", "purpose": "clean artifacts"},
+            {"type": "final", "answer": "cleaned"},
         ]
     )
     executor = RecordingExecutor()
@@ -232,11 +258,14 @@ def test_session_engine_resolve_turn_after_deferred_approval(tmp_path) -> None:
     assert store.load(record.session_id).turns == [turn.run_id]
 
 
-def test_session_engine_resolve_turn_deny_fails(tmp_path) -> None:
+def test_session_engine_resolve_turn_deny_resumes_non_terminally(tmp_path) -> None:
     store = SessionStore(tmp_path / "sessions")
     record = store.create(tmp_path / "project")
     provider = ScriptedProvider(
-        replies=['{"type":"bash","command":"rm -rf build","purpose":"clean artifacts"}']
+        replies=[
+            {"type": "bash", "command": "rm -rf build", "purpose": "clean artifacts"},
+            {"type": "final", "answer": "Cannot proceed: the cleanup command was denied."},
+        ]
     )
     executor = RecordingExecutor()
     engine = _deferred_engine(store, provider, executor)
@@ -245,7 +274,7 @@ def test_session_engine_resolve_turn_deny_fails(tmp_path) -> None:
     assert turn.status == "waiting_approval"
 
     resolved = engine.resolve_turn(record.session_id, turn.run_id, "deny: too risky")
-    assert resolved.status == "failed"
+    assert resolved.status == "completed"
     assert executor.commands == []
     transcript = store.read_transcript(record.session_id)
     assert transcript[-1].role == "assistant"
@@ -260,8 +289,8 @@ def test_turn_end_hook_fires_before_transcript_append(tmp_path) -> None:
     record = store.create(tmp_path / "project")
     provider = ScriptedProvider(
         replies=[
-            '{"type":"final","answer":"first reply"}',
-            '{"type":"final","answer":"second reply"}',
+            {"type": "final", "answer": "first reply"},
+            {"type": "final", "answer": "second reply"},
         ]
     )
     transcript_lens_at_hook: list[int] = []
@@ -287,7 +316,7 @@ def test_turn_end_hook_fires_before_transcript_append(tmp_path) -> None:
 def test_turn_end_hook_error_degrades_to_metric(tmp_path) -> None:
     store = SessionStore(tmp_path / "sessions")
     record = store.create(tmp_path / "project")
-    provider = ScriptedProvider(replies=['{"type":"final","answer":"ok"}'])
+    provider = ScriptedProvider(replies=[{"type": "final", "answer": "ok"}])
 
     def loop_factory(state):
         return AgentLoop(provider, DisabledExecutor(), session=SessionManager())
@@ -310,8 +339,8 @@ def test_turn_end_hook_skipped_until_deferred_turn_resolved(tmp_path) -> None:
     record = store.create(tmp_path / "project")
     provider = ScriptedProvider(
         replies=[
-            '{"type":"bash","command":"rm -rf build","purpose":"clean"}',
-            '{"type":"final","answer":"cleaned"}',
+            {"type": "bash", "command": "rm -rf build", "purpose": "clean"},
+            {"type": "final", "answer": "cleaned"},
         ]
     )
     executor = RecordingExecutor()
@@ -319,7 +348,13 @@ def test_turn_end_hook_skipped_until_deferred_turn_resolved(tmp_path) -> None:
     calls: list[str] = []
 
     def loop_factory(state):
-        return AgentLoop(provider, executor, session=SessionManager(), policy_chain=policy_chain)
+        return AgentLoop(
+            provider,
+            executor,
+            session=SessionManager(),
+            policy_chain=policy_chain,
+            tool_scheduler=_bash_tool_scheduler(executor),
+        )
 
     def hook(session_id: str, result: SessionTurnResult) -> None:
         calls.append(result.user_message)

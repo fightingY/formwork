@@ -1,7 +1,7 @@
 import json
 import re
 
-from minicc.core.protocol import BashAction
+from minicc.core.protocol import PROTOCOL_SCHEMA_VERSION, BashAction
 from minicc.core.state import RunState, load_run_state, new_run_id, save_run_state
 
 
@@ -27,7 +27,7 @@ def test_run_state_round_trips_pending_action(tmp_path) -> None:
     assert loaded.approval_question == "Approve network?"
 
 
-def test_new_state_has_v2_ledger_schema_and_legacy_state_stays_legacy(tmp_path) -> None:
+def test_new_state_has_current_ledger_schema_and_legacy_state_stays_legacy(tmp_path) -> None:
     state = RunState.start(
         "suite run",
         run_dir=tmp_path,
@@ -38,7 +38,7 @@ def test_new_state_has_v2_ledger_schema_and_legacy_state_stays_legacy(tmp_path) 
     path = save_run_state(state)
     payload = json.loads(path.read_text(encoding="utf-8"))
 
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == PROTOCOL_SCHEMA_VERSION
     assert payload["suite_id"] == "suite-1"
     assert payload["milestone"] == "stable-v2.0.2"
     assert payload["stage"] == "formal_acceptance"

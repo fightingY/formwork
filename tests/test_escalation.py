@@ -4,8 +4,9 @@ import json
 from dataclasses import dataclass, field
 
 from minicc.core.context import ContextBuilder
-from minicc.core.loop import AgentLoop, DisabledExecutor
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
+from minicc.core.loop import AgentLoop, DisabledExecutor, LoopConfig
+from minicc.core.protocol import TOOLS
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, NativeToolCall
 from minicc.core.session import SessionManager
 from minicc.core.session_engine import SessionEngine
 from minicc.core.session_store import SessionStore
@@ -41,8 +42,19 @@ class ScriptedProvider:
         options: CompletionOptions | None = None,
     ) -> ModelResponse:
         self.seen.append(messages)
+        reply = self.replies.pop(0)
+        if options is not None and options.tools:
+            payload = json.loads(reply)
+            name = payload.pop("type")
+            return ModelResponse(
+                text="",
+                raw={},
+                usage=ModelUsage(),
+                latency_ms=1,
+                tool_calls=(NativeToolCall(id="c1", name=name, arguments=json.dumps(payload)),),
+            )
         return ModelResponse(
-            text=self.replies.pop(0),
+            text=reply,
             raw={},
             usage=ModelUsage(),
             latency_ms=1,
@@ -293,7 +305,12 @@ def test_turn_end_hook_invokes_escalator(tmp_path) -> None:
     hook = MemoryTurnHook(store, L1Distiller(provider), escalator=spy_escalator)
 
     def loop_factory(state):
-        return AgentLoop(provider, DisabledExecutor(), session=SessionManager())
+        return AgentLoop(
+            provider,
+            DisabledExecutor(),
+            session=SessionManager(),
+            config=LoopConfig(model_options=CompletionOptions(tools=TOOLS, tool_choice="required")),
+        )
 
     engine = SessionEngine(sessions, loop_factory=loop_factory, on_turn_end=hook)
     turn = engine.submit_turn(record.session_id, "how should we manage deps?")

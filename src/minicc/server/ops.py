@@ -248,7 +248,6 @@ def _run_namespace(payload: dict[str, Any]) -> argparse.Namespace:
         no_workspace_copy=bool(payload.get("no_workspace_copy", False)),
         docker_image=payload.get("docker_image"),
         stream=None,
-        profile=payload.get("profile"),
         follow_up_from=payload.get("follow_up_from"),
         interrupt_after_steps=payload.get("interrupt_after_steps"),
     )
@@ -281,7 +280,6 @@ def _replay_run_namespace(payload: dict[str, Any]) -> argparse.Namespace:
         fresh=bool(payload.get("fresh", False)),
         execute_local=bool(payload.get("execute_local", True)),
         docker_image=payload.get("docker_image"),
-        profile=payload.get("profile"),
         verify_command=[str(c) for c in (payload.get("verify_command") or []) if str(c).strip()],
         verification_timeout_sec=int(payload.get("verification_timeout_sec") or 120),
         output_dir=Path(str(payload["output_dir"])) if payload.get("output_dir") else None,
@@ -786,14 +784,6 @@ _OPS_INDEX_HTML = """<!doctype html>
               <div class="field-grid">
                 <label>Goal<textarea id="runGoal" class="mono" placeholder="describe the task..."></textarea></label>
                 <label>Milestone<input id="runMilestone" placeholder="(optional)"></label>
-                <label>Profile
-                  <select id="runProfile">
-                    <option value="">(default)</option>
-                    <option value="baseline-bash">baseline-bash</option>
-                    <option value="hybrid-v3.6">hybrid-v3.6</option>
-                    <option value="multi-agent-v4">multi-agent-v4</option>
-                  </select>
-                </label>
                 <label>Verify command(s), one per line<textarea id="runVerify" class="mono"></textarea></label>
                 <div class="checkbox-row"><input id="runExecuteLocal" type="checkbox" checked>
                   <label for="runExecuteLocal">execute locally (uncheck = Docker sandbox)</label></div>
@@ -1022,7 +1012,6 @@ _OPS_INDEX_HTML = """<!doctype html>
       try {
         await fetchJson('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
           goal, milestone: $('runMilestone').value.trim() || null,
-          profile: $('runProfile').value || null,
           verify_command: verify,
           execute_local: $('runExecuteLocal').checked,
         }) });

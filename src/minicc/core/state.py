@@ -9,7 +9,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from minicc.core.ledger import LEDGER_SCHEMA_VERSION
-from minicc.core.protocol import Action, BashAction, action_to_dict, parse_action
+from minicc.core.protocol import Action, BashAction, action_from_dict, action_to_dict
 
 RunStatus = Literal[
     "running",
@@ -147,11 +147,15 @@ class RunState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RunState:
-        pending_action = data.get("pending_action")
-        if pending_action is not None:
-            pending_action = parse_action(json.dumps(pending_action))
-            if not isinstance(pending_action, BashAction):
-                pending_action = None
+        pending_action_data = data.get("pending_action")
+        pending_action: BashAction | None = None
+        if isinstance(pending_action_data, dict) and pending_action_data.get("type") == "bash":
+            pending_action = BashAction(
+                command=str(pending_action_data.get("command", "")),
+                timeout_sec=int(pending_action_data.get("timeout_sec", 60)),
+                purpose=str(pending_action_data.get("purpose", "")),
+                progress=str(pending_action_data.get("progress", "")),
+            )
 
         last_observation_data = data.get("last_observation")
         last_observation = Observation(**last_observation_data) if isinstance(last_observation_data, dict) else None
@@ -213,27 +217,9 @@ def initial_metrics() -> dict[str, Any]:
         "edit_tool_calls": 0,
         "write_tool_calls": 0,
         "bash_tool_calls": 0,
-        "profile": "baseline-bash",
         "root_turns": 0,
-        "child_runs_started": 0,
-        "child_runs_completed": 0,
-        "child_runs_failed": 0,
-        "child_runs_cancelled": 0,
-        "workflow_count": 0,
-        "workflow_depth": 0,
-        "max_concurrent_children": 0,
-        "delegate_steps": 0,
         "parallel_read_groups": 0,
         "actual_parallelism": 0,
-        "write_lease_acquire": 0,
-        "write_lease_denial": 0,
-        "write_lease_release": 0,
-        "capability_denials": 0,
-        "readonly_bash_denials": 0,
-        "workspace_mutation_violations": 0,
-        "review_iterations": 0,
-        "verifier_attempts": 0,
-        "verifier_passes": 0,
         "trace_events": 0,
         "transcript_records": 0,
         "max_parallel_tool_calls": 4,
@@ -379,7 +365,7 @@ def trajectory_step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
 
 def trajectory_step_from_dict(data: dict[str, Any]) -> TrajectoryStep:
     raw_action = data.get("action")
-    action = parse_action(json.dumps(raw_action)) if isinstance(raw_action, dict) else None
+    action = action_from_dict(raw_action) if isinstance(raw_action, dict) else None
     raw_observation = data.get("observation")
     if not isinstance(raw_observation, dict):
         raise ValueError("Checkpoint trajectory step is missing an observation.")

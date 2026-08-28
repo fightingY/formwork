@@ -1,5 +1,6 @@
 import json
 
+from minicc.core.protocol import PROTOCOL_SCHEMA_VERSION
 from minicc.core.run_catalog import RunCatalog, index_acceptance_history
 from minicc.core.state import RunState
 
@@ -125,13 +126,22 @@ def test_catalog_v2_entry_links_complete_run_and_suite_without_dangling_pointer(
     ]:
         (run_dir / relative).write_text("{}", encoding="utf-8")
     (run_dir / "eval_result.json").write_text(
-        '{"schema_version":2,"run_id":"run-complete","suite_id":"suite-1"}',
+        json.dumps(
+            {
+                "schema_version": PROTOCOL_SCHEMA_VERSION,
+                "run_id": "run-complete",
+                "suite_id": "suite-1",
+            }
+        ),
         encoding="utf-8",
     )
     (run_dir / "artifacts" / "diff.patch").write_text("", encoding="utf-8")
     suite_path = tmp_path / ".minicc" / "suites" / "suite-1" / "manifest.json"
     suite_path.parent.mkdir(parents=True)
-    suite_path.write_text('{"schema_version":2,"suite_id":"suite-1"}', encoding="utf-8")
+    suite_path.write_text(
+        json.dumps({"schema_version": PROTOCOL_SCHEMA_VERSION, "suite_id": "suite-1"}),
+        encoding="utf-8",
+    )
     result = type(
         "Result",
         (),
@@ -161,7 +171,7 @@ def test_catalog_v2_entry_links_complete_run_and_suite_without_dangling_pointer(
     )
 
     assert entry is not None
-    assert entry["schema_version"] == 2
+    assert entry["schema_version"] == PROTOCOL_SCHEMA_VERSION
     assert entry["suite_id"] == "suite-1"
     assert entry["suite_path"] == str(suite_path.resolve())
     assert entry["evidence_valid"] is True
@@ -174,14 +184,21 @@ def test_catalog_accepts_expected_hitl_waiting_state_for_formal_metrics(tmp_path
     for relative in ["state.json", "trace.jsonl", "metrics.json", "workspace_manifest.json"]:
         (run_dir / relative).write_text("{}", encoding="utf-8")
     (run_dir / "eval_result.json").write_text(
-        '{"schema_version":2,"run_id":"run-hitl","suite_id":"suite-hitl","passed":true}',
+        json.dumps(
+            {
+                "schema_version": PROTOCOL_SCHEMA_VERSION,
+                "run_id": "run-hitl",
+                "suite_id": "suite-hitl",
+                "passed": True,
+            }
+        ),
         encoding="utf-8",
     )
     (run_dir / "artifacts" / "diff.patch").write_text("", encoding="utf-8")
     suite_path = tmp_path / ".minicc" / "suites" / "suite-hitl" / "manifest.json"
     suite_path.parent.mkdir(parents=True)
     suite_path.write_text(
-        '{"schema_version":2,"suite_id":"suite-hitl"}',
+        json.dumps({"schema_version": PROTOCOL_SCHEMA_VERSION, "suite_id": "suite-hitl"}),
         encoding="utf-8",
     )
     result = type(

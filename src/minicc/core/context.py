@@ -22,11 +22,7 @@ from minicc.memory.l1 import (
     recall_memories,
 )
 from minicc.memory.working import working_memory_context
-from minicc.prompts.agent import (
-    HYBRID_PREFIX_SUFFIX,
-    MULTI_AGENT_PREFIX_SUFFIX,
-    STABLE_PREFIX,
-)
+from minicc.prompts.agent import STABLE_PREFIX
 from minicc.prompts.guidance import (
     action_economy_guidance,
     continuity_footer,
@@ -716,12 +712,7 @@ class ContextBuilder:
         return messages, stable_prefix_messages
 
     def _system_prefix(self, state: RunState) -> str:
-        if state.metrics.get("profile") == "hybrid-v3.6":
-            prefix = STABLE_PREFIX + HYBRID_PREFIX_SUFFIX
-        elif state.metrics.get("profile") == "multi-agent-v4":
-            prefix = STABLE_PREFIX + MULTI_AGENT_PREFIX_SUFFIX
-        else:
-            prefix = STABLE_PREFIX
+        prefix = STABLE_PREFIX
         # L3 persona + L2 scenario ride the system cache track (plan §3.1):
         # they are appended to the stable prefix so they stay prompt-cached and
         # only invalidate when the escalation passes actually change them (rare,

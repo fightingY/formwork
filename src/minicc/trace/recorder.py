@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from minicc.core.protocol import Action, action_to_dict
+from minicc.core.protocol import PROTOCOL_SCHEMA_VERSION, Action, action_to_dict
 from minicc.core.provider import ModelUsage
 from minicc.core.state import Observation, RunState
 from minicc.core.tooling import ToolResult
@@ -44,7 +44,7 @@ class TraceRecorder:
     def record(self, event_type: str, state: RunState | None = None, **payload: Any) -> None:
         event: dict[str, Any] = {
             "event": event_type,
-            "trace_schema_version": 1,
+            "trace_schema_version": PROTOCOL_SCHEMA_VERSION,
             "sequence": self._sequence + 1,
             "created_at": datetime.now(UTC).isoformat(),
         }
@@ -94,6 +94,7 @@ class TraceRecorder:
         *,
         attempt_count: int = 1,
         retry_reasons: tuple[str, ...] = (),
+        tool_calls: tuple[Any, ...] = (),
     ) -> None:
         self.record(
             "model_response",
@@ -104,6 +105,10 @@ class TraceRecorder:
             latency_ms=latency_ms,
             attempt_count=max(int(attempt_count or 1), 1),
             retry_reasons=list(retry_reasons),
+            tool_calls=[
+                {"id": call.id, "name": call.name, "arguments": call.arguments}
+                for call in tool_calls
+            ],
             usage=model_usage_to_dict(usage) if usage is not None else None,
             cacheability={
                 "request_index": state.metrics.get("cache_prefix_request_index"),

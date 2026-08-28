@@ -1,14 +1,17 @@
+import json
 import queue
 from dataclasses import dataclass, field
 
 import pytest
 
-from minicc.core.loop import AgentLoop
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
+from minicc.core.loop import AgentLoop, LoopConfig
+from minicc.core.protocol import TOOLS
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, NativeToolCall
 from minicc.core.session import SessionManager
 from minicc.core.session_engine import SessionEngine
 from minicc.core.session_store import SessionStore
 from minicc.core.state import Observation
+from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
 from minicc.policy.approval import ApprovalPolicy
 from minicc.policy.base import PolicyChain
 from minicc.server.chat import (
@@ -35,8 +38,19 @@ class ScriptedProvider:
         options: CompletionOptions | None = None,
     ) -> ModelResponse:
         self.seen.append(messages)
+        reply = self.replies.pop(0)
+        if options is not None and options.tools:
+            payload = json.loads(reply)
+            name = payload.pop("type")
+            return ModelResponse(
+                text="",
+                raw={},
+                usage=ModelUsage(),
+                latency_ms=1,
+                tool_calls=(NativeToolCall(id="c1", name=name, arguments=json.dumps(payload)),),
+            )
         return ModelResponse(
-            text=self.replies.pop(0),
+            text=reply,
             raw={},
             usage=ModelUsage(),
             latency_ms=1,
@@ -56,7 +70,15 @@ def _deferred_engine_factory(store, provider, executor):
     policy_chain = PolicyChain([ApprovalPolicy(enabled=True)])
 
     def loop_factory(state):
-        return AgentLoop(provider, executor, session=SessionManager(), policy_chain=policy_chain)
+        scheduler = ToolCallScheduler(HybridToolRunner(executor))
+        return AgentLoop(
+            provider,
+            executor,
+            session=SessionManager(),
+            policy_chain=policy_chain,
+            tool_scheduler=scheduler,
+            config=LoopConfig(model_options=CompletionOptions(tools=TOOLS, tool_choice="required")),
+        )
 
     def factory() -> SessionEngine:
         return SessionEngine(store, loop_factory=loop_factory, executor=executor)
@@ -240,7 +262,10 @@ def test_resolve_approval_deny_fails_without_executing(tmp_path) -> None:
     store = SessionStore(tmp_path / "sessions")
     record = store.create(tmp_path / "project")
     provider = ScriptedProvider(
-        replies=['{"type":"bash","command":"rm -rf build","purpose":"clean"}']
+        replies=[
+            '{"type":"bash","command":"rm -rf build","purpose":"clean"}',
+            '{"type":"final","answer":"skipped the cleanup since it was denied"}',
+        ]
     )
     executor = RecordingExecutor()
     factory = _deferred_engine_factory(store, provider, executor)
@@ -249,7 +274,7 @@ def test_resolve_approval_deny_fails_without_executing(tmp_path) -> None:
     resolved = resolve_approval(factory, record.session_id, waiting["run_id"], "deny: too risky")
 
     assert resolved["type"] == "turn_done"
-    assert resolved["status"] == "failed"
+    assert resolved["status"] == "completed"
     assert executor.commands == []
     transcript = store.read_transcript(record.session_id)
     assert transcript[-1].role == "assistant"

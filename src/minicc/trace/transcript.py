@@ -132,10 +132,15 @@ def _kind(event_name: str) -> str:
 
 def _intent(action: dict[str, Any] | None, event_name: str, event: dict[str, Any]) -> tuple[str, str | None]:
     if action:
-        explicit = action.get("intent")
+        explicit = action.get("intent") or action.get("progress")
         if isinstance(explicit, str) and explicit.strip():
             return explicit.strip(), "model_intent"
-        purpose = action.get("purpose") or action.get("description")
+        arguments = action.get("arguments")
+        purpose = (
+            (isinstance(arguments, dict) and arguments.get("description"))
+            or action.get("purpose")
+            or action.get("description")
+        )
         if isinstance(purpose, str) and purpose.strip():
             return purpose.strip(), "model_intent"
         action_type = str(action.get("type", "action"))
@@ -144,6 +149,18 @@ def _intent(action: dict[str, Any] | None, event_name: str, event: dict[str, Any
     if event_name == "tool/call":
         return f"Use {event.get('tool', 'tool')}", "derived_summary"
     return "", None
+
+
+def _action_command(action: dict[str, Any]) -> str | None:
+    """Recorded bash actions are native tool_calls: ``action_to_dict()`` nests the
+    command under ``arguments`` (``{"type": "bash", "id": ..., "arguments":
+    {"command": ...}}``), not as a top-level field."""
+    arguments = action.get("arguments")
+    if isinstance(arguments, dict) and isinstance(arguments.get("command"), str):
+        return arguments["command"]
+    if isinstance(action.get("command"), str):
+        return action["command"]
+    return None
 
 
 def _action_summary(action: dict[str, Any] | None, event: dict[str, Any]) -> dict[str, Any] | None:
@@ -155,13 +172,9 @@ def _action_summary(action: dict[str, Any] | None, event: dict[str, Any]) -> dic
     for key in ("purpose", "question", "name", "join"):
         if key in action:
             result[key] = action[key]
-    if isinstance(action.get("command"), str):
-        result["command"] = _truncate(action["command"], MAX_COMMAND_CHARS)
-    if action.get("type") == "delegate" and isinstance(action.get("tasks"), list):
-        result["tasks"] = [
-            {key: task.get(key) for key in ("id", "role", "goal")}
-            for task in action["tasks"] if isinstance(task, dict)
-        ]
+    command = _action_command(action)
+    if isinstance(command, str):
+        result["command"] = _truncate(command, MAX_COMMAND_CHARS)
     if action.get("type") == "final":
         result["answer"] = _truncate(str(action.get("answer", "")), 4_000)
     return redact(result)
@@ -243,10 +256,9 @@ def _format_record(record: dict[str, Any]) -> list[str]:
     if kind == "action":
         action_type = str(action.get("type") or action.get("tool") or "action")
         lines = [f"**Intent:** {intent}" if intent else "**Intent:** Perform the next action", "", f"**Action:** `{action_type}`"]
-        if action.get("command"):
-            lines.extend(["", "```shell", str(action["command"]), "```"])
-        if isinstance(action.get("tasks"), list):
-            lines.extend(f"- `{task.get('id')}` ({task.get('role')}): {task.get('goal')}" for task in action["tasks"] if isinstance(task, dict))
+        command = _action_command(action)
+        if command:
+            lines.extend(["", "```shell", str(command), "```"])
         if action.get("answer"):
             lines.extend(["", str(action["answer"])])
         lines.append("")

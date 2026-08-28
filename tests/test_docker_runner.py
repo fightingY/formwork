@@ -181,7 +181,7 @@ def test_docker_runner_timeout_removes_container(monkeypatch) -> None:
     assert ["docker", "rm", "-f", "minicc-timeout"] in calls
 
 
-def test_docker_command_executor_marks_timed_out_run_failed(tmp_path) -> None:
+def test_docker_command_executor_timeout_is_non_terminal(tmp_path) -> None:
     class FakeRunner:
         def exec(self, *, container_name: str, action: BashAction) -> CommandResult:
             return CommandResult(exit_code=None, timed_out=True, timeout_sec=1)
@@ -194,7 +194,46 @@ def test_docker_command_executor_marks_timed_out_run_failed(tmp_path) -> None:
 
     assert observation.kind == "timeout"
     assert state.container_name is None
-    assert state.status == "failed"
+    assert state.status == "running"
+
+
+def test_docker_command_executor_lazily_restarts_after_timeout(tmp_path) -> None:
+    started_with: list[dict[str, object]] = []
+
+    class FakeRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def start(self, **kwargs: object) -> str:
+            started_with.append(kwargs)
+            return "minicc-run-2"
+
+        def exec(self, *, container_name: str, action: BashAction) -> CommandResult:
+            self.calls += 1
+            if self.calls == 1:
+                return CommandResult(exit_code=None, timed_out=True, timeout_sec=1)
+            assert container_name == "minicc-run-2"
+            return CommandResult(exit_code=0, stdout="ok", timed_out=False, timeout_sec=1)
+
+    fake_runner = FakeRunner()
+    state = RunState.start("run command")
+    state.container_name = "minicc-run"
+    restart_params = {"run_id": "run-1", "workspace_dir": tmp_path}
+    executor = DockerCommandExecutor(
+        fake_runner,
+        artifacts=ArtifactStore(tmp_path),
+        restart_params=restart_params,
+    )
+
+    timeout_observation = executor.run(BashAction(command="sleep 30", timeout_sec=1), state)
+    assert timeout_observation.kind == "timeout"
+    assert state.container_name is None
+
+    next_observation = executor.run(BashAction(command="echo ok", timeout_sec=1), state)
+
+    assert started_with == [restart_params]
+    assert state.container_name == "minicc-run-2"
+    assert next_observation.kind == "command_result"
 
 
 def test_check_docker_ready_reports_missing_cli(monkeypatch) -> None:

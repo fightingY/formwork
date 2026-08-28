@@ -1,5 +1,6 @@
 import json
 
+from minicc.core.protocol import PROTOCOL_SCHEMA_VERSION
 from minicc.core.state import Observation, RunState
 from minicc.trace.metrics import metrics_snapshot, write_metrics
 from minicc.trace.recorder import TraceRecorder
@@ -33,5 +34,5 @@ def test_write_metrics_persists_snapshot(tmp_path) -> None:
     assert data == metrics_snapshot(state)
     assert data["turns"] == 2
     assert data["run_id"] == state.run_id
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == PROTOCOL_SCHEMA_VERSION
     assert data["suite_id"] is None

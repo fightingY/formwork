@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -9,8 +9,8 @@ from minicc.core.checkpoint import (
     CheckpointManager,
 )
 from minicc.core.loop import AgentLoop, LoopConfig
-from minicc.core.protocol import BashAction
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
+from minicc.core.protocol import BashAction, ToolCall, ToolCallBatch
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, NativeToolCall
 from minicc.core.session import SessionManager
 from minicc.core.state import (
     Observation,
@@ -19,19 +19,39 @@ from minicc.core.state import (
     save_run_state,
     trajectory_step_from_dict,
 )
+from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
 from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
 from minicc.trace.recorder import TraceRecorder
 
 
 @dataclass
 class SequenceProvider:
-    responses: list[str | BaseException]
+    """Each entry is either a ``{"type": <tool name>, **arguments}`` spec (native
+    tool calling) converted into a single ``tool_calls`` entry, or a raised
+    exception (used to simulate a controlled interrupt mid-run)."""
+
+    responses: list[dict[str, object] | BaseException]
+    _call_count: int = field(default=0, init=False)
 
     def complete(self, messages, *, options: CompletionOptions | None = None) -> ModelResponse:
         response = self.responses.pop(0)
         if isinstance(response, BaseException):
             raise response
-        return ModelResponse(text=response, raw={}, usage=ModelUsage(), latency_ms=1)
+        spec = dict(response)
+        name = str(spec.pop("type"))
+        self._call_count += 1
+        call_id = f"call-{self._call_count}"
+        return ModelResponse(
+            text="",
+            raw={},
+            usage=ModelUsage(),
+            latency_ms=1,
+            tool_calls=(NativeToolCall(id=call_id, name=name, arguments=json.dumps(spec)),),
+        )
+
+
+def _bash_tool_scheduler(executor) -> ToolCallScheduler:
+    return ToolCallScheduler(HybridToolRunner(executor), max_parallel_tool_calls=4)
 
 
 class ScenarioExecutor:
@@ -58,7 +78,15 @@ def test_checkpoint_round_trips_state_trajectory_and_workspace(tmp_path) -> None
     (state.workspace_host_path / "app.py").write_text("changed\n", encoding="utf-8")
     trajectory = [
         TrajectoryStep(
-            action=BashAction(command="write-change"),
+            action=ToolCallBatch(
+                calls=(
+                    ToolCall(
+                        id="call-1",
+                        tool="bash",
+                        arguments={"command": "write-change", "timeout_sec": 60, "description": ""},
+                    ),
+                )
+            ),
             observation=Observation(kind="command_result", exit_code=0, message="done"),
             state_snapshot="Budget status: 2 model turn(s) remain.",
         )
@@ -76,7 +104,11 @@ def test_checkpoint_round_trips_state_trajectory_and_workspace(tmp_path) -> None
 def test_legacy_checkpoint_step_without_snapshot_remains_loadable() -> None:
     step = trajectory_step_from_dict(
         {
-            "action": {"type": "bash", "command": "pwd", "timeout_sec": 60, "purpose": ""},
+            "action": {
+                "type": "bash",
+                "id": "call-1",
+                "arguments": {"command": "pwd", "timeout_sec": 60, "description": ""},
+            },
             "observation": {
                 "kind": "command_result",
                 "exit_code": 0,
@@ -89,7 +121,9 @@ def test_legacy_checkpoint_step_without_snapshot_remains_loadable() -> None:
         }
     )
 
-    assert step.action == BashAction(command="pwd")
+    assert step.action == ToolCall(
+        id="call-1", tool="bash", arguments={"command": "pwd", "timeout_sec": 60, "description": ""}
+    )
     assert step.state_snapshot == ""
 
 
@@ -154,7 +188,7 @@ def test_resume_before_modification_preserves_empty_trajectory(tmp_path) -> None
 
     restored = manager.restore_latest(state.run_id)
     result = AgentLoop(
-        SequenceProvider(['{"type":"final","answer":"done"}']),
+        SequenceProvider([{"type": "final", "answer": "done"}]),
         ScenarioExecutor(state.workspace_host_path),
         session=SessionManager(),
         checkpoint_manager=manager,
@@ -170,13 +204,14 @@ def test_resume_after_modification_does_not_repeat_completed_action(tmp_path) ->
     first_loop = AgentLoop(
         SequenceProvider(
             [
-                '{"type":"bash","command":"write-change"}',
+                {"type": "bash", "command": "write-change"},
                 KeyboardInterrupt(),
             ]
         ),
         first_executor,
         session=SessionManager(),
         checkpoint_manager=manager,
+        tool_scheduler=_bash_tool_scheduler(first_executor),
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -187,13 +222,14 @@ def test_resume_after_modification_does_not_repeat_completed_action(tmp_path) ->
     result = AgentLoop(
         SequenceProvider(
             [
-                '{"type":"bash","command":"verify"}',
-                '{"type":"final","answer":"done"}',
+                {"type": "bash", "command": "verify"},
+                {"type": "final", "answer": "done"},
             ]
         ),
         resumed_executor,
         session=SessionManager(),
         checkpoint_manager=manager,
+        tool_scheduler=_bash_tool_scheduler(resumed_executor),
     ).run(restored.state, restored.trajectory)
 
     assert result.state.status == "completed"
@@ -208,14 +244,15 @@ def test_resume_after_failed_verification_preserves_failure_observation(tmp_path
     first_loop = AgentLoop(
         SequenceProvider(
             [
-                '{"type":"bash","command":"write-change"}',
-                '{"type":"bash","command":"verify"}',
+                {"type": "bash", "command": "write-change"},
+                {"type": "bash", "command": "verify"},
                 KeyboardInterrupt(),
             ]
         ),
         first_executor,
         session=SessionManager(),
         checkpoint_manager=manager,
+        tool_scheduler=_bash_tool_scheduler(first_executor),
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -227,14 +264,15 @@ def test_resume_after_failed_verification_preserves_failure_observation(tmp_path
     result = AgentLoop(
         SequenceProvider(
             [
-                '{"type":"bash","command":"fix-change"}',
-                '{"type":"bash","command":"verify"}',
-                '{"type":"final","answer":"done"}',
+                {"type": "bash", "command": "fix-change"},
+                {"type": "bash", "command": "verify"},
+                {"type": "final", "answer": "done"},
             ]
         ),
         resumed_executor,
         session=SessionManager(),
         checkpoint_manager=manager,
+        tool_scheduler=_bash_tool_scheduler(resumed_executor),
     ).run(restored.state, restored.trajectory)
 
     assert result.state.status == "completed"
@@ -245,23 +283,44 @@ def test_resume_after_failed_verification_preserves_failure_observation(tmp_path
 
 def test_controlled_interrupt_creates_resumable_checkpoint(tmp_path) -> None:
     state, manager = _checkpoint_state(tmp_path)
+    executor = ScenarioExecutor(state.workspace_host_path)
     result = AgentLoop(
-        SequenceProvider(['{"type":"bash","command":"write-change"}']),
-        ScenarioExecutor(state.workspace_host_path),
+        SequenceProvider([{"type": "bash", "command": "write-change"}]),
+        executor,
         session=SessionManager(),
         checkpoint_manager=manager,
         config=LoopConfig(interrupt_after_steps=1),
+        tool_scheduler=_bash_tool_scheduler(executor),
     ).run(state)
 
     assert result.state.status == "interrupted"
     restored = manager.restore_latest(state.run_id)
     assert restored.reason == "interrupted_finalized"
     assert len(restored.trajectory) == 1
-    assert restored.trajectory[0].action == BashAction(command="write-change")
+    assert restored.trajectory[0].action == ToolCallBatch(
+        calls=(
+            ToolCall(
+                id="call-1",
+                tool="bash",
+                arguments={"command": "write-change", "timeout_sec": 60, "description": ""},
+            ),
+        )
+    )
 
 
 def _step(command, kind, *, exit_code=0):
-    action = BashAction(command=command) if command is not None else None
+    if command is None:
+        action = None
+    else:
+        action = ToolCallBatch(
+            calls=(
+                ToolCall(
+                    id="call-1",
+                    tool="bash",
+                    arguments={"command": command, "timeout_sec": 60, "description": ""},
+                ),
+            )
+        )
     return TrajectoryStep(
         action=action,
         observation=Observation(kind=kind, exit_code=exit_code, message=kind),
@@ -293,7 +352,7 @@ def test_checkpoint_resume_matrix_completes_ten_state_scenarios(tmp_path, scenar
 
     restored = manager.restore_latest(state.run_id)
     result = AgentLoop(
-        SequenceProvider(['{"type":"final","answer":"resumed"}']),
+        SequenceProvider([{"type": "final", "answer": "resumed"}]),
         ScenarioExecutor(state.workspace_host_path),
         session=SessionManager(),
         checkpoint_manager=manager,

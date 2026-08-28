@@ -101,13 +101,17 @@ class SessionManager:
         if state.pending_action is None:
             latest = latest_approval_result(state)
             if latest is not None and latest.get("status") == "denied":
+                # HITL denial is recoverable (four-state model: allowed-once / rejected /
+                # cancelled / unavailable). The one exception — sandbox permission-escalation
+                # denial — is enforced by prompt wording (prompts/agent.py), not here: the
+                # model is instructed to call `final` itself when that specific denial occurs.
                 reason = str(latest.get("reason") or "User replied to the pending question.")
                 state.last_observation = Observation(
                     kind="approval_result",
                     message=f"User response for pending question: {reason}",
                 )
-                state.status = "failed"
-                state.state_summary = "Run terminated because the pending request was denied."
+                state.status = "running"
+                state.approval_question = None
                 if trace is not None:
                     trace.approval_resolved(state, "denied", reason)
                     trace.observation_created(state, state.last_observation)
@@ -141,17 +145,22 @@ class SessionManager:
             return
 
         if latest.get("status") == "denied":
+            # Non-terminal: ordinary command-approval denial is recoverable — the run
+            # keeps going and the model sees an is_error-equivalent observation it can
+            # act on (choose a safer command, or ask). Sandbox permission-escalation
+            # denial is the only unrecoverable case, and that distinction is made by
+            # the model itself (prompts/agent.py instructs it to call `final` when the
+            # denial was for an escalation), not by a code-level branch here.
             reason = str(latest.get("reason") or "User denied the action.")
             action_text = state.pending_action.command
             state.pending_action = None
             state.approval_question = None
-            state.status = "failed"
+            state.status = "running"
             state.last_observation = Observation(
                 kind="approval_result",
                 message=f"User denied the pending action. Reason: {reason}",
                 stderr_preview=action_text,
             )
-            state.state_summary = "Run terminated because the pending action was denied by the user."
             if trace is not None:
                 trace.approval_resolved(state, "denied", reason)
                 trace.observation_created(state, state.last_observation)

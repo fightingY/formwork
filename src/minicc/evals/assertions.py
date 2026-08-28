@@ -383,7 +383,7 @@ def _assert_trace_action_sequence(
 
     expected = [_normalize_trace_command(command) for command in raw_commands]
     actual = [
-        _normalize_trace_command(str(action.get("command") or ""))
+        _normalize_trace_command(str(_bash_command(action)))
         for event in _read_trace(run_dir)
         if event.get("event") == "action_parsed"
         and isinstance((action := event.get("action")), dict)
@@ -448,7 +448,7 @@ def assert_trace_action_shape_events(
     specs = [dict(action) for action in raw_actions]
     valid_specs = all(_valid_action_shape_spec(spec) for spec in specs)
     bash_events = [
-        (index, str(action.get("command") or "").strip())
+        (index, str(_bash_command(action)).strip())
         for index, event in enumerate(events)
         if event.get("event") == "action_parsed"
         and isinstance((action := event.get("action")), dict)
@@ -549,7 +549,7 @@ def trace_action_shape_evidence_events(
                     "event": "action_parsed",
                     "action": {
                         "type": "bash",
-                        "command": action.get("command"),
+                        "command": _bash_command(action),
                     },
                 }
             )
@@ -721,6 +721,16 @@ def _read_trace(run_dir: Path) -> list[dict[str, Any]]:
 
 def _normalize_trace_command(command: str) -> str:
     return command.strip()
+
+
+def _bash_command(action: Mapping[str, Any]) -> str:
+    """Recorded bash actions are native tool_calls: ``action_to_dict()`` nests
+    the command under ``arguments`` (``{"type": "bash", "id": ..., "arguments":
+    {"command": ...}}``), not as a top-level field."""
+    arguments = action.get("arguments")
+    if isinstance(arguments, Mapping):
+        return str(arguments.get("command") or "")
+    return str(action.get("command") or "")
 
 
 def assertion_spec_sha256(assertion: dict[str, Any]) -> str:

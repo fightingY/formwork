@@ -16,7 +16,7 @@ from minicc.core.context import (
     PromptLayout,
     state_snapshot_text,
 )
-from minicc.core.protocol import BashAction, ProtocolError, parse_action
+from minicc.core.protocol import BashAction, ProtocolError, ToolCall, parse_tool_call
 from minicc.core.provider import CompletionOptions, ModelProvider, ProviderError
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.evals.cache_probe import CacheProbeBundle, write_cache_probe
@@ -119,18 +119,24 @@ def run_fixed_cache_probe(
             )
         else:
             protocol_error: str | None
-            try:
-                action = parse_action(response.text)
-            except ProtocolError as exc:
+            if not response.tool_calls:
                 task_success = False
-                protocol_error = f"ProtocolError: {exc}"
+                protocol_error = "ProtocolError: provider returned no tool_calls."
             else:
-                task_success = isinstance(action, BashAction)
-                protocol_error = (
-                    None
-                    if task_success
-                    else f"ProbeActionError: expected bash, got {action.type}"
-                )
+                tool_call = response.tool_calls[0]
+                try:
+                    arguments = json.loads(tool_call.arguments) if tool_call.arguments else {}
+                    action = parse_tool_call(tool_call.id, tool_call.name, arguments)
+                except (ProtocolError, ValueError) as exc:
+                    task_success = False
+                    protocol_error = f"ProtocolError: {exc}"
+                else:
+                    task_success = isinstance(action, ToolCall) and action.tool == "bash"
+                    protocol_error = (
+                        None
+                        if task_success
+                        else f"ProbeActionError: expected bash, got {tool_call.name}"
+                    )
             record.update(
                 {
                     "request_success": True,

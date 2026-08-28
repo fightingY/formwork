@@ -1,14 +1,19 @@
+import json
 from dataclasses import dataclass
 
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
-from minicc.core.runner import ModelTurnConfig, ModelTurnRunner
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, NativeToolCall
+from minicc.core.runner import ModelTurnRunner
 from minicc.core.state import RunState
 from minicc.trace.recorder import TraceRecorder
 
 
+def _call(name: str, arguments: dict | None = None, *, call_id: str = "c1") -> NativeToolCall:
+    return NativeToolCall(id=call_id, name=name, arguments=json.dumps(arguments or {}))
+
+
 @dataclass
 class FakeProvider:
-    responses: list[str]
+    responses: list[tuple[NativeToolCall, ...]]
 
     def complete(
         self,
@@ -17,20 +22,21 @@ class FakeProvider:
         options: CompletionOptions | None = None,
     ) -> ModelResponse:
         return ModelResponse(
-            text=self.responses.pop(0),
+            text="",
             raw={},
             usage=ModelUsage(prompt_tokens=3, completion_tokens=2),
             latency_ms=5,
+            tool_calls=self.responses.pop(0),
         )
 
 
 def test_model_turn_runner_parses_action_and_records_usage() -> None:
     state = RunState.start("finish")
-    runner = ModelTurnRunner(FakeProvider(['{"type":"final","answer":"done"}']))
+    runner = ModelTurnRunner(FakeProvider([(_call("final", {"answer": "done"}),)]))
 
     turn = runner.next_turn(state, [{"role": "user", "content": "finish"}])
 
-    assert turn.action is not None
+    assert len(turn.actions) == 1
     assert turn.observation is None
     assert state.metrics["turns"] == 1
     assert state.metrics["prompt_tokens"] == 3
@@ -45,10 +51,11 @@ def test_model_turn_runner_records_response_identity() -> None:
     class IdentityProvider:
         def complete(self, messages, *, options=None):
             return ModelResponse(
-                text='{"type":"final","answer":"done"}',
+                text="",
                 raw={"model": "actual-model", "system_fingerprint": "backend-1"},
                 usage=ModelUsage(prompt_tokens=3),
                 latency_ms=5,
+                tool_calls=(_call("final", {"answer": "done"}),),
             )
 
     state = RunState.start("finish")
@@ -62,7 +69,7 @@ def test_model_turn_runner_passes_attempt_metadata_through_to_trace() -> None:
     state = RunState.start("finish")
     trace = TraceRecorder()
     ModelTurnRunner(
-        FakeProvider(['{"type":"final","answer":"done"}']),
+        FakeProvider([(_call("final", {"answer": "done"}),)]),
         trace=trace,
     ).next_turn(state, [], attempt_count=2, retry_reasons=("timeout",))
 
@@ -73,7 +80,7 @@ def test_model_turn_runner_passes_attempt_metadata_through_to_trace() -> None:
 def test_model_turn_runner_defaults_attempt_metadata_to_single() -> None:
     state = RunState.start("finish")
     trace = TraceRecorder()
-    ModelTurnRunner(FakeProvider(['{"type":"final","answer":"done"}']), trace=trace).next_turn(
+    ModelTurnRunner(FakeProvider([(_call("final", {"answer": "done"}),)]), trace=trace).next_turn(
         state, []
     )
 
@@ -81,20 +88,49 @@ def test_model_turn_runner_defaults_attempt_metadata_to_single() -> None:
     assert trace.events[0]["retry_reasons"] == []
 
 
-def test_model_turn_runner_stops_after_protocol_error_limit() -> None:
+def test_model_turn_runner_fails_the_turn_when_provider_returns_no_tool_calls() -> None:
+    # tool_choice="required" makes an empty tool_calls array a provider-contract
+    # violation, not a recoverable "bad model output" case — there is no more
+    # per-runner protocol-error retry budget (the old text-JSON protocol's
+    # ``max_protocol_errors`` concept no longer exists). The runner fails the
+    # run outright on the very first such response.
+    class EmptyToolCallsProvider:
+        def complete(self, messages, *, options=None):
+            return ModelResponse(
+                text="",
+                raw={},
+                usage=ModelUsage(),
+                latency_ms=1,
+                tool_calls=(),
+            )
+
     state = RunState.start("bad")
-    runner = ModelTurnRunner(
-        FakeProvider(["bad", "bad"]),
-        config=ModelTurnConfig(max_protocol_errors=1),
-    )
+    runner = ModelTurnRunner(EmptyToolCallsProvider())
 
-    first = runner.next_turn(state, [{"role": "user", "content": "bad"}])
-    second = runner.next_turn(state, [{"role": "user", "content": "bad again"}])
+    turn = runner.next_turn(state, [{"role": "user", "content": "bad"}])
 
-    assert first.should_continue is True
-    assert first.observation is not None
-    assert second.should_continue is False
+    assert turn.should_continue is False
+    assert turn.actions == ()
+    assert turn.observation is not None
+    assert turn.observation.kind == "command_error"
     assert state.status == "failed"
+
+
+def test_model_turn_runner_returns_non_terminal_observation_on_bad_tool_call_arguments() -> None:
+    # A single tool_call whose arguments string fails to decode/validate is a
+    # runtime-recoverable per-call error (protocol_error), distinct from the
+    # provider-contract violation above: the run is not failed, just fed a
+    # correction observation.
+    state = RunState.start("bad args")
+    runner = ModelTurnRunner(FakeProvider([(NativeToolCall(id="bad", name="bash", arguments="not json"),)]))
+
+    turn = runner.next_turn(state, [{"role": "user", "content": "bad args"}])
+
+    assert turn.should_continue is True
+    assert turn.actions == ()
+    assert turn.observation is not None
+    assert turn.observation.kind == "protocol_error"
+    assert state.status == "running"
 
 
 @dataclass
@@ -108,10 +144,11 @@ class CacheProvider:
         options: CompletionOptions | None = None,
     ) -> ModelResponse:
         return ModelResponse(
-            text='{"type":"bash","command":"true"}',
+            text="",
             raw={},
             usage=self.usages.pop(0),
             latency_ms=1,
+            tool_calls=(_call("bash", {"command": "true"}),),
         )
 
 

@@ -18,6 +18,7 @@ from minicc.config import (
     SandboxSettings,
     Settings,
 )
+from minicc.core.protocol import PROTOCOL_SCHEMA_VERSION
 from minicc.core.state import RunState
 from minicc.core.verification import CommandCompletionVerifier
 from minicc.evals import assertions
@@ -539,7 +540,7 @@ assertions:
     report_data = json.loads(json_path.read_text(encoding="utf-8"))
     assert report_data["case_summary"][0]["pass_rate"] == 1.0
     assert report_data["case_summary"][0]["diff_paths"] == []
-    assert report_data["schema_version"] == 2
+    assert report_data["schema_version"] == PROTOCOL_SCHEMA_VERSION
     assert report_data["suite_id"] == result.suite_id
     run_dir = tmp_path / "runs" / result.cases[0].run_id
     case_result = json.loads(
@@ -735,7 +736,7 @@ def test_two_eval_suites_keep_distinct_manifests_reports_and_run_pointers(tmp_pa
         assert report["completed_at"] is None
         assert run_result["suite_id"] == result.suite_id
         assert run_result["evidence"]["suite_manifest"] == str(bundle.manifest_path.resolve())
-        assert run_result["schema_version"] == 2
+        assert run_result["schema_version"] == PROTOCOL_SCHEMA_VERSION
         assert run_result["task_success"] is True
         assert run_result["agent_success"] is True
         assert run_result["infrastructure_success"] is True

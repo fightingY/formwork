@@ -13,7 +13,9 @@ from types import TracebackType
 from typing import Any
 from uuid import uuid4
 
-LEDGER_SCHEMA_VERSION = 2
+from minicc.core.protocol import PROTOCOL_SCHEMA_VERSION
+
+LEDGER_SCHEMA_VERSION = PROTOCOL_SCHEMA_VERSION
 TERMINAL_RUN_STATUSES = {
     "completed",
     "failed",

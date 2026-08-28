@@ -85,7 +85,6 @@ def test_run_namespace_builds_expected_args() -> None:
             "goal": "  fix the bug  ",
             "milestone": "v4.1",
             "verify_command": ["pytest -q", ""],
-            "profile": "hybrid-v3.6",
             "execute_local": False,
         }
     )
@@ -93,7 +92,6 @@ def test_run_namespace_builds_expected_args() -> None:
     assert ns.goal == "fix the bug"
     assert ns.milestone == "v4.1"
     assert ns.verify_command == ["pytest -q"]
-    assert ns.profile == "hybrid-v3.6"
     assert ns.execute_local is False
     assert ns.source_dir is None
     assert ns.no_workspace_copy is False

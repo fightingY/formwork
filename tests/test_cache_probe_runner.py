@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from minicc.core.context import ContextConfig
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, NativeToolCall
 from minicc.evals.cache_probe_runner import (
     CacheProbeRunConfig,
     fixed_probe_profile_sha256,
@@ -23,7 +23,7 @@ class RecordingProvider:
         self.messages.append(messages)
         index = len(self.messages)
         return ModelResponse(
-            text='{"type":"bash","command":"true"}',
+            text="",
             raw={
                 "model": "fixed-model",
                 "system_fingerprint": "fixed-backend",
@@ -37,6 +37,9 @@ class RecordingProvider:
                 cache_miss_tokens=1000 + index - (10 * index),
             ),
             latency_ms=20 + index,
+            tool_calls=(
+                NativeToolCall(id=f"call-{index}", name="bash", arguments='{"command":"true"}'),
+            ),
         )
 
 
@@ -44,10 +47,13 @@ class InvalidProtocolProvider(RecordingProvider):
     def complete(self, messages, *, options=None):
         response = super().complete(messages, options=options)
         return ModelResponse(
-            text="not-json",
+            text=response.text,
             raw=response.raw,
             usage=response.usage,
             latency_ms=response.latency_ms,
+            tool_calls=(
+                NativeToolCall(id="call-invalid", name="bash", arguments='{"command":""}'),
+            ),
         )
 
 
@@ -55,10 +61,13 @@ class NonBashProvider(RecordingProvider):
     def complete(self, messages, *, options=None):
         response = super().complete(messages, options=options)
         return ModelResponse(
-            text='{"type":"final","answer":"done"}',
+            text=response.text,
             raw=response.raw,
             usage=response.usage,
             latency_ms=response.latency_ms,
+            tool_calls=(
+                NativeToolCall(id="call-final", name="final", arguments='{"answer":"done"}'),
+            ),
         )
 
 

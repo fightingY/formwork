@@ -35,6 +35,7 @@ from minicc.core.ledger import (
 )
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig, TurnProvider
 from minicc.core.project_context import inspect_repository, write_repository_profile
+from minicc.core.protocol import TOOLS
 from minicc.core.provider import (
     CompletionOptions,
     OpenAICompatibleProvider,
@@ -113,7 +114,6 @@ from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.l1 import L1Distiller, MemoryStore, MemoryTurnHook, project_db_path
 from minicc.memory.working import attach_working_memory
 from minicc.meta.reviewer import MetaReviewer, MetaReviewError, load_meta_review
-from minicc.multi_agent import SubprocessChildRunProvider, WorkflowCoordinator, childrun_main
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
 from minicc.sandbox.docker_runner import (
@@ -227,12 +227,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Override provider.stream to true.",
-    )
-    run_parser.add_argument(
-        "--profile",
-        choices=("baseline-bash", "hybrid-v3.6", "multi-agent-v4"),
-        default=None,
-        help="Override tooling profile for this run.",
     )
     run_parser.add_argument(
         "--follow-up-from",
@@ -603,7 +597,6 @@ def build_parser() -> argparse.ArgumentParser:
     replay_run.add_argument("--fresh", action="store_true", help="Also rerun the current Runtime.")
     replay_run.add_argument("--execute-local", action="store_true", help="Use local execution instead of Docker for fresh replay.")
     replay_run.add_argument("--docker-image", default=None, help="Override the Docker image for fresh replay.")
-    replay_run.add_argument("--profile", choices=("baseline-bash", "hybrid-v3.6", "multi-agent-v4"), default=None)
     replay_run.add_argument("--verify-command", action="append", default=[], help="Pre-bound verifier command for fresh replay; repeatable.")
     replay_run.add_argument("--verification-timeout-sec", type=int, default=120)
     replay_run.add_argument("--output-dir", type=Path, default=None)
@@ -677,9 +670,6 @@ def build_parser() -> argparse.ArgumentParser:
     web_parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
     web_parser.add_argument("--port", type=int, default=8765, help="Port to bind.")
     web_parser.set_defaults(handler=web_command)
-    childrun_parser = subparsers.add_parser("childrun", help="Run a V4 child over stdin/stdout JSONL.")
-    childrun_parser.set_defaults(handler=childrun_command)
-
     # --- V5 experimental: conversation sessions (docs/V5_0_SESSION_CHAT_REMODEL_PLAN.md) ---
     session_parser = subparsers.add_parser(
         "session", help="Manage conversation sessions (V5, experimental)."
@@ -794,10 +784,6 @@ def _print_models(models: list[ModelInfo], *, json_output: bool) -> None:
         print(model.id + suffix)
 
 
-def childrun_command(args: argparse.Namespace) -> int:
-    return childrun_main(sys.stdin, sys.stdout)
-
-
 def transcript_command(args: argparse.Namespace) -> int:
     try:
         json_path, markdown_path = project_trace(args.trace, args.output_dir)
@@ -893,7 +879,6 @@ def replay_run_command(args: argparse.Namespace) -> int:
             no_workspace_copy=False,
             docker_image=args.docker_image,
             stream=None,
-            profile=args.profile or manifest.get("profile"),
             follow_up_from=None,
             interrupt_after_steps=None,
         )
@@ -959,8 +944,6 @@ def replay_run_command(args: argparse.Namespace) -> int:
 
 def run_command(args: argparse.Namespace) -> int:
     settings = load_settings()
-    if getattr(args, "profile", None):
-        settings = replace(settings, tooling=replace(settings.tooling, profile=args.profile))
     milestone = _effective_milestone(settings, args)
     catalog = RunCatalog(Path.cwd() / ".minicc" / "versions")
     source_arg = getattr(args, "source_dir", None)
@@ -1061,7 +1044,14 @@ def run_command(args: argparse.Namespace) -> int:
                     workspace_dir=workspace.workspace_dir,
                     artifacts_dir=workspace.artifacts_dir,
                 )
-                executor = DockerCommandExecutor(runner, artifacts=artifacts)
+                docker_restart_params: dict[str, object] = {
+                    "run_id": state.run_id,
+                    "workspace_dir": workspace.workspace_dir,
+                    "artifacts_dir": workspace.artifacts_dir,
+                }
+                executor = DockerCommandExecutor(
+                    runner, artifacts=artifacts, restart_params=docker_restart_params
+                )
 
         _attach_repository_context(state, state.workspace_host_path or Path.cwd())
 
@@ -1196,7 +1186,14 @@ def resume_command(args: argparse.Namespace) -> int:
                 workspace_dir=state.workspace_host_path,
                 artifacts_dir=artifacts_dir,
             )
-            executor = DockerCommandExecutor(runner, artifacts=artifacts)
+            docker_restart_params: dict[str, object] = {
+                "run_id": state.run_id,
+                "workspace_dir": state.workspace_host_path,
+                "artifacts_dir": artifacts_dir,
+            }
+            executor = DockerCommandExecutor(
+                runner, artifacts=artifacts, restart_params=docker_restart_params
+            )
 
         if not from_checkpoint:
             session.apply_pending_approval_result(state, executor, trace=trace)
@@ -1540,20 +1537,6 @@ def _build_turn_provider(
     )
 
 
-def _child_route(settings: Settings) -> ProviderRoute:
-    child = settings.child
-    if child is None:
-        return settings.default_route
-    return settings.providers[child.provider]
-
-
-def _child_model(settings: Settings) -> str | None:
-    route = _child_route(settings)
-    if settings.child is not None and settings.child.model:
-        return settings.child.model
-    return route.model
-
-
 def _aux_route(settings: Settings) -> ProviderRoute:
     """离线辅助模型（Meta Review / 语义压缩）走的 route；缺省回退主 route。"""
     aux = settings.aux
@@ -1743,26 +1726,12 @@ def _build_loop(
             feedback_memory = FeedbackMemory(
                 state.workspace_host_path / str(state.metrics["guidance_feedback_path"])
             )
-    profile = settings.tooling.profile
-    scheduler = (
-        ToolCallScheduler(
-            HybridToolRunner(executor),
-            max_parallel_tool_calls=settings.tooling.max_parallel_tool_calls,
-        )
-        if profile == "hybrid-v3.6"
-        else None
+    scheduler = ToolCallScheduler(
+        HybridToolRunner(executor),
+        max_parallel_tool_calls=settings.tooling.max_parallel_tool_calls,
     )
     if state is not None:
-        state.metrics["profile"] = profile
         state.metrics["max_parallel_tool_calls"] = settings.tooling.max_parallel_tool_calls
-        state.metrics["child_model"] = _child_model(settings) if profile == "multi-agent-v4" else None
-    workflow_coordinator = None
-    if profile == "multi-agent-v4":
-        child_route = _child_route(settings)
-        workflow_coordinator = WorkflowCoordinator(
-            SubprocessChildRunProvider(timeout_sec=child_route.timeout_ms / 1000),
-            max_concurrent_children=settings.tooling.max_parallel_tool_calls,
-        )
     return AgentLoop(
         provider,
         executor,
@@ -1795,7 +1764,6 @@ def _build_loop(
         checkpoint_manager=checkpoint_manager,
         completion_verifier=completion_verifier,
         tool_scheduler=scheduler,
-        workflow_coordinator=workflow_coordinator,
         turn_provider_factory=lambda runner: _build_turn_provider(runner, provider, settings),
         config=LoopConfig(
             max_seconds=settings.budget.max_seconds,
@@ -1805,11 +1773,11 @@ def _build_loop(
                 temperature=0.0,
                 stream=False if stream is None else stream,
                 include_usage=True,
-                json_mode=settings.default_route.json_mode,
+                tools=TOOLS,
+                tool_choice="required",
                 on_text_delta=None,
             ),
             interrupt_after_steps=interrupt_after_steps,
-            profile=profile,
             max_parallel_tool_calls=settings.tooling.max_parallel_tool_calls,
             max_tool_calls_per_step=settings.tooling.max_tool_calls_per_step,
         ),
@@ -2010,7 +1978,15 @@ def eval_command(args: argparse.Namespace) -> int:
                     artifacts_dir=state.artifacts_dir,
                     writable_paths=case.writable_paths,
                 )
-                executor = DockerCommandExecutor(runner, artifacts=artifacts)
+                docker_restart_params: dict[str, object] = {
+                    "run_id": state.run_id,
+                    "workspace_dir": state.workspace_host_path,
+                    "artifacts_dir": state.artifacts_dir,
+                    "writable_paths": case.writable_paths,
+                }
+                executor = DockerCommandExecutor(
+                    runner, artifacts=artifacts, restart_params=docker_restart_params
+                )
             session = SessionManager()
             session.save(state)
             case_settings = _settings_for_eval_case(settings, case)
@@ -2206,7 +2182,15 @@ def memory_eval_command(args: argparse.Namespace) -> int:
                     artifacts_dir=state.artifacts_dir,
                     writable_paths=eval_case.writable_paths,
                 )
-                executor = DockerCommandExecutor(runner, artifacts=artifacts)
+                docker_restart_params: dict[str, object] = {
+                    "run_id": state.run_id,
+                    "workspace_dir": state.workspace_host_path,
+                    "artifacts_dir": state.artifacts_dir,
+                    "writable_paths": eval_case.writable_paths,
+                }
+                executor = DockerCommandExecutor(
+                    runner, artifacts=artifacts, restart_params=docker_restart_params
+                )
             session = SessionManager()
             session.save(state)
             case_settings = _settings_for_eval_case(settings, eval_case)
@@ -2705,7 +2689,6 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
             providers=settings.providers,
             default_provider=settings.default_provider,
             failover=settings.failover,
-            child=settings.child,
             sandbox=settings.sandbox,
             budget=budget,
             context=context,
@@ -2725,7 +2708,6 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
         providers=settings.providers,
         default_provider=settings.default_provider,
         failover=settings.failover,
-        child=settings.child,
         sandbox=sandbox,
         budget=budget,
         context=context,

@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
+from uuid import uuid4
 
 from minicc.core.context import state_snapshot_text
 from minicc.core.protocol import (
     Action,
     AskAction,
     BashAction,
-    DelegateAction,
+    CodeModeAction,
     FinalAction,
     SkillAction,
-    ToolCallsAction,
+    ToolCall,
 )
 from minicc.core.session import (
     SessionManager,
@@ -21,6 +22,7 @@ from minicc.core.session import (
     record_execution_metrics,
 )
 from minicc.core.state import Observation, RunState, TrajectoryStep
+from minicc.core.tooling import ToolCallScheduler
 from minicc.core.verification import CompletionVerifier
 from minicc.memory.working import ground_memory_references
 from minicc.policy.base import PolicyChain, PolicyDecision
@@ -49,6 +51,8 @@ class ActionHandler:
         trace: TraceRecorder | None = None,
         completion_verifier: CompletionVerifier | None = None,
         skill_registry: SkillRegistry | None = None,
+        tool_scheduler: ToolCallScheduler | None = None,
+        code_mode_timeout_sec: int = 120,
     ) -> None:
         self.executor = executor
         self.policy_chain = policy_chain or PolicyChain()
@@ -56,7 +60,13 @@ class ActionHandler:
         self.trace = trace
         self.completion_verifier = completion_verifier
         self.skill_registry = skill_registry
+        # Code Mode reuses the same ToolCallScheduler/policy/executor path as
+        # ordinary tool_calls dispatch — set by AgentLoop after both are built,
+        # since the scheduler is constructed independently of ActionHandler.
+        self.tool_scheduler = tool_scheduler
+        self.code_mode_timeout_sec = code_mode_timeout_sec
         self._active_verification_state: RunState | None = None
+        self._code_mode_state: RunState | None = None
 
     def handle(self, action: Action, state: RunState) -> ActionOutcome:
         if self.trace is not None:
@@ -118,13 +128,82 @@ class ActionHandler:
         if isinstance(action, SkillAction):
             return self._handle_skill(action, state)
 
-        if isinstance(action, ToolCallsAction):
-            raise TypeError("ToolCallsAction must be handled by ToolCallScheduler")
+        if isinstance(action, CodeModeAction):
+            return self._handle_code_mode(action, state)
 
-        if isinstance(action, DelegateAction):
-            raise TypeError("DelegateAction must be handled by WorkflowCoordinator")
+        if isinstance(action, BashAction):
+            return self._handle_bash(action, state)
 
-        return self._handle_bash(action, state)
+        raise TypeError(
+            f"ActionHandler.handle() only accepts BashAction/FinalAction/AskAction/SkillAction/"
+            f"CodeModeAction; ToolCall/ToolCallBatch are dispatched via ToolCallScheduler in "
+            f"AgentLoop.run(), not through here. Got: {type(action).__name__}"
+        )
+
+    def _handle_code_mode(self, action: CodeModeAction, state: RunState) -> ActionOutcome:
+        run_code_mode = getattr(self.executor, "run_code_mode", None)
+        if not callable(run_code_mode):
+            observation = Observation(
+                kind="command_error",
+                message=(
+                    "code_mode is only available with the Docker sandbox executor; "
+                    "use read/edit/write/bash individually instead."
+                ),
+            )
+            state.last_observation = observation
+            if self.trace is not None:
+                self.trace.observation_created(state, observation)
+            return ActionOutcome(
+                steps=[
+                    TrajectoryStep(
+                        action=action,
+                        observation=observation,
+                        state_snapshot=state_snapshot_text(state),
+                    )
+                ]
+            )
+        if self.trace is not None:
+            self.trace.sandbox_exec_started(state, f"code_mode: {len(action.script)} chars")
+        self._code_mode_state = state
+        try:
+            observation = run_code_mode(
+                action,
+                state,
+                timeout_sec=self.code_mode_timeout_sec,
+                dispatch=self._dispatch_code_mode_call,
+            )
+        finally:
+            self._code_mode_state = None
+        state.last_observation = observation
+        if self.trace is not None:
+            self.trace.sandbox_exec_finished(state, observation)
+            self.trace.observation_created(state, observation)
+        return ActionOutcome(
+            steps=[
+                TrajectoryStep(
+                    action=action,
+                    observation=observation,
+                    state_snapshot=state_snapshot_text(state),
+                )
+            ]
+        )
+
+    def _dispatch_code_mode_call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Route one Code Mode facade call (read/edit/write/bash) through the
+        normal ToolCallScheduler dispatch path, so it gets the same policy
+        evaluation, optimistic-locking, and is_error normalization as an
+        ordinary model-issued tool call."""
+        if self.tool_scheduler is None or self._code_mode_state is None:
+            return {"is_error": True, "content": {"error": "Code Mode dispatch is unavailable: no tool scheduler configured."}}
+        state = self._code_mode_state
+        if tool not in {"read", "edit", "write", "bash"}:
+            return {"is_error": True, "content": {"error": f"Unknown tool: {tool!r}"}}
+        call = ToolCall(id=f"code-mode-{uuid4().hex[:8]}", tool=tool, arguments=arguments)  # type: ignore[arg-type]
+        results = self.tool_scheduler.dispatch((call,), state)
+        if not results:
+            return {"is_error": True, "content": {"error": f"Code Mode dispatch produced no result for tool {tool!r}."}}
+        result = results[0]
+        return {"is_error": result.is_error, "content": result.content}
 
     def _handle_skill(self, action: SkillAction, state: RunState) -> ActionOutcome:
         loaded = self.skill_registry.load_text(action.name) if self.skill_registry else None

@@ -1,14 +1,10 @@
-import json
 import threading
 import time
 from pathlib import Path
 
-import pytest
-
-from minicc.core.context import ContextBuilder
 from minicc.core.loop import AgentLoop, LoopConfig
-from minicc.core.protocol import ProtocolError, ToolCall, ToolCallsAction, parse_action
-from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
+from minicc.core.protocol import ToolCall
+from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage, NativeToolCall
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState
 from minicc.core.tooling import (
@@ -23,63 +19,6 @@ from minicc.trace.recorder import TraceRecorder
 class NoopBashExecutor:
     def run(self, action, state: RunState) -> Observation:
         return Observation(kind="command_result", exit_code=0, stdout_preview=action.command)
-
-
-def test_tool_calls_protocol_preserves_order_and_normalizes_bash() -> None:
-    action = parse_action(
-        json.dumps(
-            {
-                "type": "tool_calls",
-                "calls": [
-                    {"id": "r1", "tool": "read", "arguments": {"path": "a.py"}},
-                    {"id": "b1", "tool": "bash", "arguments": {"command": " pytest -q "}},
-                ],
-            }
-        ),
-        max_timeout_sec=20,
-    )
-
-    assert isinstance(action, ToolCallsAction)
-    assert [call.id for call in action.calls] == ["r1", "b1"]
-    assert action.calls[1].arguments["command"] == "pytest -q"
-    assert action.calls[1].arguments["timeout_sec"] == 20
-
-
-@pytest.mark.parametrize(
-    "payload, message",
-    [
-        ({"type": "tool_calls", "calls": []}, "non-empty array"),
-        (
-            {
-                "type": "tool_calls",
-                "calls": [
-                    {"id": "same", "tool": "read", "arguments": {"path": "a"}},
-                    {"id": "same", "tool": "read", "arguments": {"path": "b"}},
-                ],
-            },
-            "Duplicate tool call id",
-        ),
-        (
-            {"type": "tool_calls", "calls": [{"id": "x", "tool": "grep", "arguments": {}}]},
-            "Unknown tool",
-        ),
-    ],
-)
-def test_tool_calls_protocol_rejects_invalid_envelopes(payload: dict, message: str) -> None:
-    with pytest.raises(ProtocolError, match=message):
-        parse_action(json.dumps(payload))
-
-
-def test_tool_calls_protocol_honors_configurable_limit() -> None:
-    payload = {
-        "type": "tool_calls",
-        "calls": [
-            {"id": f"r{index}", "tool": "read", "arguments": {"path": "a"}}
-            for index in range(3)
-        ],
-    }
-    with pytest.raises(ProtocolError, match="at most 2"):
-        parse_action(json.dumps(payload), max_tool_calls=2)
 
 
 def test_read_is_bounded_numbered_and_returns_version(tmp_path: Path) -> None:
@@ -198,16 +137,14 @@ def test_scheduler_overlaps_reads_drains_before_exclusive_and_orders_results() -
                 {"id": call.id},
             )
 
-    action = ToolCallsAction(
-        (
-            ToolCall("slow", "read", {"path": "a"}),
-            ToolCall("fast", "read", {"path": "b"}),
-            ToolCall("write", "write", {"path": "c", "content": "x"}),
-            ToolCall("after", "read", {"path": "d"}),
-        )
+    calls = (
+        ToolCall("slow", "read", {"path": "a"}),
+        ToolCall("fast", "read", {"path": "b"}),
+        ToolCall("write", "write", {"path": "c", "content": "x"}),
+        ToolCall("after", "read", {"path": "d"}),
     )
     results = ToolCallScheduler(RecordingRunner(), max_parallel_tool_calls=2).dispatch(
-        action, RunState.start("schedule")
+        calls, RunState.start("schedule")
     )
 
     assert [result.call_id for result in results] == ["slow", "fast", "write", "after"]
@@ -226,34 +163,32 @@ def test_hybrid_bash_adapter_reuses_existing_executor() -> None:
     assert result.content["stdout"] == "pytest -q"
 
 
-def test_hybrid_loop_commits_ordered_tool_results_and_next_control_turn(tmp_path: Path) -> None:
+def test_loop_commits_ordered_tool_results_and_next_control_turn(tmp_path: Path) -> None:
     class Provider:
         def __init__(self) -> None:
             self.responses = [
-                json.dumps(
-                    {
-                        "type": "tool_calls",
-                        "calls": [
-                            {"id": "a", "tool": "read", "arguments": {"path": "a.txt"}},
-                            {"id": "b", "tool": "read", "arguments": {"path": "b.txt"}},
-                        ],
-                    }
+                (
+                    (
+                        NativeToolCall(id="a", name="read", arguments='{"path":"a.txt"}'),
+                        NativeToolCall(id="b", name="read", arguments='{"path":"b.txt"}'),
+                    ),
                 ),
-                '{"type":"final","answer":"done"}',
+                ((NativeToolCall(id="f", name="final", arguments='{"answer":"done"}'),),),
             ]
 
         def complete(self, messages, *, options: CompletionOptions | None = None) -> ModelResponse:
+            (tool_calls,) = self.responses.pop(0)
             return ModelResponse(
-                text=self.responses.pop(0),
+                text="",
                 raw={},
                 usage=ModelUsage(prompt_tokens=1, completion_tokens=1),
                 latency_ms=1,
+                tool_calls=tool_calls,
             )
 
     (tmp_path / "a.txt").write_text("a\n", encoding="utf-8")
     (tmp_path / "b.txt").write_text("b\n", encoding="utf-8")
     state = RunState.start("hybrid", workspace_host_path=tmp_path, run_dir=tmp_path / "run")
-    state.metrics["profile"] = "hybrid-v3.6"
     trace = TraceRecorder()
     runner = HybridToolRunner(NoopBashExecutor())
     loop = AgentLoop(
@@ -261,7 +196,7 @@ def test_hybrid_loop_commits_ordered_tool_results_and_next_control_turn(tmp_path
         NoopBashExecutor(),
         session=SessionManager(runs_root=tmp_path / "runs"),
         trace=trace,
-        config=LoopConfig(profile="hybrid-v3.6"),
+        config=LoopConfig(),
         tool_scheduler=ToolCallScheduler(runner, max_parallel_tool_calls=2),
     )
 
@@ -279,4 +214,3 @@ def test_hybrid_loop_commits_ordered_tool_results_and_next_control_turn(tmp_path
     ]
     call_events = [event for event in trace.events if event["event"] == "tool/call"]
     assert [event["call_id"] for event in call_events] == ["a", "b"]
-    assert "hybrid-v3.6" in ContextBuilder().build_messages(state, [])[0]["content"]

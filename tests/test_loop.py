@@ -12,18 +12,31 @@ from minicc.core.provider import (
     LlmFailure,
     ModelResponse,
     ModelUsage,
+    NativeToolCall,
     ProviderError,
 )
 from minicc.core.session import SessionManager
 from minicc.core.state import Observation, RunState
+from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
 from minicc.policy.base import PolicyChain, PolicyDecision
 from minicc.policy.network import NetworkPolicy
 from minicc.trace.recorder import TraceRecorder
 
 
+def _call(name: str, arguments: dict | None = None, *, call_id: str = "c1") -> NativeToolCall:
+    return NativeToolCall(id=call_id, name=name, arguments=json.dumps(arguments or {}))
+
+
+def _scheduler(executor) -> ToolCallScheduler:
+    # bash is dispatched as a ``ToolCall`` through ToolCallScheduler/HybridToolRunner
+    # under native tool calling, not directly by ActionHandler like the old
+    # text-JSON BashAction path — tests exercising bash need this wired up.
+    return ToolCallScheduler(HybridToolRunner(executor), max_parallel_tool_calls=1)
+
+
 @dataclass
 class FakeProvider:
-    responses: list[str]
+    responses: list[tuple[NativeToolCall, ...]]
 
     def complete(
         self,
@@ -32,10 +45,11 @@ class FakeProvider:
         options: CompletionOptions | None = None,
     ) -> ModelResponse:
         return ModelResponse(
-            text=self.responses.pop(0),
+            text="",
             raw={},
             usage=ModelUsage(prompt_tokens=10, completion_tokens=2, cached_tokens=5),
             latency_ms=7,
+            tool_calls=self.responses.pop(0),
         )
 
 
@@ -56,14 +70,19 @@ class FakeExecutor(BashExecutor):
 def test_loop_runs_bash_then_final(tmp_path) -> None:
     provider = FakeProvider(
         [
-            '{"type":"bash","command":"pytest -q","purpose":"run tests"}',
-            '{"type":"final","answer":"Tests passed."}',
+            (_call("bash", {"command": "pytest -q", "description": "run tests"}),),
+            (_call("final", {"answer": "Tests passed."}),),
         ]
     )
     executor = FakeExecutor()
     state = RunState.start("Run tests")
 
-    result = AgentLoop(provider, executor, session=SessionManager(runs_root=tmp_path / "runs")).run(state)
+    result = AgentLoop(
+        provider,
+        executor,
+        tool_scheduler=_scheduler(executor),
+        session=SessionManager(runs_root=tmp_path / "runs"),
+    ).run(state)
 
     assert result.state.status == "completed"
     assert result.state.final_answer == "Tests passed."
@@ -75,18 +94,28 @@ def test_loop_runs_bash_then_final(tmp_path) -> None:
 
 
 def test_loop_turns_protocol_error_into_observation_then_recovers(tmp_path) -> None:
-    provider = FakeProvider(["not json", '{"type":"final","answer":"Recovered."}'])
+    # A tool_call whose ``arguments`` string fails to JSON-decode is the current
+    # equivalent of the old "malformed text" case: the provider API still
+    # guarantees a structurally valid tool_calls array, but the JSON text inside
+    # ``function.arguments`` is still adapter-validated per call.
+    bad_call = NativeToolCall(id="bad", name="bash", arguments="not json")
+    provider = FakeProvider([(bad_call,), (_call("final", {"answer": "Recovered."}),)])
     state = RunState.start("Handle protocol error")
 
-    result = AgentLoop(provider, FakeExecutor(), session=SessionManager(runs_root=tmp_path / "runs")).run(state)
+    executor = FakeExecutor()
+    result = AgentLoop(
+        provider,
+        executor,
+        tool_scheduler=_scheduler(executor),
+        session=SessionManager(runs_root=tmp_path / "runs"),
+    ).run(state)
 
     assert result.state.status == "completed"
-    assert result.state.metrics["protocol_errors"] == 1
     assert result.trajectory[0].observation.kind == "protocol_error"
 
 
 def test_loop_waits_on_ask_action(tmp_path) -> None:
-    provider = FakeProvider(['{"type":"ask","question":"Which test command should I use?"}'])
+    provider = FakeProvider([(_call("ask", {"question": "Which test command should I use?"}),)])
     state = RunState.start("Need clarification")
 
     result = AgentLoop(provider, FakeExecutor(), session=SessionManager(runs_root=tmp_path / "runs")).run(state)
@@ -95,21 +124,32 @@ def test_loop_waits_on_ask_action(tmp_path) -> None:
     assert result.state.open_questions == ["Which test command should I use?"]
 
 
-def test_loop_fails_after_protocol_error_threshold(tmp_path) -> None:
-    provider = FakeProvider(["bad 1", "bad 2", "bad 3"])
+def test_loop_recovers_from_repeated_protocol_errors_without_a_cap(tmp_path) -> None:
+    # LoopConfig no longer has ``max_protocol_errors`` (the old text-JSON retry
+    # budget was deleted along with the text-JSON protocol): a per-call argument
+    # ProtocolError is always non-terminal now, however many times it recurs.
+    provider = FakeProvider(
+        [
+            (NativeToolCall(id="bad1", name="bash", arguments="{}"),),
+            (NativeToolCall(id="bad2", name="bash", arguments="{}"),),
+            (NativeToolCall(id="bad3", name="bash", arguments="{}"),),
+            (_call("final", {"answer": "done"}),),
+        ]
+    )
     state = RunState.start("Bad model")
 
     result = AgentLoop(
         provider,
         FakeExecutor(),
         session=SessionManager(runs_root=tmp_path / "runs"),
-        config=LoopConfig(max_protocol_errors=2),
     ).run(state)
 
-    assert result.state.status == "failed"
-    assert result.state.metrics["protocol_errors"] == 3
-    saved = json.loads((tmp_path / "runs" / state.run_id / "state.json").read_text(encoding="utf-8"))
-    assert saved["status"] == "failed"
+    assert result.state.status == "completed"
+    assert result.state.final_answer == "done"
+    protocol_error_steps = [
+        step for step in result.trajectory if step.observation.kind == "protocol_error"
+    ]
+    assert len(protocol_error_steps) == 3
 
 
 def test_loop_persists_provider_failure_instead_of_raising(tmp_path) -> None:
@@ -144,8 +184,8 @@ def test_loop_persists_provider_failure_instead_of_raising(tmp_path) -> None:
 def test_loop_turns_policy_deny_into_observation(tmp_path) -> None:
     provider = FakeProvider(
         [
-            '{"type":"bash","command":"sudo apt update"}',
-            '{"type":"final","answer":"Stopped."}',
+            (_call("bash", {"command": "sudo apt update"}),),
+            (_call("final", {"answer": "Stopped."}),),
         ]
     )
 
@@ -155,26 +195,36 @@ def test_loop_turns_policy_deny_into_observation(tmp_path) -> None:
         def evaluate(self, action: BashAction, state: RunState) -> PolicyDecision:
             return PolicyDecision(type="deny", reason="nope", policy_name=self.name)
 
+    executor = FakeExecutor()
     result = AgentLoop(
         provider,
-        FakeExecutor(),
+        executor,
+        tool_scheduler=_scheduler(executor),
         policy_chain=PolicyChain([DenyPolicy()]),
         session=SessionManager(runs_root=tmp_path / "runs"),
     ).run(RunState.start("deny command"))
 
+    # bash now dispatches through ToolCallScheduler, whose ordered-results step
+    # aggregates into a generic command_error/command_result Observation kind;
+    # the individual tool result's ``content["kind"]`` still carries the
+    # original policy_violation classification.
     assert result.state.status == "completed"
-    assert result.trajectory[0].observation.kind == "policy_violation"
+    assert result.trajectory[0].observation.kind == "command_error"
+    payload = json.loads(result.trajectory[0].observation.stdout_preview)
+    assert payload[0]["content"]["kind"] == "policy_violation"
     assert result.state.metrics["policy_denials"] == 1
 
 
 def test_loop_waits_for_policy_approval(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    provider = FakeProvider(['{"type":"bash","command":"pip install pytest"}'])
+    provider = FakeProvider([(_call("bash", {"command": "pip install pytest"}),)])
     state = RunState.start("install dependency", run_dir=tmp_path)
+    executor = FakeExecutor()
 
     result = AgentLoop(
         provider,
-        FakeExecutor(),
+        executor,
+        tool_scheduler=_scheduler(executor),
         policy_chain=PolicyChain([NetworkPolicy(mode="locked", require_approval=True)]),
     ).run(state)
 
@@ -188,16 +238,18 @@ def test_loop_waits_for_policy_approval(tmp_path, monkeypatch) -> None:
 def test_loop_records_trace_and_metrics(tmp_path) -> None:
     provider = FakeProvider(
         [
-            '{"type":"bash","command":"pytest -q","purpose":"run tests"}',
-            '{"type":"final","answer":"Tests passed."}',
+            (_call("bash", {"command": "pytest -q", "description": "run tests"}),),
+            (_call("final", {"answer": "Tests passed."}),),
         ]
     )
     state = RunState.start("Run tests", run_dir=tmp_path)
     trace_path = tmp_path / "trace.jsonl"
+    executor = FakeExecutor()
 
     result = AgentLoop(
         provider,
-        FakeExecutor(),
+        executor,
+        tool_scheduler=_scheduler(executor),
         trace=TraceRecorder(trace_path),
     ).run(state)
 
@@ -221,17 +273,19 @@ def test_loop_records_trace_and_metrics(tmp_path) -> None:
 def test_loop_default_config_has_no_turn_cap(tmp_path) -> None:
     provider = FakeProvider(
         [
-            '{"type":"bash","command":"a"}',
-            '{"type":"bash","command":"b"}',
-            '{"type":"bash","command":"c"}',
-            '{"type":"final","answer":"done"}',
+            (_call("bash", {"command": "a"}, call_id="a"),),
+            (_call("bash", {"command": "b"}, call_id="b"),),
+            (_call("bash", {"command": "c"}, call_id="c"),),
+            (_call("final", {"answer": "done"}),),
         ]
     )
     state = RunState.start("many turns")
+    executor = FakeExecutor()
 
     result = AgentLoop(
         provider,
-        FakeExecutor(),
+        executor,
+        tool_scheduler=_scheduler(executor),
         session=SessionManager(runs_root=tmp_path / "runs"),
     ).run(state)
 
@@ -242,17 +296,19 @@ def test_loop_default_config_has_no_turn_cap(tmp_path) -> None:
 def test_loop_fails_when_max_turns_exhausted(tmp_path) -> None:
     provider = FakeProvider(
         [
-            '{"type":"bash","command":"a"}',
-            '{"type":"bash","command":"b"}',
-            '{"type":"bash","command":"c"}',
-            '{"type":"final","answer":"done"}',
+            (_call("bash", {"command": "a"}, call_id="a"),),
+            (_call("bash", {"command": "b"}, call_id="b"),),
+            (_call("bash", {"command": "c"}, call_id="c"),),
+            (_call("final", {"answer": "done"}),),
         ]
     )
     state = RunState.start("capped turns")
+    executor = FakeExecutor()
 
     result = AgentLoop(
         provider,
-        FakeExecutor(),
+        executor,
+        tool_scheduler=_scheduler(executor),
         session=SessionManager(runs_root=tmp_path / "runs"),
         config=LoopConfig(max_turns=2),
     ).run(state)
@@ -262,7 +318,12 @@ def test_loop_fails_when_max_turns_exhausted(tmp_path) -> None:
     assert result.state.metrics["turns"] == 2
 
 
-def test_loop_fails_fast_when_provider_truncates_at_token_limit(tmp_path) -> None:
+def test_loop_fails_fast_when_provider_returns_no_tool_calls(tmp_path) -> None:
+    # tool_choice="required" guarantees a structurally valid tool_calls array from
+    # a well-behaved provider; a response that still comes back empty (e.g. the
+    # model got cut off at a token limit before emitting one) is a provider-contract
+    # violation the loop can't recover from, so it fails the run outright on the
+    # first turn rather than looping.
     class LengthTruncatedProvider:
         def complete(self, messages, *, options=None):
             return ModelResponse(
@@ -271,6 +332,7 @@ def test_loop_fails_fast_when_provider_truncates_at_token_limit(tmp_path) -> Non
                 usage=ModelUsage(prompt_tokens=10, completion_tokens=2048),
                 latency_ms=7,
                 finish_reason="length",
+                tool_calls=(),
             )
 
     state = RunState.start("Truncated answer")
@@ -282,8 +344,9 @@ def test_loop_fails_fast_when_provider_truncates_at_token_limit(tmp_path) -> Non
     ).run(state)
 
     assert result.state.status == "failed"
-    assert "finish_reason=length" in result.state.state_summary
+    assert "no tool_calls" in result.state.state_summary
     assert result.state.metrics.get("protocol_errors", 0) == 0
+    assert result.state.metrics["turns"] == 1
 
 
 class _OverflowThenOkProvider:
@@ -300,26 +363,30 @@ class _OverflowThenOkProvider:
             )
         if self.calls <= 2:
             return ModelResponse(
-                text='{"type":"bash","command":"echo step","purpose":"grow"}',
+                text="",
                 raw={},
                 usage=ModelUsage(),
                 latency_ms=1,
+                tool_calls=(_call("bash", {"command": "echo step", "description": "grow"}),),
             )
         return ModelResponse(
-            text='{"type":"final","answer":"done"}',
+            text="",
             raw={},
             usage=ModelUsage(),
             latency_ms=1,
+            tool_calls=(_call("final", {"answer": "done"}),),
         )
 
 
 def test_overflow_recovery_compacts_and_retries(tmp_path) -> None:
     builder = ContextBuilder(ContextConfig(recent_turns=0))
     state = RunState.start("grow then overflow")
+    executor = FakeExecutor()
 
     result = AgentLoop(
         _OverflowThenOkProvider(),
-        FakeExecutor(),
+        executor,
+        tool_scheduler=_scheduler(executor),
         context_builder=builder,
         session=SessionManager(runs_root=tmp_path / "runs"),
     ).run(state)
@@ -338,10 +405,11 @@ def test_overflow_recovery_exhausts_retries_and_fails(tmp_path) -> None:
             self.calls += 1
             if self.calls <= 2:
                 return ModelResponse(
-                    text='{"type":"bash","command":"echo step","purpose":"grow"}',
+                    text="",
                     raw={},
                     usage=ModelUsage(),
                     latency_ms=1,
+                    tool_calls=(_call("bash", {"command": "echo step", "description": "grow"}),),
                 )
             raise ProviderError(
                 failure=LlmFailure(message="context too long", code=CONTEXT_OVERFLOW)
@@ -349,10 +417,12 @@ def test_overflow_recovery_exhausts_retries_and_fails(tmp_path) -> None:
 
     builder = ContextBuilder(ContextConfig(recent_turns=0))
     state = RunState.start("persistent overflow")
+    executor = FakeExecutor()
 
     result = AgentLoop(
         AlwaysOverflow(),
-        FakeExecutor(),
+        executor,
+        tool_scheduler=_scheduler(executor),
         context_builder=builder,
         session=SessionManager(runs_root=tmp_path / "runs"),
     ).run(state)
@@ -365,10 +435,12 @@ def test_overflow_recovery_exhausts_retries_and_fails(tmp_path) -> None:
 def test_overflow_recovery_disabled_when_zero(tmp_path) -> None:
     builder = ContextBuilder(ContextConfig(recent_turns=0, max_overflow_retries=0))
     state = RunState.start("no recovery")
+    executor = FakeExecutor()
 
     result = AgentLoop(
         _OverflowThenOkProvider(),
-        FakeExecutor(),
+        executor,
+        tool_scheduler=_scheduler(executor),
         context_builder=builder,
         session=SessionManager(runs_root=tmp_path / "runs"),
     ).run(state)
@@ -401,10 +473,12 @@ def test_overflow_recovery_disabled_compaction_fails(tmp_path) -> None:
         ContextConfig(recent_turns=0, compaction_strategy="disabled")
     )
     state = RunState.start("compaction disabled")
+    executor = FakeExecutor()
 
     result = AgentLoop(
         _OverflowThenOkProvider(),
-        FakeExecutor(),
+        executor,
+        tool_scheduler=_scheduler(executor),
         context_builder=builder,
         session=SessionManager(runs_root=tmp_path / "runs"),
     ).run(state)

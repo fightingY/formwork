@@ -24,7 +24,9 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-SESSION_SCHEMA_VERSION = 1
+from minicc.core.protocol import PROTOCOL_SCHEMA_VERSION
+
+SESSION_SCHEMA_VERSION = PROTOCOL_SCHEMA_VERSION
 MessageRole = Literal["user", "assistant"]
 
 
