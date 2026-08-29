@@ -7,12 +7,17 @@ from .multi_agent import (
     Evidence,
     Fact,
     ForkSnapshot,
+    JobRecord,
+    JobRegistry,
     MultiAgentError,
     MultiAgentManager,
+    TaskClaimRegistry,
+    WorkspaceLeaseRegistry,
 )
 from .projections import ProjectionRegistry, default_projections
 
 __all__ = [
     "EventLog", "EventValidationError", "SessionEvent", "ProjectionRegistry", "default_projections",
-    "ChildResult", "ChildTask", "Evidence", "Fact", "ForkSnapshot", "MultiAgentError", "MultiAgentManager",
+    "ChildResult", "ChildTask", "Evidence", "Fact", "ForkSnapshot", "JobRecord", "JobRegistry",
+    "MultiAgentError", "MultiAgentManager", "TaskClaimRegistry", "WorkspaceLeaseRegistry",
 ]

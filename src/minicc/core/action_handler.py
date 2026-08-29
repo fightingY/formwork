@@ -176,6 +176,7 @@ class ActionHandler:
                     max_turns=int(item.get("max_turns", 0)),
                     timeout_sec=float(item.get("timeout_sec", 0)),
                     output_schema=str(item["output_schema"]) if item.get("output_schema") else None,
+                    dedupe_key=str(item["dedupe_key"]) if item.get("dedupe_key") else None,
                 )
                 for item in action.tasks
             ]

@@ -55,6 +55,7 @@ class ChildTask:
     max_turns: int = 0
     timeout_sec: float = 0
     output_schema: str | None = None
+    dedupe_key: str | None = None
 
 
 @dataclass
@@ -196,6 +197,41 @@ class WorkspaceLeaseRegistry:
             return lock, epoch
 
 
+class TaskClaimRegistry:
+    """Atomic claim table preventing duplicate work across workflows.
+
+    Claims are runtime-owned and released in the child runner's ``finally``
+    block.  A stale TTL is retained as a recovery guard for abandoned jobs;
+    agents never manipulate claims directly.
+    """
+
+    _guard = threading.RLock()
+    _claims: dict[str, tuple[str, float]] = {}
+
+    @classmethod
+    def claim(cls, workspace: Any, key: str, owner: str, *, ttl_sec: float = 3600.0) -> bool:
+        scope = str(workspace.resolve()) if workspace is not None else "<none>"
+        normalized = " ".join(key.split()).lower()
+        claim_key = f"{scope}\0{normalized}"
+        now = time.monotonic()
+        with cls._guard:
+            current = cls._claims.get(claim_key)
+            if current is not None and current[1] > now and current[0] != owner:
+                return False
+            cls._claims[claim_key] = (owner, now + max(1.0, ttl_sec))
+            return True
+
+    @classmethod
+    def release(cls, workspace: Any, key: str, owner: str) -> None:
+        scope = str(workspace.resolve()) if workspace is not None else "<none>"
+        normalized = " ".join(key.split()).lower()
+        claim_key = f"{scope}\0{normalized}"
+        with cls._guard:
+            current = cls._claims.get(claim_key)
+            if current is not None and current[0] == owner:
+                cls._claims.pop(claim_key, None)
+
+
 FactExtractor = Callable[[RunState, list[TrajectoryStep]], list[Fact]]
 LoopFactory = Callable[[RunState], Any]
 
@@ -299,7 +335,22 @@ class MultiAgentManager:
                     )
                     pending.pop(task.task_id)
                 else:
-                    runnable.append(task)
+                    dedupe_key = task.dedupe_key or task.goal
+                    owner = f"{workflow_id}:{task.task_id}"
+                    if not TaskClaimRegistry.claim(parent.workspace_host_path, dedupe_key, owner):
+                        self._event(parent, "task/claim", {"workflow_id": workflow_id, "task_id": task.task_id, "dedupe_key": dedupe_key, "status": "rejected", "reason": "duplicate_task"})
+                        results[task.task_id] = ChildResult(
+                            task.task_id,
+                            "",
+                            "cancelled",
+                            task.role,
+                            summary="Skipped because an equivalent task is already claimed.",
+                            failure="duplicate_task",
+                        )
+                        pending.pop(task.task_id)
+                    else:
+                        self._event(parent, "task/claim", {"workflow_id": workflow_id, "task_id": task.task_id, "dedupe_key": dedupe_key, "status": "claimed", "owner": owner})
+                        runnable.append(task)
             if runnable:
                 with ThreadPoolExecutor(max_workers=min(self.max_concurrent_children, len(runnable))) as pool:
                     futures = {
@@ -409,6 +460,8 @@ class MultiAgentManager:
             watcher.start()
         lease = None
         lease_epoch = None
+        claim_key = task.dedupe_key or task.goal
+        claim_owner = f"{workflow_id}:{task.task_id}"
         try:
             # Scouts are read-only and can overlap.  Any worker-capable child
             # acquires the workspace lease for its full lifetime, serializing
@@ -453,6 +506,8 @@ class MultiAgentManager:
             watcher_stop.set()
             if lease is not None:
                 lease.release()
+            TaskClaimRegistry.release(child.workspace_host_path, claim_key, claim_owner)
+            self._event(parent, "task/claim", {"workflow_id": workflow_id, "task_id": task.task_id, "dedupe_key": claim_key, "status": "released", "owner": claim_owner})
         if timeout_fired.is_set():
             outcome.status = "timeout"
             outcome.failure = f"child exceeded timeout_sec={task.timeout_sec}"
@@ -495,6 +550,8 @@ class MultiAgentManager:
         ids = [task.task_id for task in tasks]
         if len(ids) != len(set(ids)) or any(not task.task_id.strip() for task in tasks):
             raise MultiAgentError("task ids must be non-empty and unique")
+        if any(not task.goal.strip() for task in tasks):
+            raise MultiAgentError("task goals must be non-empty")
         known = set(ids)
         for task in tasks:
             if any(dep not in known for dep in task.depends_on):
