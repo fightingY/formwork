@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 # Protocol schema version. Bumped from the old LEDGER_SCHEMA_VERSION=2 lineage to
 # mark the non-backward-compatible move from a text-JSON action protocol to
@@ -64,6 +64,16 @@ class CodeModeAction:
 
 
 @dataclass(frozen=True)
+class DelegateAction:
+    """Delegate one or more bounded tasks to isolated child agents."""
+
+    tasks: tuple[dict[str, Any], ...]
+    join: Literal["all", "any"] = "all"
+    type: Literal["delegate"] = "delegate"
+    progress: str = ""
+
+
+@dataclass(frozen=True)
 class MemoryReference:
     path: str
     line_start: int
@@ -93,9 +103,9 @@ class ToolCallBatch:
     type: Literal["tool_call_batch"] = "tool_call_batch"
 
 
-Action = BashAction | ToolCall | ToolCallBatch | SkillAction | AskAction | FinalAction | CodeModeAction
+Action = BashAction | ToolCall | ToolCallBatch | SkillAction | AskAction | FinalAction | CodeModeAction | DelegateAction
 
-CONTROL_TOOL_NAMES = frozenset({"final", "ask", "skill", "code_mode"})
+CONTROL_TOOL_NAMES = frozenset({"final", "ask", "skill", "code_mode", "delegate"})
 KNOWN_TOOL_NAMES = frozenset({"read", "edit", "write", "bash", *CONTROL_TOOL_NAMES})
 
 
@@ -153,6 +163,8 @@ def parse_tool_call(
         return _build_skill(normalized)
     if name == "code_mode":
         return _build_code_mode(normalized)
+    if name == "delegate":
+        return _build_delegate(normalized)
     return _build_final(normalized)
 
 
@@ -217,6 +229,12 @@ def action_from_dict(data: dict[str, Any]) -> Action:
         return SkillAction(name=str(data.get("name", "")), progress=str(data.get("progress", "")))
     if action_type == "code_mode":
         return CodeModeAction(script=str(data.get("script", "")), progress=str(data.get("progress", "")))
+    if action_type == "delegate":
+        return DelegateAction(
+            tasks=tuple(dict(item) for item in data.get("tasks", []) if isinstance(item, dict)),
+            join=cast(Literal["all", "any"], str(data.get("join", "all"))),
+            progress=str(data.get("progress", "")),
+        )
     if action_type == "final":
         memory = tuple(
             MemoryReference(
@@ -246,6 +264,7 @@ def _validate_tool_arguments(tool: str, arguments: dict[str, Any]) -> None:
         "ask": {"question"},
         "skill": {"name"},
         "code_mode": {"script"},
+        "delegate": {"tasks", "join"},
         "final": {"answer", "memory"},
     }[tool]
     unexpected = set(arguments) - allowed
@@ -337,6 +356,19 @@ TOOLS: tuple[dict[str, Any], ...] = (
             "script": {"type": "string"},
         }, "required": ["script"], "additionalProperties": False}}},
     {"type": "function", "function": {
+        "name": "delegate",
+        "description": "Run isolated child agents and return their structured summaries and facts.",
+        "parameters": {"type": "object", "properties": {
+            "tasks": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {
+                "id": {"type": "string"}, "goal": {"type": "string"}, "role": {"type": "string"},
+                "capability_profile": {"type": "string"}, "provider": {"type": "string", "enum": ["spawn", "fork"]},
+                "depends_on": {"type": "array", "items": {"type": "string"}},
+                "max_turns": {"type": "integer", "minimum": 0}, "timeout_sec": {"type": "number", "minimum": 0},
+                "output_schema": {"type": "string"},
+            }, "required": ["id", "goal"], "additionalProperties": False}},
+            "join": {"type": "string", "enum": ["all", "any"]},
+        }, "required": ["tasks"], "additionalProperties": False}}},
+    {"type": "function", "function": {
         "name": "ask", "description": "Ask the user a concrete question when blocked by missing input.",
         "parameters": {"type": "object", "properties": {
             "question": {"type": "string"},
@@ -395,6 +427,30 @@ def _build_code_mode(payload: dict[str, Any]) -> CodeModeAction:
     if not isinstance(script, str) or not script.strip():
         raise ProtocolError("code_mode.script must be a non-empty string.")
     return CodeModeAction(script=script)
+
+
+def _build_delegate(payload: dict[str, Any]) -> DelegateAction:
+    raw_tasks = payload.get("tasks")
+    if not isinstance(raw_tasks, list) or not raw_tasks:
+        raise ProtocolError("delegate.tasks must be a non-empty list.")
+    tasks: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_tasks):
+        if not isinstance(raw, dict):
+            raise ProtocolError(f"delegate.tasks[{index}] must be an object.")
+        task = dict(raw)
+        task_id = task.get("id")
+        goal = task.get("goal")
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ProtocolError(f"delegate.tasks[{index}].id must be a non-empty string.")
+        if not isinstance(goal, str) or not goal.strip():
+            raise ProtocolError(f"delegate.tasks[{index}].goal must be a non-empty string.")
+        task["id"] = task_id.strip()
+        task["goal"] = goal.strip()
+        tasks.append(task)
+    join = payload.get("join", "all")
+    if join not in {"all", "any"}:
+        raise ProtocolError("delegate.join must be 'all' or 'any'.")
+    return DelegateAction(tasks=tuple(tasks), join=join)
 
 
 def _build_final(payload: dict[str, Any]) -> FinalAction:

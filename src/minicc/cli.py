@@ -34,6 +34,7 @@ from minicc.core.ledger import (
     write_artifact_index,
 )
 from minicc.core.loop import AgentLoop, BashExecutor, LoopConfig, TurnProvider
+from minicc.core.multi_agent import MultiAgentManager
 from minicc.core.project_context import inspect_repository, write_repository_profile
 from minicc.core.protocol import TOOLS
 from minicc.core.provider import (
@@ -1728,6 +1729,24 @@ def _build_loop(
     )
     if state is not None:
         state.metrics["max_parallel_tool_calls"] = settings.tooling.max_parallel_tool_calls
+    # Child loops are built through the same factory, preserving provider,
+    # policy, sandbox and checkpoint configuration while giving every child a
+    # fresh RunState and trace namespace.
+    multi_agent_manager = MultiAgentManager(
+        lambda child_state: _build_loop(
+            provider,
+            executor,
+            settings=settings,
+            session=session,
+            state=child_state,
+            stream=stream,
+            completion_verifier=completion_verifier,
+            memory_store=memory_store,
+        ),
+        max_depth=3,
+        max_concurrent_children=settings.tooling.max_parallel_tool_calls,
+        trace=trace,
+    )
     return AgentLoop(
         provider,
         executor,
@@ -1760,6 +1779,7 @@ def _build_loop(
         checkpoint_manager=checkpoint_manager,
         completion_verifier=completion_verifier,
         tool_scheduler=scheduler,
+        multi_agent_manager=multi_agent_manager,
         turn_provider_factory=lambda runner: _build_turn_provider(runner, provider, settings),
         config=LoopConfig(
             max_seconds=settings.budget.max_seconds,

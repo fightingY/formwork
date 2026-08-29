@@ -96,6 +96,11 @@ class RunState:
     capability_profile: str = "root"
     depth: int = 0
     lease_epoch: int | None = None
+    # Multi-agent orchestration: child results and facts are the only durable
+    # information promoted into a parent run. Child trajectories stay in the
+    # child run namespace and are never aliased here.
+    child_results: list[dict[str, Any]] = field(default_factory=list)
+    facts: list[dict[str, Any]] = field(default_factory=list)
     # V5 session transport: prior-turn conversation rows (["role","content"])
     # injected into context.  NOT persisted to state.json -- transcript.jsonl is
     # the single source of truth for conversation history (plan §5.1).  Populated
@@ -201,6 +206,8 @@ class RunState:
             capability_profile=str(data.get("capability_profile", "root")),
             depth=int(data.get("depth", 0)),
             lease_epoch=data.get("lease_epoch"),
+            child_results=list(data.get("child_results", [])),
+            facts=list(data.get("facts", [])),
         )
 
 

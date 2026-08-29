@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from minicc.core.context import state_snapshot_text
+from minicc.core.multi_agent import ChildTask, MultiAgentManager
 from minicc.core.protocol import (
     Action,
     AskAction,
     BashAction,
     CodeModeAction,
+    DelegateAction,
     FinalAction,
     SkillAction,
     ToolCall,
@@ -53,6 +56,7 @@ class ActionHandler:
         skill_registry: SkillRegistry | None = None,
         tool_scheduler: ToolCallScheduler | None = None,
         code_mode_timeout_sec: int = 120,
+        multi_agent_manager: MultiAgentManager | None = None,
     ) -> None:
         self.executor = executor
         self.policy_chain = policy_chain or PolicyChain()
@@ -65,6 +69,7 @@ class ActionHandler:
         # since the scheduler is constructed independently of ActionHandler.
         self.tool_scheduler = tool_scheduler
         self.code_mode_timeout_sec = code_mode_timeout_sec
+        self.multi_agent_manager = multi_agent_manager
         self._active_verification_state: RunState | None = None
         self._code_mode_state: RunState | None = None
 
@@ -131,13 +136,61 @@ class ActionHandler:
         if isinstance(action, CodeModeAction):
             return self._handle_code_mode(action, state)
 
+        if isinstance(action, DelegateAction):
+            return self._handle_delegate(action, state)
+
         if isinstance(action, BashAction):
             return self._handle_bash(action, state)
 
         raise TypeError(
             f"ActionHandler.handle() only accepts BashAction/FinalAction/AskAction/SkillAction/"
-            f"CodeModeAction; ToolCall/ToolCallBatch are dispatched via ToolCallScheduler in "
+            f"CodeModeAction/DelegateAction; ToolCall/ToolCallBatch are dispatched via ToolCallScheduler in "
             f"AgentLoop.run(), not through here. Got: {type(action).__name__}"
+        )
+
+    def _handle_delegate(self, action: DelegateAction, state: RunState) -> ActionOutcome:
+        if self.multi_agent_manager is None:
+            observation = Observation(
+                kind="command_error",
+                message="delegate is unavailable because no MultiAgentManager is configured.",
+            )
+            state.last_observation = observation
+            return ActionOutcome(steps=[TrajectoryStep(action=action, observation=observation, state_snapshot=state_snapshot_text(state))])
+        try:
+            tasks = [
+                ChildTask(
+                    task_id=str(item["id"]),
+                    goal=str(item["goal"]),
+                    role=str(item.get("role", "worker")),
+                    capability_profile=str(item.get("capability_profile", item.get("role", "worker"))),
+                    provider=cast(Literal["spawn", "fork"], str(item.get("provider", "spawn"))),
+                    depends_on=tuple(str(dep) for dep in item.get("depends_on", [])),
+                    max_turns=int(item.get("max_turns", 0)),
+                    timeout_sec=float(item.get("timeout_sec", 0)),
+                    output_schema=str(item["output_schema"]) if item.get("output_schema") else None,
+                )
+                for item in action.tasks
+            ]
+            results = self.multi_agent_manager.run(
+                state,
+                tasks,
+                parent_trajectory=getattr(state, "_active_trajectory", []),
+                join=action.join,
+                workflow_id=state.workflow_id,
+            )
+            observation = Observation(
+                kind="command_result",
+                exit_code=0 if all(result.status == "completed" for result in results) else 1,
+                stdout_preview=json.dumps({"workflow_id": state.workflow_id, "children": [result.to_dict() for result in results]}, ensure_ascii=False),
+                message="Delegated child workflow settled; use the structured results above.",
+            )
+        except Exception as exc:
+            observation = Observation(kind="command_error", message=f"delegate rejected: {exc}")
+        state.last_observation = observation
+        if self.trace is not None:
+            self.trace.observation_created(state, observation)
+        return ActionOutcome(
+            steps=[TrajectoryStep(action=action, observation=observation, state_snapshot=state_snapshot_text(state))]
         )
 
     def _handle_code_mode(self, action: CodeModeAction, state: RunState) -> ActionOutcome:

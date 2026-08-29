@@ -4,6 +4,7 @@ from minicc.core.protocol import (
     TOOLS,
     AskAction,
     CodeModeAction,
+    DelegateAction,
     FinalAction,
     MemoryReference,
     ProtocolError,
@@ -57,6 +58,17 @@ def test_parse_code_mode_action() -> None:
     action = parse_tool_call("c1", "code_mode", {"script": "print('hi')"})
 
     assert action == CodeModeAction(script="print('hi')")
+
+
+def test_parse_delegate_action() -> None:
+    action = parse_tool_call(
+        "d1",
+        "delegate",
+        {"tasks": [{"id": "scout", "goal": "Inspect the parser", "provider": "fork"}]},
+    )
+    assert action == DelegateAction(
+        tasks=({"id": "scout", "goal": "Inspect the parser", "provider": "fork"},),
+    )
 
 
 def test_parse_final_action() -> None:
@@ -138,7 +150,7 @@ def test_parse_tool_call_rejects_invalid_parameters(
 
 def test_tools_schema_covers_all_known_tool_names() -> None:
     tool_names = {tool["function"]["name"] for tool in TOOLS}
-    assert tool_names == {"read", "edit", "write", "bash", "code_mode", "ask", "skill", "final"}
+    assert tool_names == {"read", "edit", "write", "bash", "code_mode", "ask", "skill", "final", "delegate"}
     for tool in TOOLS:
         assert tool["type"] == "function"
         assert tool["function"]["parameters"]["additionalProperties"] is False

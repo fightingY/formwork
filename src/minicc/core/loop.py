@@ -10,11 +10,13 @@ from minicc.core.action_handler import ActionHandler
 from minicc.core.checkpoint import CheckpointManager
 from minicc.core.context import ContextBuilder, state_snapshot_text
 from minicc.core.lifecycle import RunLifecycle
+from minicc.core.multi_agent import MultiAgentManager
 from minicc.core.prompt import assemble_request, provider_messages
 from minicc.core.protocol import (
     AskAction,
     BashAction,
     CodeModeAction,
+    DelegateAction,
     FinalAction,
     SkillAction,
     ToolCall,
@@ -93,6 +95,7 @@ class AgentLoop:
         completion_verifier: CompletionVerifier | None = None,
         tool_scheduler: ToolCallScheduler | None = None,
         turn_provider_factory: Callable[[ModelTurnRunner], TurnProvider] | None = None,
+        multi_agent_manager: MultiAgentManager | None = None,
     ) -> None:
         self.config = config or LoopConfig()
         self.session = session or SessionManager()
@@ -126,6 +129,7 @@ class AgentLoop:
             skill_registry=self.context_builder.skill_registry,
             tool_scheduler=tool_scheduler,
             code_mode_timeout_sec=self.config.max_action_timeout_sec,
+            multi_agent_manager=multi_agent_manager,
         )
         self.tool_scheduler = tool_scheduler
         if self.tool_scheduler is not None:
@@ -186,6 +190,10 @@ class AgentLoop:
 
         started_at = time.monotonic()
         while state.status == "running":
+            # Control actions such as delegate need a read-only view of the
+            # completed parent trajectory for fork admission. The handler never
+            # receives or mutates this list directly.
+            state._active_trajectory = trajectory  # type: ignore[attr-defined]
             cancel_token = getattr(state, "_cancel_token", None)
             if cancel_token is not None and cancel_token.is_set():
                 state.status = "interrupted"
@@ -363,19 +371,19 @@ class AgentLoop:
             control_actions = [
                 action
                 for action in turn.actions
-                if isinstance(action, (FinalAction, AskAction, SkillAction, CodeModeAction))
+                if isinstance(action, (FinalAction, AskAction, SkillAction, CodeModeAction, DelegateAction))
             ]
             tool_calls = [action for action in turn.actions if isinstance(action, ToolCall)]
 
             if control_actions and len(turn.actions) > 1:
-                # The model mixed a control tool (final/ask/skill/code_mode) with other
+                # The model mixed a control tool (final/ask/skill/code_mode/delegate) with other
                 # tool calls in the same turn — a run-time-recoverable contract
                 # violation (was a parse-time ProtocolError under the old text-JSON
                 # protocol; here it becomes a non-terminal feedback observation).
                 observation = Observation(
                     kind="protocol_error",
                     message=(
-                        "final/ask/skill/code_mode must each be the only call in their turn; "
+                        "final/ask/skill/code_mode/delegate must each be the only call in their turn; "
                         "this turn mixed a control tool with other tool calls."
                     ),
                 )

@@ -46,6 +46,9 @@ EVENT_TYPES: tuple[str, ...] = (
     "goal/update",
     "artifact/spill",
     "telemetry",
+    "child/start",
+    "child/result",
+    "workflow/summary",
 )
 
 

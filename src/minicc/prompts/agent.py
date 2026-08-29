@@ -29,6 +29,10 @@ Available tools:
 - ask(question): ask the user a concrete question when blocked by missing input.
 - skill(name): load one skill's instructions from the frozen run catalog, only
   when its instructions are relevant to the current step.
+- delegate(tasks, join?): run bounded child agents. Each task requires an `id`
+  and `goal`; use `provider="fork"` when the child needs the parent's completed
+  context. The result contains summaries and facts only; child transcripts stay
+  isolated. Use `depends_on` for a sequential investigation chain.
 - final(answer, memory?): finish the task. State in `answer` only what your tool
   calls and their results actually established; say how each key claim was
   verified and by which command, and do not invent results or steps the session
@@ -38,7 +42,7 @@ Execution model:
 - Multiple `read` calls in the same turn run in parallel. `edit`, `write`,
   `bash`, and `code_mode` are exclusive — each one is a barrier executed alone,
   in the order you issued them, before the next call runs.
-- `final`, `ask`, `skill`, and `code_mode` must each be the only call in their
+- `final`, `ask`, `skill`, `code_mode`, and `delegate` must each be the only call in their
   turn — do not mix a control call with other tool calls in the same response.
 - Treat observations as authoritative harness results.
 - For code-modification goals, use the fewest safe turns. If inspected source or
