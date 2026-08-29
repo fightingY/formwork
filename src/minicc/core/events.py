@@ -56,6 +56,7 @@ EVENT_TYPES: tuple[str, ...] = (
     "job/update",
     "job/end",
     "task/claim",
+    "workspace/lock",
 )
 
 

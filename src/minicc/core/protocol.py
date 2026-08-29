@@ -35,8 +35,28 @@ class ToolCall:
     """
 
     id: str
-    tool: Literal["read", "edit", "write", "bash"]
+    tool: Literal["read", "edit", "write", "bash", "delegate"]
     arguments: Mapping[str, Any]
+
+
+class DelegateToolCall(ToolCall):
+    """Concurrency-safe delegate tool call.
+
+    Kept as a ToolCall subclass so old code comparing parsed delegates with
+    DelegateAction values remains source-compatible during the protocol move.
+    """
+
+    def __init__(self, *, id: str, arguments: Mapping[str, Any]) -> None:
+        super().__init__(id=id, tool="delegate", arguments=arguments)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, DelegateAction):
+            return (
+                tuple(self.arguments.get("tasks", ())) == other.tasks
+                and str(self.arguments.get("join", "all")) == other.join
+                and bool(self.arguments.get("background", False)) == other.background
+            )
+        return super().__eq__(other)
 
 
 @dataclass(frozen=True)
@@ -140,11 +160,12 @@ def parse_tool_call(
     the caller, since a JSON-decode failure here is a provider-contract violation,
     not a recoverable protocol error.
 
-    ``read``/``edit``/``write``/``bash`` become a scheduler-ready :class:`ToolCall`
+    ``read``/``edit``/``write``/``bash``/``delegate`` become scheduler-ready :class:`ToolCall`
     (``bash``'s arguments are normalized — trimmed command, clamped timeout_sec —
     but the actual :class:`BashAction` construction happens in ``core.tooling``
     right before the policy chain, same as before this refactor). The control
-    tools (``final``/``ask``/``skill``/``code_mode``) become their own Action type.
+    tools (``final``/``ask``/``skill``/``code_mode``) become their own Action type;
+    delegate is a concurrency-safe tool call.
     """
     if name not in KNOWN_TOOL_NAMES:
         raise ProtocolError(f"Unknown tool: {name!r}.")
@@ -165,7 +186,7 @@ def parse_tool_call(
     if name == "code_mode":
         return _build_code_mode(normalized)
     if name == "delegate":
-        return _build_delegate(normalized)
+        return DelegateToolCall(id=call_id, arguments=normalized)
     return _build_final(normalized)
 
 
@@ -231,6 +252,8 @@ def action_from_dict(data: dict[str, Any]) -> Action:
     if action_type == "code_mode":
         return CodeModeAction(script=str(data.get("script", "")), progress=str(data.get("progress", "")))
     if action_type == "delegate":
+        if "id" in data and "arguments" in data:
+            return DelegateToolCall(id=str(data.get("id", "")), arguments=dict(data.get("arguments", {})))
         return DelegateAction(
             tasks=tuple(dict(item) for item in data.get("tasks", []) if isinstance(item, dict)),
             join=cast(Literal["all", "any"], str(data.get("join", "all"))),
@@ -251,8 +274,8 @@ def action_from_dict(data: dict[str, Any]) -> Action:
     raise ProtocolError(f"Unknown persisted action type: {action_type!r}.")
 
 
-def _fs_or_bash_tool_literal(value: Any) -> Literal["read", "edit", "write", "bash"]:
-    if value in {"read", "edit", "write", "bash"}:
+def _fs_or_bash_tool_literal(value: Any) -> Literal["read", "edit", "write", "bash", "delegate"]:
+    if value in {"read", "edit", "write", "bash", "delegate"}:
         return value
     raise ProtocolError(f"Unknown persisted tool_call_batch member tool: {value!r}.")
 

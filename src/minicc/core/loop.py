@@ -16,7 +16,6 @@ from minicc.core.protocol import (
     AskAction,
     BashAction,
     CodeModeAction,
-    DelegateAction,
     FinalAction,
     SkillAction,
     ToolCall,
@@ -32,7 +31,7 @@ from minicc.core.runner import ModelTurn, ModelTurnConfig, ModelTurnRunner
 from minicc.core.session import SessionManager
 from minicc.core.spill import SpillStore
 from minicc.core.state import Observation, RunState, TrajectoryStep
-from minicc.core.tooling import ToolCallScheduler
+from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
 from minicc.core.verification import CompletionVerifier
 from minicc.policy.base import PolicyChain
 from minicc.trace.recorder import TraceRecorder
@@ -132,6 +131,11 @@ class AgentLoop:
             multi_agent_manager=multi_agent_manager,
         )
         self.tool_scheduler = tool_scheduler
+        if self.tool_scheduler is None and multi_agent_manager is not None:
+            self.tool_scheduler = ToolCallScheduler(
+                HybridToolRunner(executor),
+                max_parallel_tool_calls=self.config.max_parallel_tool_calls,
+            )
         if self.tool_scheduler is not None:
             runner = self.tool_scheduler.runner
             if hasattr(runner, "action_handler"):
@@ -371,19 +375,19 @@ class AgentLoop:
             control_actions = [
                 action
                 for action in turn.actions
-                if isinstance(action, (FinalAction, AskAction, SkillAction, CodeModeAction, DelegateAction))
+                if isinstance(action, (FinalAction, AskAction, SkillAction, CodeModeAction))
             ]
             tool_calls = [action for action in turn.actions if isinstance(action, ToolCall)]
 
             if control_actions and len(turn.actions) > 1:
-                # The model mixed a control tool (final/ask/skill/code_mode/delegate) with other
+                # The model mixed a control tool (final/ask/skill/code_mode) with other
                 # tool calls in the same turn — a run-time-recoverable contract
                 # violation (was a parse-time ProtocolError under the old text-JSON
                 # protocol; here it becomes a non-terminal feedback observation).
                 observation = Observation(
                     kind="protocol_error",
                     message=(
-                        "final/ask/skill/code_mode/delegate must each be the only call in their turn; "
+                        "final/ask/skill/code_mode must each be the only call in their turn; "
                         "this turn mixed a control tool with other tool calls."
                     ),
                 )
@@ -451,7 +455,7 @@ class AgentLoop:
                     tool=call.tool,
                     arguments=dict(call.arguments),
                     model_order=model_order,
-                    execution_mode="parallel" if call.tool == "read" else "exclusive",
+                    execution_mode="parallel" if call.tool in {"read", "delegate"} else "exclusive",
                 )
                 if event_log is not None:
                     event_log.append(

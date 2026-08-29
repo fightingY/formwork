@@ -183,18 +183,38 @@ class WorkspaceLeaseRegistry:
     """Process-wide write admission control for workers sharing a workspace."""
 
     _guard = threading.RLock()
-    _locks: dict[str, threading.RLock] = {}
+    _locks: dict[str, threading.Lock] = {}
     _epochs: dict[str, int] = {}
 
     @classmethod
-    def acquire(cls, workspace: Any) -> tuple[threading.RLock, int]:
+    def acquire(cls, workspace: Any, *, owner: str = "") -> tuple[WorkspaceLease, int]:
         key = str(workspace.resolve()) if workspace is not None else "<none>"
         with cls._guard:
-            lock = cls._locks.setdefault(key, threading.RLock())
+            lock = cls._locks.setdefault(key, threading.Lock())
             lock.acquire()
             epoch = cls._epochs.get(key, 0) + 1
             cls._epochs[key] = epoch
-            return lock, epoch
+            return WorkspaceLease(lock, key=key, owner=owner, epoch=epoch), epoch
+
+
+class WorkspaceLease:
+    """Single-owner lease wrapper around a non-reentrant mutex."""
+
+    def __init__(self, lock: threading.Lock, *, key: str, owner: str, epoch: int) -> None:
+        self._lock = lock
+        self.key = key
+        self.owner = owner
+        self.epoch = epoch
+        self._thread_id = threading.get_ident()
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        if threading.get_ident() != self._thread_id:
+            raise RuntimeError("workspace lease must be released by its acquiring runtime thread")
+        self._released = True
+        self._lock.release()
 
 
 class TaskClaimRegistry:
@@ -458,17 +478,9 @@ class MultiAgentManager:
                         return
             watcher = threading.Thread(target=propagate_cancel, daemon=True)
             watcher.start()
-        lease = None
-        lease_epoch = None
         claim_key = task.dedupe_key or task.goal
         claim_owner = f"{workflow_id}:{task.task_id}"
         try:
-            # Scouts are read-only and can overlap.  Any worker-capable child
-            # acquires the workspace lease for its full lifetime, serializing
-            # writes across sibling agents and preventing workflow races.
-            if task.capability_profile != "scout":
-                lease, lease_epoch = WorkspaceLeaseRegistry.acquire(child.workspace_host_path)
-                child.lease_epoch = lease_epoch
             result = self.loop_factory(child).run(child)
             status = self._status(child.status)
             if task.max_turns > 0 and int(child.metrics.get("turns", 0)) > task.max_turns:
@@ -504,8 +516,6 @@ class MultiAgentManager:
                 timer.cancel()
             child_cancel.set()
             watcher_stop.set()
-            if lease is not None:
-                lease.release()
             TaskClaimRegistry.release(child.workspace_host_path, claim_key, claim_owner)
             self._event(parent, "task/claim", {"workflow_id": workflow_id, "task_id": task.task_id, "dedupe_key": claim_key, "status": "released", "owner": claim_owner})
         if timeout_fired.is_set():

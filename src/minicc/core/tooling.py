@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from minicc.core.multi_agent import WorkspaceLeaseRegistry
-from minicc.core.protocol import ToolCall, bash_action_from_tool_call
+from minicc.core.protocol import DelegateAction, ToolCall, bash_action_from_tool_call
 from minicc.core.state import Observation, RunState
 
 ExecutionMode = Literal["parallel", "exclusive"]
@@ -59,11 +59,11 @@ class FileSystemCapability:
         self.max_read_chars = max_read_chars
 
     def execution_mode(self, call: ToolCall) -> ExecutionMode:
-        return "parallel" if call.tool == "read" else "exclusive"
+        return "parallel" if call.tool in {"read", "delegate"} else "exclusive"
 
     def run(self, call: ToolCall, state: RunState) -> ToolResult:
         order = 0
-        mode: ExecutionMode = "parallel" if call.tool == "read" else "exclusive"
+        mode: ExecutionMode = "parallel" if call.tool in {"read", "delegate"} else "exclusive"
         if state.capability_profile == "scout" and call.tool in {"edit", "write", "bash"}:
             return _error(call, order, mode, "CAPABILITY_DENIED", "scout children are read-only; edit/write/bash are unavailable")
         try:
@@ -203,6 +203,27 @@ class HybridToolRunner:
         if call.tool in {"read", "edit", "write"}:
             result = self.fs.run(call, state)
             return ToolResult(result.call_id, result.tool, result.model_order, mode, result.content, result.is_error)
+        if call.tool == "delegate":
+            if self.action_handler is None or self.action_handler.multi_agent_manager is None:
+                return _error(call, 0, mode, "DELEGATE_UNAVAILABLE", "delegate is unavailable")
+            args = dict(call.arguments)
+            action = DelegateAction(
+                tasks=tuple(dict(item) for item in args.get("tasks", []) if isinstance(item, dict)),
+                join=str(args.get("join", "all")),
+                background=bool(args.get("background", False)),
+            )
+            outcome = self.action_handler.handle(action, state)
+            observation = outcome.steps[-1].observation if outcome.steps else state.last_observation
+            if observation is None:
+                return _error(call, 0, mode, "DELEGATE_EMPTY", "delegate produced no observation")
+            content = {
+                "kind": observation.kind,
+                "message": observation.message,
+                "stdout": observation.stdout_preview,
+                "stderr": observation.stderr_preview,
+                "exit_code": observation.exit_code,
+            }
+            return ToolResult(call.id, call.tool, 0, mode, content, observation.kind not in {"command_result", "no_output"})
         if call.tool == "bash":
             action = bash_action_from_tool_call(call)
             with _workspace_write_lease(state):
@@ -254,12 +275,30 @@ class HybridToolRunner:
 @contextmanager
 def _workspace_write_lease(state: RunState):
     """Serialize write-capable tools across parent/background/child agents."""
-    lock, epoch = WorkspaceLeaseRegistry.acquire(state.workspace_host_path)
+    log = getattr(state, "_event_log", None)
+    owner = f"{state.run_id}:{state.task_id or 'root'}"
+    payload = {"workspace": str(state.workspace_host_path or Path.cwd()), "owner": owner, "operation": "write"}
+    if log is not None:
+        try:
+            log.append("workspace/lock", {**payload, "status": "waiting"})
+        except Exception:
+            pass
+    lease, epoch = WorkspaceLeaseRegistry.acquire(state.workspace_host_path, owner=owner)
     state.lease_epoch = epoch
+    if log is not None:
+        try:
+            log.append("workspace/lock", {**payload, "status": "acquired", "epoch": epoch})
+        except Exception:
+            pass
     try:
         yield
     finally:
-        lock.release()
+        lease.release()
+        if log is not None:
+            try:
+                log.append("workspace/lock", {**payload, "status": "released", "epoch": epoch})
+            except Exception:
+                pass
 
 
 class ToolCallScheduler:
@@ -351,8 +390,6 @@ class ToolCallScheduler:
         return [by_index[position] for position in sorted(by_index)]
 
     def _execution_mode(self, call: ToolCall) -> ExecutionMode:
-        if call.tool != "read":
-            return "exclusive"
         try:
             classifier = getattr(self.runner, "execution_mode", None)
             classified = classifier(call) if callable(classifier) else None
@@ -366,7 +403,7 @@ class ToolCallScheduler:
         try:
             result = self.runner.run(call, state)
         except Exception as exc:
-            mode: ExecutionMode = "parallel" if call.tool == "read" else "exclusive"
+            mode: ExecutionMode = "parallel" if call.tool in {"read", "delegate"} else "exclusive"
             result = _error(call, 0, mode, "TOOL_RUNTIME_ERROR", str(exc))
         completed_at = datetime.now(UTC)
         return ToolResult(

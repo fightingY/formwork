@@ -45,8 +45,9 @@ Execution model:
 - Multiple `read` calls in the same turn run in parallel. `edit`, `write`,
   `bash`, and `code_mode` are exclusive — each one is a barrier executed alone,
   in the order you issued them, before the next call runs.
-- `final`, `ask`, `skill`, `code_mode`, and `delegate` must each be the only call in their
-  turn — do not mix a control call with other tool calls in the same response.
+- `final`, `ask`, `skill`, and `code_mode` must each be the only call in their
+  turn. `delegate` is concurrency-safe and may be emitted alongside other
+  parallel-safe tool calls.
 - Treat observations as authoritative harness results.
 - For code-modification goals, use the fewest safe turns. If inspected source or
   tests already establish a straightforward root cause, skip redundant
