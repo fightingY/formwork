@@ -134,12 +134,20 @@ class ActionHandler:
             return self._handle_skill(action, state)
 
         if isinstance(action, CodeModeAction):
+            if state.capability_profile == "scout":
+                observation = Observation(kind="policy_violation", message="scout children are read-only; code_mode is unavailable")
+                state.last_observation = observation
+                return ActionOutcome(steps=[TrajectoryStep(action=action, observation=observation, state_snapshot=state_snapshot_text(state))])
             return self._handle_code_mode(action, state)
 
         if isinstance(action, DelegateAction):
             return self._handle_delegate(action, state)
 
         if isinstance(action, BashAction):
+            if state.capability_profile == "scout":
+                observation = Observation(kind="policy_violation", message="scout children are read-only; bash is unavailable")
+                state.last_observation = observation
+                return ActionOutcome(steps=[TrajectoryStep(action=action, observation=observation, state_snapshot=state_snapshot_text(state))])
             return self._handle_bash(action, state)
 
         raise TypeError(
@@ -171,6 +179,22 @@ class ActionHandler:
                 )
                 for item in action.tasks
             ]
+            if action.background:
+                job = self.multi_agent_manager.run_background(
+                    state,
+                    tasks,
+                    parent_trajectory=getattr(state, "_active_trajectory", []),
+                    join=action.join,
+                    workflow_id=state.workflow_id,
+                )
+                observation = Observation(
+                    kind="command_result",
+                    exit_code=0,
+                    stdout_preview=json.dumps({"workflow_id": job.workflow_id, "job_id": job.job_id}, ensure_ascii=False),
+                    message="Background child workflow submitted; poll the job registry for completion.",
+                )
+                state.last_observation = observation
+                return ActionOutcome(steps=[TrajectoryStep(action=action, observation=observation, state_snapshot=state_snapshot_text(state))])
             results = self.multi_agent_manager.run(
                 state,
                 tasks,

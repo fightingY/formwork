@@ -69,6 +69,7 @@ class DelegateAction:
 
     tasks: tuple[dict[str, Any], ...]
     join: Literal["all", "any"] = "all"
+    background: bool = False
     type: Literal["delegate"] = "delegate"
     progress: str = ""
 
@@ -233,6 +234,7 @@ def action_from_dict(data: dict[str, Any]) -> Action:
         return DelegateAction(
             tasks=tuple(dict(item) for item in data.get("tasks", []) if isinstance(item, dict)),
             join=cast(Literal["all", "any"], str(data.get("join", "all"))),
+            background=bool(data.get("background", False)),
             progress=str(data.get("progress", "")),
         )
     if action_type == "final":
@@ -264,7 +266,7 @@ def _validate_tool_arguments(tool: str, arguments: dict[str, Any]) -> None:
         "ask": {"question"},
         "skill": {"name"},
         "code_mode": {"script"},
-        "delegate": {"tasks", "join"},
+        "delegate": {"tasks", "join", "background"},
         "final": {"answer", "memory"},
     }[tool]
     unexpected = set(arguments) - allowed
@@ -366,7 +368,7 @@ TOOLS: tuple[dict[str, Any], ...] = (
                 "max_turns": {"type": "integer", "minimum": 0}, "timeout_sec": {"type": "number", "minimum": 0},
                 "output_schema": {"type": "string"},
             }, "required": ["id", "goal"], "additionalProperties": False}},
-            "join": {"type": "string", "enum": ["all", "any"]},
+            "join": {"type": "string", "enum": ["all", "any"]}, "background": {"type": "boolean"},
         }, "required": ["tasks"], "additionalProperties": False}}},
     {"type": "function", "function": {
         "name": "ask", "description": "Ask the user a concrete question when blocked by missing input.",
@@ -450,7 +452,7 @@ def _build_delegate(payload: dict[str, Any]) -> DelegateAction:
     join = payload.get("join", "all")
     if join not in {"all", "any"}:
         raise ProtocolError("delegate.join must be 'all' or 'any'.")
-    return DelegateAction(tasks=tuple(tasks), join=join)
+    return DelegateAction(tasks=tuple(tasks), join=join, background=bool(payload.get("background", False)))
 
 
 def _build_final(payload: dict[str, Any]) -> FinalAction:

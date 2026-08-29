@@ -15,14 +15,17 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+from minicc.core.events import EventLog
 from minicc.core.protocol import action_to_dict
 from minicc.core.state import RunState, TrajectoryStep
 
 ChildStatus = Literal["completed", "failed", "interrupted", "cancelled", "timeout"]
 JoinMode = Literal["all", "any"]
+JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,115 @@ class MultiAgentError(ValueError):
     pass
 
 
+@dataclass
+class JobRecord:
+    """Durable-facing handle for a background one-shot workflow."""
+
+    job_id: str
+    workflow_id: str
+    status: JobStatus = "queued"
+    result: list[ChildResult] | None = None
+    error: str | None = None
+    submitted_at: float = field(default_factory=time.monotonic)
+    completed_at: float | None = None
+    _done: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
+    _cancel: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "workflow_id": self.workflow_id,
+            "status": self.status,
+            "result": [item.to_dict() for item in self.result] if self.result is not None else None,
+            "error": self.error,
+            "submitted_at": self.submitted_at,
+            "completed_at": self.completed_at,
+        }
+
+
+class JobRegistry:
+    """In-process registry for non-blocking child workflows.
+
+    A wait timeout only stops the caller waiting; it never kills the job.  This
+    mirrors DSH Jobs semantics and leaves cancellation explicit via ``cancel``.
+    """
+
+    def __init__(self, *, max_workers: int = 4) -> None:
+        self._pool = ThreadPoolExecutor(max_workers=max_workers)
+        self._jobs: dict[str, JobRecord] = {}
+        self._lock = threading.RLock()
+
+    def submit(
+        self,
+        fn: Callable[[threading.Event], list[ChildResult]],
+        *,
+        workflow_id: str,
+        job_id: str | None = None,
+    ) -> JobRecord:
+        record = JobRecord(job_id=job_id or f"job-{uuid4().hex[:12]}", workflow_id=workflow_id)
+        with self._lock:
+            self._jobs[record.job_id] = record
+
+        def worker() -> None:
+            with self._lock:
+                record.status = "running"
+            try:
+                if record._cancel.is_set():
+                    record.status = "cancelled"
+                    record.result = []
+                else:
+                    record.result = fn(record._cancel)
+                    record.status = "cancelled" if record._cancel.is_set() else "completed"
+            except Exception as exc:  # background failures are data on the job
+                record.error = f"{type(exc).__name__}: {exc}"
+                record.status = "failed"
+            finally:
+                record.completed_at = time.monotonic()
+                record._done.set()
+
+        self._pool.submit(worker)
+        return record
+
+    def get(self, job_id: str) -> JobRecord | None:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def wait(self, job_id: str, timeout_sec: float | None = None) -> JobRecord | None:
+        record = self.get(job_id)
+        if record is None:
+            return None
+        record._done.wait(timeout=None if timeout_sec is None else max(0.0, timeout_sec))
+        return record if record._done.is_set() else None
+
+    def cancel(self, job_id: str) -> bool:
+        record = self.get(job_id)
+        if record is None or record._done.is_set():
+            return False
+        record._cancel.set()
+        return True
+
+    def close(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+class WorkspaceLeaseRegistry:
+    """Process-wide write admission control for workers sharing a workspace."""
+
+    _guard = threading.RLock()
+    _locks: dict[str, threading.RLock] = {}
+    _epochs: dict[str, int] = {}
+
+    @classmethod
+    def acquire(cls, workspace: Any) -> tuple[threading.RLock, int]:
+        key = str(workspace.resolve()) if workspace is not None else "<none>"
+        with cls._guard:
+            lock = cls._locks.setdefault(key, threading.RLock())
+            lock.acquire()
+            epoch = cls._epochs.get(key, 0) + 1
+            cls._epochs[key] = epoch
+            return lock, epoch
+
+
 FactExtractor = Callable[[RunState, list[TrajectoryStep]], list[Fact]]
 LoopFactory = Callable[[RunState], Any]
 
@@ -99,6 +211,7 @@ class MultiAgentManager:
         max_concurrent_children: int = 4,
         fact_extractor: FactExtractor | None = None,
         trace: Any | None = None,
+        jobs: JobRegistry | None = None,
     ) -> None:
         if max_depth < 0 or max_concurrent_children <= 0:
             raise ValueError("max_depth must be >= 0 and max_concurrent_children must be positive")
@@ -107,6 +220,48 @@ class MultiAgentManager:
         self.max_concurrent_children = max_concurrent_children
         self.fact_extractor = fact_extractor or self._default_facts
         self.trace = trace
+        self.jobs = jobs or JobRegistry(max_workers=max_concurrent_children)
+
+    def run_background(
+        self,
+        parent: RunState,
+        tasks: list[ChildTask] | tuple[ChildTask, ...],
+        *,
+        parent_trajectory: list[TrajectoryStep] | None = None,
+        join: JoinMode = "all",
+        workflow_id: str | None = None,
+    ) -> JobRecord:
+        """Submit a one-shot workflow and return immediately with a job handle."""
+        workflow_id = workflow_id or f"wf-{uuid4().hex[:12]}"
+        job_id = f"job-{uuid4().hex[:12]}"
+        def execute(cancel: threading.Event) -> list[ChildResult]:
+            self._event(parent, "job/update", {"job_id": job_id, "workflow_id": workflow_id, "status": "running"})
+            try:
+                result = self.run(
+                    parent,
+                    tasks,
+                    parent_trajectory=parent_trajectory,
+                    join=join,
+                    workflow_id=workflow_id,
+                    cancel_event=cancel,
+                )
+                final_status = "cancelled" if cancel.is_set() else "completed"
+                self._event(parent, "job/update", {"job_id": job_id, "workflow_id": workflow_id, "status": final_status})
+                self._event(parent, "job/end", {"job_id": job_id, "workflow_id": workflow_id, "status": final_status})
+                return result
+            except Exception as exc:
+                self._event(parent, "job/end", {"job_id": job_id, "workflow_id": workflow_id, "status": "failed", "error": str(exc)})
+                raise
+
+        # ``execute`` references the handle for the completion event; submit
+        # first with a tiny indirection so the closure is resolved at runtime.
+        job = self.jobs.submit(
+            execute,
+            workflow_id=workflow_id,
+            job_id=job_id,
+        )
+        self._event(parent, "job/start", {"job_id": job.job_id, "workflow_id": workflow_id})
+        return job
 
     def snapshot(self, parent: RunState, trajectory: list[TrajectoryStep]) -> ForkSnapshot:
         """Copy only the completed prefix; in-flight/open steps are excluded."""
@@ -187,7 +342,30 @@ class MultiAgentManager:
         child.role = task.role
         child.capability_profile = task.capability_profile
         child.depth = parent.depth + 1
-        child.run_dir = (parent.run_dir / "children" / child.run_id) if parent.run_dir else None
+        parent_run_root = parent.run_dir or (Path.cwd() / ".minicc" / "runs" / parent.run_id)
+        child.run_dir = parent_run_root / "children" / child.run_id
+        child.run_dir.mkdir(parents=True, exist_ok=True)
+        child._event_log = EventLog(child.run_dir / "events.jsonl", session_id=child.run_id)  # type: ignore[attr-defined]
+        child._event_log.append(
+            "session/start",
+            {
+                "session_id": child.run_id,
+                "parent_run_id": parent.run_id,
+                "workflow_id": workflow_id,
+                "task_id": task.task_id,
+            },
+        )
+        child._event_log.append(
+            "subagent/descriptor",
+            {
+                "run_id": child.run_id,
+                "task_id": task.task_id,
+                "provider": task.provider,
+                "role": task.role,
+                "capability_profile": task.capability_profile,
+                "depth": child.depth,
+            },
+        )
         if task.provider == "fork":
             child.session_history = [*copy.deepcopy(snapshot.session_history), *self._trajectory_messages(snapshot.trajectory)]
         if dependency_results:
@@ -201,12 +379,19 @@ class MultiAgentManager:
         if cancel_event is not None:
             child._cancel_token = cancel_event  # type: ignore[attr-defined]
         self._event(parent, "child/start", {"task_id": task.task_id, "child_run_id": child.run_id, "workflow_id": workflow_id, "provider": task.provider})
+        self._event(parent, "subagent/start", {"task_id": task.task_id, "child_run_id": child.run_id, "workflow_id": workflow_id})
         started = time.monotonic()
         child_cancel = threading.Event()
         timeout_fired = threading.Event()
         def trigger_timeout() -> None:
             timeout_fired.set()
             child_cancel.set()
+            child_log = getattr(child, "_event_log", None)
+            if child_log is not None:
+                try:
+                    child_log.append("cancel", {"run_id": child.run_id, "reason": "timeout"})
+                except Exception:
+                    pass
         timer = threading.Timer(task.timeout_sec, trigger_timeout) if task.timeout_sec > 0 else None
         if timer is not None:
             timer.daemon = True
@@ -222,7 +407,15 @@ class MultiAgentManager:
                         return
             watcher = threading.Thread(target=propagate_cancel, daemon=True)
             watcher.start()
+        lease = None
+        lease_epoch = None
         try:
+            # Scouts are read-only and can overlap.  Any worker-capable child
+            # acquires the workspace lease for its full lifetime, serializing
+            # writes across sibling agents and preventing workflow races.
+            if task.capability_profile != "scout":
+                lease, lease_epoch = WorkspaceLeaseRegistry.acquire(child.workspace_host_path)
+                child.lease_epoch = lease_epoch
             result = self.loop_factory(child).run(child)
             status = self._status(child.status)
             if task.max_turns > 0 and int(child.metrics.get("turns", 0)) > task.max_turns:
@@ -230,27 +423,55 @@ class MultiAgentManager:
             summary = child.final_answer or child.state_summary or ""
             facts = self.fact_extractor(child, result.trajectory)
             usage = {key: child.metrics.get(key) for key in ("turns", "prompt_tokens", "completion_tokens", "total_tokens")}
-            outcome = ChildResult(task.task_id, child.run_id, status, task.role, summary=summary, facts=facts, usage=usage, failure=None if status == "completed" else child.state_summary)
+            outcome = ChildResult(
+                task.task_id,
+                child.run_id,
+                status,
+                task.role,
+                summary=summary,
+                facts=facts,
+                artifacts=[str(child.run_dir / "events.jsonl")] if child.run_dir else [],
+                usage=usage,
+                failure=None if status == "completed" else child.state_summary,
+            )
             if status == "timeout" and not outcome.failure:
                 outcome.failure = f"child exceeded max_turns={task.max_turns}"
         except Exception as exc:  # child failures become data, never parent exceptions
             child.status = "failed"
-            outcome = ChildResult(task.task_id, child.run_id, "failed", task.role, failure=f"{type(exc).__name__}: {exc}")
+            outcome = ChildResult(
+                task.task_id,
+                child.run_id,
+                "failed",
+                task.role,
+                artifacts=[str(child.run_dir / "events.jsonl")] if child.run_dir else [],
+                failure=f"{type(exc).__name__}: {exc}",
+            )
         finally:
             if timer is not None:
                 timer.cancel()
             child_cancel.set()
             watcher_stop.set()
-        if timeout_fired.is_set() and outcome.status == "completed":
+            if lease is not None:
+                lease.release()
+        if timeout_fired.is_set():
             outcome.status = "timeout"
             outcome.failure = f"child exceeded timeout_sec={task.timeout_sec}"
-        elif cancel_event is not None and cancel_event.is_set() and outcome.status == "completed":
+        elif cancel_event is not None and cancel_event.is_set():
             outcome.status = "cancelled"
             outcome.failure = "cancelled by caller"
         if task.timeout_sec > 0 and time.monotonic() - started > task.timeout_sec and outcome.status == "completed":
             outcome.status = "timeout"
             outcome.failure = f"child exceeded timeout_sec={task.timeout_sec}"
         self._event(parent, "child/result", outcome.to_dict())
+        self._event(parent, "subagent/end", {"task_id": task.task_id, "child_run_id": child.run_id, "workflow_id": workflow_id, "status": outcome.status, "failure": outcome.failure})
+        child_log = getattr(child, "_event_log", None)
+        if child_log is not None:
+            # The child loop normally closes these.  This covers failures before
+            # the first model step and keeps the child log structurally replayable.
+            try:
+                child_log.append("session/end-seed", {"status": outcome.status, "failure": outcome.failure})
+            except Exception:
+                pass
         return outcome
 
     @staticmethod
@@ -321,4 +542,4 @@ class MultiAgentManager:
                 pass
 
 
-__all__ = ["ChildResult", "ChildTask", "Evidence", "Fact", "ForkSnapshot", "MultiAgentError", "MultiAgentManager"]
+__all__ = ["ChildResult", "ChildTask", "Evidence", "Fact", "ForkSnapshot", "JobRecord", "JobRegistry", "MultiAgentError", "MultiAgentManager", "WorkspaceLeaseRegistry"]

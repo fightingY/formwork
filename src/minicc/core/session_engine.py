@@ -96,6 +96,14 @@ class SessionEngine:
         except Exception:
             return False
 
+    def stop_turn(self, session_id: str, run_id: str, *, reason: str = "user") -> bool:
+        """Explicit hard-stop spelling for UI/API callers.
+
+        ``cancel_turn`` remains the compatibility name; both paths carry the
+        same AbortSignal semantics and close the active turn asynchronously.
+        """
+        return self.cancel_turn(session_id, run_id, reason=reason)
+
     def steer(self, session_id: str, message: str, *, message_id: str | None = None) -> str:
         """Queue a next-step user injection durably; it is claimed before a request."""
         mid = message_id or uuid4().hex

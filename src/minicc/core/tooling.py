@@ -7,11 +7,13 @@ import os
 import tempfile
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from minicc.core.multi_agent import WorkspaceLeaseRegistry
 from minicc.core.protocol import ToolCall, bash_action_from_tool_call
 from minicc.core.state import Observation, RunState
 
@@ -62,13 +64,17 @@ class FileSystemCapability:
     def run(self, call: ToolCall, state: RunState) -> ToolResult:
         order = 0
         mode: ExecutionMode = "parallel" if call.tool == "read" else "exclusive"
+        if state.capability_profile == "scout" and call.tool in {"edit", "write", "bash"}:
+            return _error(call, order, mode, "CAPABILITY_DENIED", "scout children are read-only; edit/write/bash are unavailable")
         try:
             if call.tool == "read":
                 return ToolResult(call.id, call.tool, order, mode, self.read(state, call.arguments))
             if call.tool == "edit":
-                return ToolResult(call.id, call.tool, order, mode, self.edit(state, call.arguments))
+                with _workspace_write_lease(state):
+                    return ToolResult(call.id, call.tool, order, mode, self.edit(state, call.arguments))
             if call.tool == "write":
-                return ToolResult(call.id, call.tool, order, mode, self.write(state, call.arguments))
+                with _workspace_write_lease(state):
+                    return ToolResult(call.id, call.tool, order, mode, self.write(state, call.arguments))
             return _error(call, order, mode, "UNKNOWN_TOOL", f"Unsupported FS tool: {call.tool}")
         except ToolInputError as exc:
             return _error(call, order, mode, exc.code, str(exc))
@@ -192,13 +198,20 @@ class HybridToolRunner:
 
     def run(self, call: ToolCall, state: RunState) -> ToolResult:
         mode: ExecutionMode = "parallel" if call.tool == "read" else "exclusive"
+        if state.capability_profile == "scout" and call.tool in {"edit", "write", "bash"}:
+            return _error(call, 0, mode, "CAPABILITY_DENIED", "scout children are read-only; edit/write/bash are unavailable")
         if call.tool in {"read", "edit", "write"}:
             result = self.fs.run(call, state)
             return ToolResult(result.call_id, result.tool, result.model_order, mode, result.content, result.is_error)
         if call.tool == "bash":
             action = bash_action_from_tool_call(call)
-            if self.action_handler is not None:
-                outcome = self.action_handler.handle(action, state)
+            with _workspace_write_lease(state):
+                if self.action_handler is not None:
+                    outcome = self.action_handler.handle(action, state)
+                else:
+                    observation = self.bash_executor.run(action, state)
+                    outcome = None
+            if outcome is not None:
                 if state.status == "waiting_approval":
                     observation = Observation(
                         kind="approval_result",
@@ -213,8 +226,6 @@ class HybridToolRunner:
                         kind="policy_violation",
                         message="Bash action did not produce an observation.",
                     )
-            else:
-                observation = self.bash_executor.run(action, state)
             content = {
                 "exit_code": observation.exit_code,
                 "stdout": observation.stdout_preview,
@@ -238,6 +249,17 @@ class HybridToolRunner:
                 is_error = observation.kind not in {"command_result", "no_output"}
             return ToolResult(call.id, call.tool, 0, mode, content, is_error)
         return _error(call, 0, mode, "UNKNOWN_TOOL", f"Unknown tool: {call.tool}")
+
+
+@contextmanager
+def _workspace_write_lease(state: RunState):
+    """Serialize write-capable tools across parent/background/child agents."""
+    lock, epoch = WorkspaceLeaseRegistry.acquire(state.workspace_host_path)
+    state.lease_epoch = epoch
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 class ToolCallScheduler:

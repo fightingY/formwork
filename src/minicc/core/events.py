@@ -49,6 +49,12 @@ EVENT_TYPES: tuple[str, ...] = (
     "child/start",
     "child/result",
     "workflow/summary",
+    "subagent/descriptor",
+    "subagent/start",
+    "subagent/end",
+    "job/start",
+    "job/update",
+    "job/end",
 )
 
 
