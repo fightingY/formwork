@@ -10,6 +10,7 @@ from minicc.core.action_handler import ActionHandler
 from minicc.core.checkpoint import CheckpointManager
 from minicc.core.context import ContextBuilder, state_snapshot_text
 from minicc.core.lifecycle import RunLifecycle
+from minicc.core.prompt import assemble_request, provider_messages
 from minicc.core.protocol import (
     AskAction,
     BashAction,
@@ -27,6 +28,7 @@ from minicc.core.provider import (
 )
 from minicc.core.runner import ModelTurn, ModelTurnConfig, ModelTurnRunner
 from minicc.core.session import SessionManager
+from minicc.core.spill import SpillStore
 from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.core.tooling import ToolCallScheduler
 from minicc.core.verification import CompletionVerifier
@@ -35,8 +37,7 @@ from minicc.trace.recorder import TraceRecorder
 
 
 class BashExecutor(Protocol):
-    def run(self, action: BashAction, state: RunState) -> Observation:
-        ...
+    def run(self, action: BashAction, state: RunState) -> Observation: ...
 
 
 class TurnProvider(Protocol):
@@ -47,8 +48,7 @@ class TurnProvider(Protocol):
     单次 attempt。
     """
 
-    def next_turn(self, state: RunState, messages: list[dict[str, str]]) -> ModelTurn:
-        ...
+    def next_turn(self, state: RunState, messages: list[dict[str, str]]) -> ModelTurn: ...
 
 
 class DirectTurnProvider:
@@ -146,22 +146,113 @@ class AgentLoop:
             self.lifecycle.resume(state, len(trajectory))
         else:
             self.lifecycle.start(state)
+        event_log = getattr(state, "_event_log", None)
+        turn_no = int(state.metrics.get("turn_index", 0))
+        if event_log is not None and not resumed:
+            event_log.append("turn/start", {"turn": turn_no})
+            options = self.config.model_options
+            event_log.append(
+                "request/header",
+                {
+                    "header": {
+                        "provider": self.turn_runner.provider_name,
+                        "model": getattr(self.turn_runner.provider, "model", None),
+                        "temperature": options.temperature,
+                        "max_tokens": options.max_tokens,
+                        "context_window": self.context_builder.config.context_window,
+                    },
+                    "reason": "turn_start",
+                },
+            )
+            event_log.append(
+                "user/message",
+                {"turn": turn_no, "run_id": state.run_id, "role": "user", "content": state.goal},
+            )
         self._checkpoint(state, trajectory, "resume_started" if resumed else "run_started")
         if self._should_interrupt(trajectory):
             self._interrupt(state, trajectory)
 
         started_at = time.monotonic()
         while state.status == "running":
-            if self.config.max_seconds > 0 and (time.monotonic() - started_at) >= self.config.max_seconds:
+            cancel_token = getattr(state, "_cancel_token", None)
+            if cancel_token is not None and cancel_token.is_set():
+                state.status = "interrupted"
+                break
+            if (
+                self.config.max_seconds > 0
+                and (time.monotonic() - started_at) >= self.config.max_seconds
+            ):
                 self.session.fail(state, "Run failed because max_seconds was exhausted.")
                 break
 
-            if self.config.max_turns > 0 and int(state.metrics.get("turns", 0)) >= self.config.max_turns:
+            if (
+                self.config.max_turns > 0
+                and int(state.metrics.get("turns", 0)) >= self.config.max_turns
+            ):
                 self.session.fail(state, "Run failed because max_turns was exhausted.")
                 break
 
-            self.context_builder.maybe_compact(state, trajectory)
-            messages = self.context_builder.build_messages(state, trajectory)
+            if event_log is not None:
+                self._claim_steer(event_log, turn_no, state)
+            if event_log is not None:
+                # Event mode rebuilds history from Surface; trajectory is only
+                # a disposable execution view and must never become a second
+                # prompt authority.
+                registry = getattr(getattr(state, "_compaction_manager", None), "registry", None)
+                if registry is not None:
+                    registry.fold(event_log.session_id or "", event_log.events)
+                    projected_history = registry.value(event_log.session_id or "", "surface").get(
+                        "messages", []
+                    )
+                    # The current goal is supplied by dynamic context below;
+                    # keep it out of prior-turn history to avoid duplication.
+                    if (
+                        projected_history
+                        and projected_history[-1].get("role") == "user"
+                        and projected_history[-1].get("content") == state.goal
+                    ):
+                        projected_history = projected_history[:-1]
+                    state.session_history = projected_history
+                    request = registry.value(event_log.session_id or "", "request")
+                    request.setdefault("system", self.context_builder._system_prefix(state))
+                    request.setdefault("tools", self.config.model_options.tools)
+                    steer_messages = [
+                        {"role": "user", "content": e.data.get("content", "")}
+                        for e in event_log.events
+                        if e.type == "user/message"
+                        and e.data.get("source") == "steer"
+                        and e.data.get("turn") == turn_no
+                        and e.seq not in getattr(state, "_injected_steer", set())
+                    ]
+                    if steer_messages:
+                        projected_history = projected_history[: -len(steer_messages)]
+                        state._injected_steer = getattr(state, "_injected_steer", set()) | {
+                            e.seq
+                            for e in event_log.events
+                            if e.type == "user/message"
+                            and e.data.get("source") == "steer"
+                            and e.data.get("turn") == turn_no
+                        }
+                    messages = provider_messages(
+                        assemble_request(
+                            request=request,
+                            surface={"messages": projected_history},
+                            injections=[
+                                *steer_messages,
+                                {"role": "user", "content": f"Goal: {state.goal}"},
+                            ],
+                        )
+                    )
+                else:
+                    messages = self.context_builder.build_messages(state, [])
+            else:
+                self.context_builder.maybe_compact(state, trajectory)
+                messages = self.context_builder.build_messages(state, trajectory)
+            step_no = len(trajectory)
+            if event_log is not None:
+                state._event_turn = turn_no  # type: ignore[attr-defined]
+                state._event_step = step_no  # type: ignore[attr-defined]
+                event_log.append("step/start", {"turn": turn_no, "step": step_no})
             try:
                 turn = self.turn_provider.next_turn(state, messages)
             except ProviderError as exc:
@@ -171,7 +262,25 @@ class AgentLoop:
                 if exc.failure.code == CONTEXT_OVERFLOW:
                     retries = int(state.metrics.get("context_overflow_retries", 0))
                     if retries < self.context_builder.config.max_overflow_retries:
-                        if self.context_builder.force_compact(state, trajectory):
+                        event_compactor = getattr(state, "_compaction_manager", None)
+                        # The failed model request is itself a completed step:
+                        # close it before compaction so the selected region can
+                        # never contain an open step.
+                        if event_log is not None:
+                            event_log.append(
+                                "step/end",
+                                {
+                                    "turn": turn_no,
+                                    "step": step_no,
+                                    "reason": {"kind": "context_overflow"},
+                                },
+                            )
+                        compacted = (
+                            event_compactor.recover_overflow()
+                            if event_compactor is not None
+                            else self.context_builder.force_compact(state, trajectory)
+                        )
+                        if compacted:
                             state.metrics["context_overflow_retries"] = retries + 1
                             state.metrics["context_overflow_recovered"] = (
                                 state.metrics.get("context_overflow_recovered", 0) + 1
@@ -182,6 +291,15 @@ class AgentLoop:
                                 retry=retries + 1,
                             )
                             continue
+                if event_log is not None:
+                    event_log.append(
+                        "step/end",
+                        {
+                            "turn": turn_no,
+                            "step": step_no,
+                            "reason": {"kind": "provider_error", "code": exc.failure.code},
+                        },
+                    )
                 self.session.fail(state, f"Run failed because the model provider failed: {exc}")
                 break
             if turn.observation is not None:
@@ -193,11 +311,36 @@ class AgentLoop:
                     )
                 )
                 self._checkpoint(state, trajectory, "model_observation_recorded")
+            if event_log is not None and not any(isinstance(a, FinalAction) for a in turn.actions):
+                blocks = [
+                    {
+                        "type": "tool-call",
+                        "id": a.id,
+                        "name": a.tool,
+                        "arguments": dict(a.arguments),
+                    }
+                    if isinstance(a, ToolCall)
+                    else {"type": type(a).__name__}
+                    for a in turn.actions
+                ]
+                event_log.append(
+                    "assistant/message",
+                    {
+                        "turn": turn_no,
+                        "step": step_no,
+                        "run_id": state.run_id,
+                        "message": {"role": "assistant", "content": blocks},
+                    },
+                )
 
             if not turn.should_continue or state.status != "running":
+                if event_log is not None:
+                    event_log.append("step/end", {"turn": turn_no, "step": step_no})
                 break
 
             if not turn.actions:
+                if event_log is not None:
+                    event_log.append("step/end", {"turn": turn_no, "step": step_no})
                 continue
 
             control_actions = [
@@ -220,9 +363,18 @@ class AgentLoop:
                     ),
                 )
                 trajectory.append(
-                    TrajectoryStep(action=None, observation=observation, state_snapshot=state_snapshot_text(state))
+                    TrajectoryStep(
+                        action=None,
+                        observation=observation,
+                        state_snapshot=state_snapshot_text(state),
+                    )
                 )
                 self.trace.observation_created(state, observation)
+                if event_log is not None:
+                    event_log.append(
+                        "step/end",
+                        {"turn": turn_no, "step": step_no, "reason": {"kind": "protocol_error"}},
+                    )
                 continue
 
             if control_actions:
@@ -237,6 +389,21 @@ class AgentLoop:
                 elif current_status == "completed":
                     reason = "run_completed"
                 self._checkpoint(state, trajectory, reason)
+                if event_log is not None:
+                    if isinstance(action, FinalAction):
+                        event_log.append(
+                            "assistant/message",
+                            {
+                                "turn": turn_no,
+                                "step": step_no,
+                                "run_id": state.run_id,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": state.final_answer or "",
+                                },
+                            },
+                        )
+                    event_log.append("step/end", {"turn": turn_no, "step": step_no})
 
                 if state.status == "running" and self._should_interrupt(trajectory):
                     self._interrupt(state, trajectory)
@@ -246,7 +413,10 @@ class AgentLoop:
                 continue
 
             if self.tool_scheduler is None:
-                self.session.fail(state, "Run failed because no tool scheduler is configured to dispatch tool calls.")
+                self.session.fail(
+                    state,
+                    "Run failed because no tool scheduler is configured to dispatch tool calls.",
+                )
                 break
 
             for model_order, call in enumerate(tool_calls):
@@ -258,6 +428,18 @@ class AgentLoop:
                     model_order=model_order,
                     execution_mode="parallel" if call.tool == "read" else "exclusive",
                 )
+                if event_log is not None:
+                    event_log.append(
+                        "tool/call",
+                        {
+                            "turn": turn_no,
+                            "step": step_no,
+                            "call_id": call.id,
+                            "name": call.tool,
+                            "arguments": dict(call.arguments),
+                            "started": True,
+                        },
+                    )
             results = self.tool_scheduler.dispatch(tuple(tool_calls), state)
             state.metrics["tool_call_steps"] = state.metrics.get("tool_call_steps", 0) + 1
             state.metrics["tool_calls"] = state.metrics.get("tool_calls", 0) + len(results)
@@ -265,20 +447,51 @@ class AgentLoop:
             ordered_payload = []
             for result in results:
                 self.trace.tool_result(state, result)
+                model_content, locator = self._model_tool_content(
+                    state, result.call_id, result.content
+                )
+                if event_log is not None:
+                    if locator is not None:
+                        event_log.append(
+                            "artifact/spill",
+                            {
+                                "locator": locator,
+                                "turn": turn_no,
+                                "step": step_no,
+                                "call_id": result.call_id,
+                                "bytes": model_content.get("bytes", 0),
+                                "preview": model_content.get("preview", ""),
+                            },
+                        )
+                    event_log.append(
+                        "tool/result",
+                        {
+                            "turn": turn_no,
+                            "step": step_no,
+                            "call_id": result.call_id,
+                            "role": "tool",
+                            "content": model_content,
+                            "locator": locator,
+                            "is_error": result.is_error,
+                        },
+                    )
                 ordered_payload.append(
                     {
                         "call_id": result.call_id,
                         "tool": result.tool,
                         "model_order": result.model_order,
                         "is_error": result.is_error,
-                        "content": result.content,
+                        "content": model_content,
+                        "locator": locator,
                     }
                 )
                 metric = f"{result.tool}_tool_calls"
                 state.metrics[metric] = state.metrics.get(metric, 0) + 1
             observation = Observation(
                 kind=(
-                    "command_error" if any(result.is_error for result in results) else "command_result"
+                    "command_error"
+                    if any(result.is_error for result in results)
+                    else "command_result"
                 ),
                 exit_code=(None if any(result.is_error for result in results) else 0),
                 stdout_preview=json.dumps(ordered_payload, ensure_ascii=False),
@@ -295,16 +508,81 @@ class AgentLoop:
             state.last_observation = observation
             self.session.save(state)
             self._checkpoint(state, trajectory, "tool_calls_completed")
+            if event_log is not None:
+                event_log.append("step/end", {"turn": turn_no, "step": step_no})
 
             if state.status == "running" and self._should_interrupt(trajectory):
                 self._interrupt(state, trajectory)
 
         self.lifecycle.finish(state)
+        if event_log is not None and state.status in {"completed", "failed", "interrupted"}:
+            reason = (
+                {"kind": "aborted"}
+                if state.status == "interrupted"
+                else {"kind": "completed" if state.status == "completed" else "failed"}
+            )
+            event_log.append("turn/end", {"turn": turn_no, "reason": reason})
         if state.status == "interrupted":
             self._checkpoint(state, trajectory, "interrupted_finalized")
         if state.run_dir is not None or self.session.runs_root is not None:
             self.session.save(state)
         return AgentLoopResult(state=state, trajectory=trajectory)
+
+    @staticmethod
+    def _claim_steer(event_log: object, turn_no: int, state: RunState) -> None:
+        log = event_log
+        pending: list[dict[str, object]] = []
+        claimed: set[str] = set()
+        for event in log.events:  # type: ignore[attr-defined]
+            if event.type != "inbox/splice":
+                continue
+            data = event.data
+            if data.get("queue", "next-step") != "next-step":
+                continue
+            if data.get("op") == "append":
+                pending.extend(data.get("messages", []))
+            elif data.get("op") == "claim":
+                claimed.update(str(i) for i in data.get("ids", []))
+        fresh = [m for m in pending if isinstance(m, dict) and str(m.get("id")) not in claimed]
+        if not fresh:
+            return
+        ids = [str(m.get("id")) for m in fresh]
+        log.append("inbox/splice", {"queue": "next-step", "op": "claim", "ids": ids})  # type: ignore[attr-defined]
+        for message in fresh:
+            log.append(
+                "user/message",
+                {
+                    "turn": turn_no,
+                    "run_id": state.run_id,
+                    "message_id": message.get("id"),
+                    "role": "user",
+                    "content": message.get("content", ""),
+                    "source": "steer",
+                },
+            )  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _model_tool_content(
+        state: RunState,
+        call_id: str,
+        content: dict[str, object],
+        *,
+        max_chars: int = 12_000,
+    ) -> tuple[dict[str, object], str | None]:
+        rendered = json.dumps(content, ensure_ascii=False)
+        if len(rendered) <= max_chars:
+            return content, None
+        base = state.artifacts_dir or state.run_dir
+        if base is None:
+            return {"preview": rendered[:max_chars], "truncated": True}, None
+        spill = SpillStore(base / "spill", preview_chars=max_chars).write(
+            rendered, f"tool-{call_id}.json"
+        )
+        return {
+            "preview": spill.preview,
+            "truncated": True,
+            "bytes": spill.bytes,
+        }, spill.locator
 
     def _checkpoint(
         self,

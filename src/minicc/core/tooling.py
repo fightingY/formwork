@@ -97,7 +97,6 @@ class FileSystemCapability:
             "limit": limit,
             "total_lines": len(lines),
             "truncated": truncated,
-            "sha256": _sha256(path),
         }
 
     def edit(self, state: RunState, arguments: dict[str, Any] | Any) -> dict[str, Any]:

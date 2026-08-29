@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import gcd
 from typing import Any
 
@@ -35,9 +35,7 @@ class ModelTurnRunner:
         trace: TraceRecorder | None = None,
     ) -> None:
         self.provider = provider
-        self.provider_name = str(
-            getattr(provider, "provider_name", type(provider).__name__)
-        )
+        self.provider_name = str(getattr(provider, "provider_name", type(provider).__name__))
         self.config = config or ModelTurnConfig()
         self.trace = trace
 
@@ -56,7 +54,30 @@ class ModelTurnRunner:
         state.metrics["provider_name"] = str(
             getattr(active_provider, "provider_name", type(active_provider).__name__)
         )
-        response = active_provider.complete(messages, options=self.config.model_options)
+        options = self.config.model_options
+        cancel_event = getattr(state, "_cancel_token", None)
+        if cancel_event is not None:
+            options = replace(options, cancel_event=cancel_event)
+        event_log = getattr(state, "_event_log", None)
+        if event_log is not None and options.stream:
+            original_chunk = options.on_chunk
+
+            def on_chunk(chunk: dict[str, Any]) -> None:
+                event_log.append(
+                    "assistant/chunk",
+                    {
+                        "turn": getattr(state, "_event_turn", 0),
+                        "step": getattr(state, "_event_step", 0),
+                        "chunk": chunk,
+                        "request_id": response_id,
+                    },
+                )
+                if original_chunk is not None:
+                    original_chunk(chunk)
+
+            response_id = f"{getattr(state, 'run_id', 'run')}:{getattr(state, '_event_step', 0)}:{attempt_count}"
+            options = replace(options, on_chunk=on_chunk)
+        response = active_provider.complete(messages, options=options)
         state.metrics["turns"] += 1
         _accumulate_response_identity(state, response.raw)
         _accumulate_usage(
@@ -80,9 +101,7 @@ class ModelTurnRunner:
             # （不是模型可恢复的场景，理论上不该发生）——直接终止 run。旧协议的
             # "协议错误重试预算"是为文本 JSON 解析失败设计的，原生模式下没有对应场景。
             state.status = "failed"
-            state.state_summary = (
-                "Run failed because the provider returned no tool_calls despite tool_choice=required."
-            )
+            state.state_summary = "Run failed because the provider returned no tool_calls despite tool_choice=required."
             observation = Observation(kind="command_error", message=state.state_summary)
             if self.trace is not None:
                 self.trace.observation_created(state, observation)
@@ -144,7 +163,9 @@ def _accumulate_usage(
         observed_prompt_tokens = usage.prompt_tokens
 
     if observed_hit_tokens is None or observed_prompt_tokens is None:
-        state.metrics["cache_unreported_requests"] = state.metrics.get("cache_unreported_requests", 0) + 1
+        state.metrics["cache_unreported_requests"] = (
+            state.metrics.get("cache_unreported_requests", 0) + 1
+        )
     else:
         state.metrics["cache_metrics_available"] = True
         state.metrics["cache_metric_requests"] = state.metrics.get("cache_metric_requests", 0) + 1
@@ -214,9 +235,7 @@ def _record_cache_request(
             "cache_layer_conversation_estimated_tokens_current"
         ),
         "prefix_hash": state.metrics.get("cache_prefix_request_sha256"),
-        "previous_request_is_prefix": bool(
-            state.metrics.get("cache_prefix_previous_is_exact")
-        ),
+        "previous_request_is_prefix": bool(state.metrics.get("cache_prefix_previous_is_exact")),
         "longest_common_prefix_estimated_tokens": state.metrics.get(
             "cache_prefix_lcp_estimated_tokens"
         ),
@@ -240,7 +259,9 @@ def _accumulate_cacheability(
     cold_start = bool(state.metrics.get("cache_prefix_local_cold_start"))
     previous_is_exact = bool(state.metrics.get("cache_prefix_previous_is_exact"))
     previous_prompt = _optional_int(state.metrics.get("cache_previous_provider_prompt_tokens"))
-    previous_completion = _optional_int(state.metrics.get("cache_previous_provider_completion_tokens"))
+    previous_completion = _optional_int(
+        state.metrics.get("cache_previous_provider_completion_tokens")
+    )
     theoretical_kind = "unavailable"
     theoretical_input = 0
     theoretical_output = 0
@@ -269,11 +290,7 @@ def _accumulate_cacheability(
             theoretical_output = theoretical_input
             theoretical_kind = "estimated_message_lcp"
 
-    eligible_hit = (
-        min(observed_hit_tokens, theoretical_input)
-        if theoretical_input > 0
-        else 0
-    )
+    eligible_hit = min(observed_hit_tokens, theoretical_input) if theoretical_input > 0 else 0
     state.metrics["cache_theoretical_input_tokens"] = (
         int(state.metrics.get("cache_theoretical_input_tokens", 0)) + theoretical_input
     )
@@ -292,9 +309,7 @@ def _accumulate_cacheability(
     state.metrics["cache_capture_efficiency_output"] = (
         capture_hit_total / output_total if output_total else None
     )
-    steady_state_observed = bool(
-        state.metrics.get("cache_steady_state_observed")
-    )
+    steady_state_observed = bool(state.metrics.get("cache_steady_state_observed"))
     if observed_hit_tokens > 0 and not steady_state_observed:
         steady_state_observed = True
         state.metrics["cache_steady_state_observed"] = True

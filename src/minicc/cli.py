@@ -93,7 +93,6 @@ from minicc.evals.memory_acceptance import (
     load_memory_suite_report,
     write_memory_acceptance_report,
 )
-from minicc.evals.meta_review_ab import build_meta_review_ab_report, write_meta_review_ab_report
 from minicc.evals.release_report import (
     build_release_report,
     load_context_suite_evidence,
@@ -113,7 +112,6 @@ from minicc.memory.escalation import (
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.l1 import L1Distiller, MemoryStore, MemoryTurnHook, project_db_path
 from minicc.memory.working import attach_working_memory
-from minicc.meta.reviewer import MetaReviewer, MetaReviewError, load_meta_review
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
 from minicc.sandbox.docker_runner import (
@@ -138,7 +136,7 @@ from minicc.trace.replay import (
     run_deterministic_replay,
 )
 from minicc.trace.report import write_run_report
-from minicc.trace.transcript import project_trace
+from minicc.trace.transcript import project_event_log, project_trace
 
 
 def _reconfigure_std_streams() -> None:
@@ -182,7 +180,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     run_parser = subparsers.add_parser("run", help="Run a goal through the miniCC agent loop.")
     run_parser.add_argument("goal", help="User goal for the agent.")
-    run_parser.add_argument("--milestone", default=None, help="Override project.milestone for run indexing.")
+    run_parser.add_argument(
+        "--milestone", default=None, help="Override project.milestone for run indexing."
+    )
     run_parser.add_argument(
         "--source-dir",
         type=Path,
@@ -247,12 +247,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     approve_parser = subparsers.add_parser("approve", help="Approve a pending action for a run.")
     approve_parser.add_argument("run_id", help="Run id waiting for approval.")
-    approve_parser.add_argument("--yes", action="store_true", help="Approve without interactive prompt.")
+    approve_parser.add_argument(
+        "--yes", action="store_true", help="Approve without interactive prompt."
+    )
     approve_parser.set_defaults(handler=approve_command)
 
     deny_parser = subparsers.add_parser("deny", help="Deny a pending action for a run.")
     deny_parser.add_argument("run_id", help="Run id waiting for approval.")
-    deny_parser.add_argument("--reason", default="User denied the action.", help="Reason returned to the model.")
+    deny_parser.add_argument(
+        "--reason", default="User denied the action.", help="Reason returned to the model."
+    )
     deny_parser.set_defaults(handler=deny_command)
 
     models_parser = subparsers.add_parser(
@@ -278,9 +282,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     models_parser.set_defaults(handler=models_command)
 
-    eval_parser = subparsers.add_parser("eval", help="Run eval cases and write JSON/Markdown reports.")
+    eval_parser = subparsers.add_parser(
+        "eval", help="Run eval cases and write JSON/Markdown reports."
+    )
     eval_parser.add_argument("path", nargs="?", default="eval_cases", help="Eval cases directory.")
-    eval_parser.add_argument("--milestone", default=None, help="Override project.milestone for run indexing.")
+    eval_parser.add_argument(
+        "--milestone", default=None, help="Override project.milestone for run indexing."
+    )
     eval_parser.add_argument(
         "--execute-local",
         action="store_true",
@@ -570,9 +578,13 @@ def build_parser() -> argparse.ArgumentParser:
     cache_utilization_parser.add_argument("--output-dir", type=Path, required=True)
     cache_utilization_parser.set_defaults(handler=cache_utilization_report_command)
 
-    traces_parser = subparsers.add_parser("traces", help="List runs that have trace or metrics files.")
+    traces_parser = subparsers.add_parser(
+        "traces", help="List runs that have trace or metrics files."
+    )
     traces_parser.set_defaults(handler=traces_command)
-    transcript_parser = subparsers.add_parser("transcript", help="Project a trace.jsonl into transcript artifacts.")
+    transcript_parser = subparsers.add_parser(
+        "transcript", help="Project a trace.jsonl into transcript artifacts."
+    )
     transcript_parser.add_argument("trace", type=Path, help="Path to trace.jsonl.")
     transcript_parser.add_argument("--output-dir", type=Path, default=None)
     transcript_parser.set_defaults(handler=transcript_command)
@@ -595,9 +607,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     replay_run.add_argument("case", type=Path, help="Replay case directory or case.json path.")
     replay_run.add_argument("--fresh", action="store_true", help="Also rerun the current Runtime.")
-    replay_run.add_argument("--execute-local", action="store_true", help="Use local execution instead of Docker for fresh replay.")
-    replay_run.add_argument("--docker-image", default=None, help="Override the Docker image for fresh replay.")
-    replay_run.add_argument("--verify-command", action="append", default=[], help="Pre-bound verifier command for fresh replay; repeatable.")
+    replay_run.add_argument(
+        "--execute-local",
+        action="store_true",
+        help="Use local execution instead of Docker for fresh replay.",
+    )
+    replay_run.add_argument(
+        "--docker-image", default=None, help="Override the Docker image for fresh replay."
+    )
+    replay_run.add_argument(
+        "--verify-command",
+        action="append",
+        default=[],
+        help="Pre-bound verifier command for fresh replay; repeatable.",
+    )
     replay_run.add_argument("--verification-timeout-sec", type=int, default=120)
     replay_run.add_argument("--output-dir", type=Path, default=None)
     replay_run.add_argument("--json", action="store_true", dest="json_output")
@@ -620,42 +643,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cleanup_parser.set_defaults(handler=cleanup_command)
 
-    meta_parser = subparsers.add_parser(
-        "meta-review",
-        help="Review immutable evidence from one completed run without changing that run.",
-    )
-    meta_parser.add_argument("run_id", help="Run id below .minicc/runs.")
-    meta_parser.add_argument(
-        "--offline",
-        action="store_true",
-        help="Use the deterministic diagnostic instead of a model (not formal evidence).",
-    )
-    meta_parser.add_argument(
-        "--output-root",
-        type=Path,
-        default=None,
-        help="Review root (default: .minicc/meta-reviews).",
-    )
-    meta_parser.set_defaults(handler=meta_review_command)
-
-    meta_report_parser = subparsers.add_parser(
-        "meta-review-report",
-        help="Build the V3.1 disabled/enabled Meta Review acceptance report.",
-    )
-    meta_report_parser.add_argument("--disabled-suite", type=Path, required=True)
-    meta_report_parser.add_argument("--enabled-suite", type=Path, required=True)
-    meta_report_parser.add_argument(
-        "--review",
-        dest="reviews",
-        action="append",
-        type=Path,
-        required=True,
-        help="Meta review directory or report.json; repeat once per enabled run.",
-    )
-    meta_report_parser.add_argument("--output-dir", type=Path, required=True)
-    meta_report_parser.add_argument("--release-gate", action="store_true")
-    meta_report_parser.set_defaults(handler=meta_review_report_command)
-
     guidance_report_parser = subparsers.add_parser(
         "guidance-report",
         help="Verify and aggregate the V3.2 disabled/enabled guidance suites.",
@@ -672,7 +659,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     session_sub = session_parser.add_subparsers(dest="session_subcommand")
     session_new = session_sub.add_parser("new", help="Create a new session.")
-    session_new.add_argument("--project-root", type=Path, default=None, help="Project directory (default: cwd).")
+    session_new.add_argument(
+        "--project-root", type=Path, default=None, help="Project directory (default: cwd)."
+    )
     session_new.add_argument("--title", default="", help="Optional session title.")
     session_new.set_defaults(handler=session_command)
     session_list = session_sub.add_parser("list", help="List all sessions.")
@@ -684,7 +673,10 @@ def build_parser() -> argparse.ArgumentParser:
     session_rename.add_argument("session_id")
     session_rename.add_argument("title")
     session_rename.set_defaults(handler=session_command)
-    for name, help_text in (("switch", "Set the current session."), ("resume", "Point to a session to continue.")):
+    for name, help_text in (
+        ("switch", "Set the current session."),
+        ("resume", "Point to a session to continue."),
+    ):
         sub = session_sub.add_parser(name, help=help_text)
         sub.add_argument("session_id")
         sub.set_defaults(handler=session_command)
@@ -692,7 +684,9 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser = subparsers.add_parser(
         "chat", help="Start a conversational chat REPL against a session (V5, experimental)."
     )
-    chat_parser.add_argument("--project-root", type=Path, default=None, help="Project directory (default: cwd).")
+    chat_parser.add_argument(
+        "--project-root", type=Path, default=None, help="Project directory (default: cwd)."
+    )
     chat_parser.add_argument(
         "--session",
         "--resume",
@@ -731,7 +725,9 @@ def models_command(args: argparse.Namespace) -> int:
             timeout_ms=route.timeout_ms,
         )
     except ProviderError as exc:
-        print(f"Model discovery failed ({exc.failure.code}): {exc.failure.message}", file=sys.stderr)
+        print(
+            f"Model discovery failed ({exc.failure.code}): {exc.failure.message}", file=sys.stderr
+        )
         return 1
 
     if not models:
@@ -769,7 +765,23 @@ def _print_models(models: list[ModelInfo], *, json_output: bool) -> None:
 
 def transcript_command(args: argparse.Namespace) -> int:
     try:
-        json_path, markdown_path = project_trace(args.trace, args.output_dir)
+        if args.trace.name == "events.jsonl":
+            from minicc.core.events import EventLog
+
+            records = project_event_log(EventLog(args.trace))
+            target = args.output_dir or args.trace.parent
+            target.mkdir(parents=True, exist_ok=True)
+            json_path = target / "transcript.json"
+            json_path.write_text(
+                json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            markdown_path = target / "transcript.md"
+            markdown_path.write_text(
+                "\n".join(f"[{r.get('type')}] {r.get('data', {})}" for r in records),
+                encoding="utf-8",
+            )
+        else:
+            json_path, markdown_path = project_trace(args.trace, args.output_dir)
     except OSError as exc:
         print(f"Transcript projection failed: {exc}", file=sys.stderr)
         return 1
@@ -834,26 +846,24 @@ def replay_run_command(args: argparse.Namespace) -> int:
             if not goal or not fixture.is_dir():
                 raise ReplayError("Fresh replay requires a goal and a workspace fixture.")
             if manifest.get("fresh_eligible") is not True:
-                raise ReplayError("Replay case does not contain a usable baseline workspace fixture.")
+                raise ReplayError(
+                    "Replay case does not contain a usable baseline workspace fixture."
+                )
         except (OSError, json.JSONDecodeError, ReplayError) as exc:
             print(f"Fresh replay setup failed: {exc}", file=sys.stderr)
             return 1
 
-        before = {
-            path.name
-            for path in (Path.cwd() / ".minicc" / "runs").iterdir()
-            if path.is_dir()
-        } if (Path.cwd() / ".minicc" / "runs").is_dir() else set()
+        before = (
+            {path.name for path in (Path.cwd() / ".minicc" / "runs").iterdir() if path.is_dir()}
+            if (Path.cwd() / ".minicc" / "runs").is_dir()
+            else set()
+        )
         run_args = argparse.Namespace(
             goal=goal,
             milestone="replay",
             source_dir=fixture,
             execute_local=bool(args.execute_local),
-            verify_command=list(
-                args.verify_command
-                or manifest.get("verification_commands")
-                or []
-            ),
+            verify_command=list(args.verify_command or manifest.get("verification_commands") or []),
             verification_timeout_sec=(
                 int(args.verification_timeout_sec)
                 if args.verification_timeout_sec != 120
@@ -867,10 +877,15 @@ def replay_run_command(args: argparse.Namespace) -> int:
         )
         fresh_return_code = run_command(run_args)
         runs_root = Path.cwd() / ".minicc" / "runs"
-        candidates = [
-            path for path in runs_root.iterdir()
-            if path.is_dir() and path.name not in before and (path / "state.json").is_file()
-        ] if runs_root.is_dir() else []
+        candidates = (
+            [
+                path
+                for path in runs_root.iterdir()
+                if path.is_dir() and path.name not in before and (path / "state.json").is_file()
+            ]
+            if runs_root.is_dir()
+            else []
+        )
         if not candidates:
             print("Fresh replay did not produce a run directory.", file=sys.stderr)
             return 1
@@ -898,7 +913,9 @@ def replay_run_command(args: argparse.Namespace) -> int:
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     combined_path = output_dir / "replay_report.json"
-    combined_path.write_text(json.dumps(combined, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    combined_path.write_text(
+        json.dumps(combined, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     combined_md = [
         f"# Replay Report: `{deterministic.case_id}`",
         "",
@@ -907,11 +924,13 @@ def replay_run_command(args: argparse.Namespace) -> int:
     ]
     if fresh is not None:
         combined_md.append(f"- Fresh passed: `{fresh.passed}`")
-    combined_md.extend([
-        "",
-        f"- Deterministic report: `{deterministic.report_path.name}`",
-        *([f"- Fresh report: `{fresh.report_path.name}"] if fresh is not None else []),
-    ])
+    combined_md.extend(
+        [
+            "",
+            f"- Deterministic report: `{deterministic.report_path.name}`",
+            *([f"- Fresh report: `{fresh.report_path.name}"] if fresh is not None else []),
+        ]
+    )
     (output_dir / "replay_report.md").write_text("\n".join(combined_md) + "\n", encoding="utf-8")
     if args.json_output:
         print(json.dumps(combined, ensure_ascii=False, indent=2))
@@ -973,9 +992,7 @@ def run_command(args: argparse.Namespace) -> int:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        state.metrics["completion_verifier_sha256"] = hashlib.sha256(
-            verifier_payload
-        ).hexdigest()
+        state.metrics["completion_verifier_sha256"] = hashlib.sha256(verifier_payload).hexdigest()
         state.metrics["completion_verifier_commands"] = list(verification_commands)
         state.metrics["completion_verifier_timeout_sec"] = verification_timeout_sec
     result = None
@@ -1080,7 +1097,9 @@ def run_command(args: argparse.Namespace) -> int:
             source_digest_after = workspace_content_digest(source_dir)
             state.metrics["source_content_sha256_before"] = source_digest_before
             state.metrics["source_content_sha256_after"] = source_digest_after
-            state.metrics["source_workspace_unchanged"] = source_digest_after == source_digest_before
+            state.metrics["source_workspace_unchanged"] = (
+                source_digest_after == source_digest_before
+            )
             if source_digest_after != source_digest_before:
                 state.status = "failed"
                 state.state_summary = "Source repository changed during isolated execution."
@@ -1135,7 +1154,10 @@ def resume_command(args: argparse.Namespace) -> int:
         state = restored.state
         restored_trajectory = restored.trajectory
     elif state.status != "waiting_approval":
-        print(f"Run {args.run_id} is not waiting for approval. Current status: {state.status}", file=sys.stderr)
+        print(
+            f"Run {args.run_id} is not waiting for approval. Current status: {state.status}",
+            file=sys.stderr,
+        )
         return 2
 
     runner = None
@@ -1218,7 +1240,9 @@ def approve_command(args: argparse.Namespace) -> int:
     if state is None:
         return 2
     session.approve(state)
-    print(f"Approved pending action for run {args.run_id}. Use `uv run minicc resume {args.run_id}` to continue.")
+    print(
+        f"Approved pending action for run {args.run_id}. Use `uv run minicc resume {args.run_id}` to continue."
+    )
     return 0
 
 
@@ -1228,7 +1252,9 @@ def deny_command(args: argparse.Namespace) -> int:
     if state is None:
         return 2
     session.deny(state, args.reason)
-    print(f"Denied pending action for run {args.run_id}. Use `uv run minicc resume {args.run_id}` to continue.")
+    print(
+        f"Denied pending action for run {args.run_id}. Use `uv run minicc resume {args.run_id}` to continue."
+    )
     return 0
 
 
@@ -1303,7 +1329,9 @@ def session_command(args: argparse.Namespace) -> int:
         for record in records:
             marker = "*" if record.session_id == current else " "
             title = record.title or "(untitled)"
-            print(f"{marker} {record.session_id}  {record.updated_at}  {len(record.turns)} turn(s)  {title}")
+            print(
+                f"{marker} {record.session_id}  {record.updated_at}  {len(record.turns)} turn(s)  {title}"
+            )
             print(f"    project: {record.project_root}")
         return 0
 
@@ -1631,13 +1659,17 @@ def _build_loop(
         start_session = getattr(provider, "start_session", None)
         if callable(start_session):
             start_session(state.run_id)
-    skill_workspace = state.workspace_host_path if state and state.workspace_host_path else Path.cwd()
+    skill_workspace = (
+        state.workspace_host_path if state and state.workspace_host_path else Path.cwd()
+    )
     trace = TraceRecorder(
         trace_path_for(state) if state is not None else None,
         on_event=state.progress_callback if state is not None else None,
     )
-    if state is not None and state.repository_profile and not state.metrics.get(
-        "repository_profile_trace_recorded"
+    if (
+        state is not None
+        and state.repository_profile
+        and not state.metrics.get("repository_profile_trace_recorded")
     ):
         trace.record(
             "repository_profile_created",
@@ -1760,7 +1792,10 @@ def _load_waiting_state(
         return None
     state = session.load(run_id)
     if state.status != "waiting_approval":
-        print(f"Run {run_id} is not waiting for approval. Current status: {state.status}", file=sys.stderr)
+        print(
+            f"Run {run_id} is not waiting for approval. Current status: {state.status}",
+            file=sys.stderr,
+        )
         return None
     if require_pending_action and state.pending_action is None:
         print(f"Run {run_id} has no pending bash action to approve or deny.", file=sys.stderr)
@@ -1773,16 +1808,20 @@ def eval_command(args: argparse.Namespace) -> int:
     context_variant = getattr(args, "context_variant", None)
     if context_variant is not None:
         strategy: CompactionStrategy = "semantic" if context_variant == "a1" else "disabled"
-        settings = replace(settings, context=replace(settings.context, compaction_strategy=strategy))
+        settings = replace(
+            settings, context=replace(settings.context, compaction_strategy=strategy)
+        )
     cache_variant = getattr(args, "cache_variant", None)
     cache_sequence_id = str(getattr(args, "cache_sequence_id", "") or "").strip()
     execution_order = getattr(args, "execution_order", None)
     guidance_variant = getattr(args, "guidance_variant", None)
     guidance_sequence_id = str(getattr(args, "guidance_sequence_id", "") or "").strip()
     guidance_execution_order = getattr(args, "guidance_execution_order", None)
-    guidance_feedback_path = str(
-        getattr(args, "guidance_feedback_path", "guidance/feedback_rules.jsonl") or ""
-    ).strip().replace("\\", "/")
+    guidance_feedback_path = (
+        str(getattr(args, "guidance_feedback_path", "guidance/feedback_rules.jsonl") or "")
+        .strip()
+        .replace("\\", "/")
+    )
     if guidance_variant and (context_variant or cache_variant):
         print("--guidance-variant cannot be combined with context/cache variants.", file=sys.stderr)
         return 2
@@ -1795,7 +1834,9 @@ def eval_command(args: argparse.Namespace) -> int:
     if (guidance_sequence_id or guidance_execution_order) and not guidance_variant:
         print("guidance sequence/order options require --guidance-variant.", file=sys.stderr)
         return 2
-    if guidance_variant and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", guidance_sequence_id):
+    if guidance_variant and not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", guidance_sequence_id
+    ):
         print("invalid --guidance-sequence-id.", file=sys.stderr)
         return 2
     feedback_parts = PurePosixPath(guidance_feedback_path).parts
@@ -1832,9 +1873,7 @@ def eval_command(args: argparse.Namespace) -> int:
         )
         settings = replace(settings, context=replace(settings.context, prompt_layout=prompt_layout))
     guidance_namespace = (
-        f"guidance-experiment/{guidance_sequence_id}/{guidance_variant}"
-        if guidance_variant
-        else ""
+        f"guidance-experiment/{guidance_sequence_id}/{guidance_variant}" if guidance_variant else ""
     )
     milestone = _effective_milestone(settings, args)
     v212_formal = bool(args.release_gate and "2.1.2" in milestone)
@@ -1856,8 +1895,7 @@ def eval_command(args: argparse.Namespace) -> int:
     ]
     if v212_formal and len(selected_cases) != 2:
         print(
-            "Release gate rejected: V2.1.2 requires one canonical definition "
-            "for each C02/C07 case",
+            "Release gate rejected: V2.1.2 requires one canonical definition for each C02/C07 case",
             file=sys.stderr,
         )
         return 2
@@ -1911,7 +1949,11 @@ def eval_command(args: argparse.Namespace) -> int:
             state.metrics["guidance_variant"] = guidance_variant
             state.metrics["guidance_sequence_id"] = guidance_sequence_id
             state.metrics["guidance_feedback_path"] = guidance_feedback_path
-        if state.run_dir is None or state.artifacts_dir is None or state.workspace_host_path is None:
+        if (
+            state.run_dir is None
+            or state.artifacts_dir is None
+            or state.workspace_host_path is None
+        ):
             raise RuntimeError("eval runner did not initialize run workspace paths")
         _attach_repository_context(state, state.workspace_host_path)
         artifacts = ArtifactStore(
@@ -1933,7 +1975,9 @@ def eval_command(args: argparse.Namespace) -> int:
                         cpus=settings.sandbox.cpus,
                         memory=settings.sandbox.memory,
                         pids_limit=settings.sandbox.pids_limit,
-                        network="bridge" if case.sandbox_mode == "dev" else settings.sandbox.network,
+                        network="bridge"
+                        if case.sandbox_mode == "dev"
+                        else settings.sandbox.network,
                     )
                 )
                 state.container_name = runner.start(
@@ -1970,10 +2014,7 @@ def eval_command(args: argparse.Namespace) -> int:
             if callable(close_provider):
                 close_provider()
 
-    case_contexts = {
-        case.name: dict(case.context)
-        for case in selected_cases
-    }
+    case_contexts = {case.name: dict(case.context) for case in selected_cases}
     configuration = {
         **_provider_summary(settings),
         "sandbox_mode": settings.sandbox.mode,
@@ -1994,7 +2035,9 @@ def eval_command(args: argparse.Namespace) -> int:
         "feedback_memory_mode": (
             "disabled"
             if cache_variant or guidance_variant == "a0"
-            else "commit_bound" if guidance_variant == "a1" else "configured"
+            else "commit_bound"
+            if guidance_variant == "a1"
+            else "configured"
         ),
         "prompt_layout": settings.context.prompt_layout,
         "compaction_strategy": settings.context.compaction_strategy,
@@ -2020,15 +2063,9 @@ def eval_command(args: argparse.Namespace) -> int:
     if args.release_gate:
         post_git_commit, post_worktree_dirty = _git_evidence(Path.cwd())
         post_formal_git_error = (
-            _git_formal_state_error(Path.cwd())
-            if (v212_formal or v30_formal or v32_formal)
-            else ""
+            _git_formal_state_error(Path.cwd()) if (v212_formal or v30_formal or v32_formal) else ""
         )
-        if (
-            post_git_commit != git_commit
-            or post_worktree_dirty
-            or bool(post_formal_git_error)
-        ):
+        if post_git_commit != git_commit or post_worktree_dirty or bool(post_formal_git_error):
             print(
                 "Release gate rejected: Git state changed during execution",
                 file=sys.stderr,
@@ -2113,7 +2150,11 @@ def memory_eval_command(args: argparse.Namespace) -> int:
         state.prompt_namespace = f"memory-experiment/{suite_id}"
         if source_run_id is not None:
             attach_working_memory(state, source_run_id, runs_root=runs_root)
-        if state.run_dir is None or state.artifacts_dir is None or state.workspace_host_path is None:
+        if (
+            state.run_dir is None
+            or state.artifacts_dir is None
+            or state.workspace_host_path is None
+        ):
             raise RuntimeError("memory eval runner did not initialize run workspace paths")
         _attach_repository_context(state, state.workspace_host_path)
         artifacts = ArtifactStore(
@@ -2136,7 +2177,9 @@ def memory_eval_command(args: argparse.Namespace) -> int:
                         memory=settings.sandbox.memory,
                         pids_limit=settings.sandbox.pids_limit,
                         network=(
-                            "bridge" if eval_case.sandbox_mode == "dev" else settings.sandbox.network
+                            "bridge"
+                            if eval_case.sandbox_mode == "dev"
+                            else settings.sandbox.network
                         ),
                     )
                 )
@@ -2359,7 +2402,9 @@ def _optional_release_evidence(path: Path) -> dict:
 
 def compaction_report_command(args: argparse.Namespace) -> int:
     if len(args.a0) != len(args.a1):
-        print("compaction-report requires the same number of --a0 and --a1 reports.", file=sys.stderr)
+        print(
+            "compaction-report requires the same number of --a0 and --a1 reports.", file=sys.stderr
+        )
         return 2
     try:
         pairs = [
@@ -2447,6 +2492,7 @@ def cache_probe_command(args: argparse.Namespace) -> int:
     }
     postflight_check: Callable[[], str | None] | None = None
     if git_preflight_verified:
+
         def check_git_postflight() -> str | None:
             return _git_postflight_error(
                 Path.cwd(),
@@ -2621,7 +2667,9 @@ def _settings_for_eval_case(settings: Settings, case: EvalCase) -> Settings:
             "artifact_preview_chars",
             settings.context.artifact_preview_chars,
         ),
-        summary_max_chars=_context_int(case, "summary_max_chars", settings.context.summary_max_chars),
+        summary_max_chars=_context_int(
+            case, "summary_max_chars", settings.context.summary_max_chars
+        ),
         field_preview_chars=_context_int(
             case,
             "field_preview_chars",
@@ -2750,7 +2798,9 @@ def _completion_verifier_for_case(case: EvalCase) -> CompletionVerifier | None:
     if not commands and case.initial_verify is not None and case.initial_verify.get("command"):
         commands = (str(case.initial_verify["command"]),)
     if not commands:
-        raise ValueError(f"completion_gate requires an authoritative verification command: {case.name}")
+        raise ValueError(
+            f"completion_gate requires an authoritative verification command: {case.name}"
+        )
     return CommandCompletionVerifier(
         commands=commands,
         timeout_sec=_case_int(case, "verification_timeout_sec", 120),
@@ -2804,9 +2854,7 @@ def _git_index_flags_error(cwd: Path) -> str:
         if tag != "S" and not tag.islower():
             continue
         raw_path = (
-            raw_record[2:]
-            if len(raw_record) > 1 and raw_record[1:2] == b" "
-            else raw_record[1:]
+            raw_record[2:] if len(raw_record) > 1 and raw_record[1:2] == b" " else raw_record[1:]
         )
         path = raw_path.decode("utf-8", errors="replace")
         flag = "skip-worktree" if tag.upper() == "S" else "assume-unchanged"
@@ -3145,118 +3193,6 @@ def cleanup_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def meta_review_command(args: argparse.Namespace) -> int:
-    run_dir = Path.cwd() / ".minicc" / "runs" / str(args.run_id)
-    output_root = args.output_root or Path.cwd() / ".minicc" / "meta-reviews"
-    provider = None
-    settings = load_settings()
-    if not args.offline:
-        provider = _build_aux_provider(settings)
-    try:
-        implementation_commit, _ = _git_evidence(Path.cwd())
-        result = MetaReviewer(
-            provider,
-            model=_aux_model(settings),
-            implementation_commit=implementation_commit,
-        ).review_run(
-            run_dir,
-            output_root=output_root,
-            offline=bool(args.offline),
-        )
-    except (MetaReviewError, FileExistsError) as exc:
-        print(f"Meta review failed: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        close_provider = getattr(provider, "close", None)
-        if callable(close_provider):
-            close_provider()
-    print("meta_review_status: PASS")
-    print(f"review_id: {result.review_id}")
-    print(f"used_model: {str(result.used_model).lower()}")
-    print(f"review_dir: {result.output_dir}")
-    return 0
-
-
-def meta_review_report_command(args: argparse.Namespace) -> int:
-    git_commit, worktree_dirty = _git_evidence(Path.cwd())
-    if args.release_gate and worktree_dirty:
-        print("Release gate rejected: worktree must be clean", file=sys.stderr)
-        return 2
-    try:
-        disabled = load_cache_suite_report(args.disabled_suite, verify_manifest=True)
-        enabled = load_cache_suite_report(args.enabled_suite, verify_manifest=True)
-        reviews = [load_meta_review(path, verify_manifest=True) for path in args.reviews]
-        suite_commits = {
-            str(suite.get("configuration", {}).get("git_commit") or "")
-            for suite in (disabled, enabled)
-        }
-        if len(suite_commits) != 1 or not next(iter(suite_commits)):
-            raise ValueError("both suites must be bound to one execution commit")
-        source_commit = next(iter(suite_commits))
-        review_commits = {
-            str(review.get("implementation_commit") or "") for review in reviews
-        }
-        if len(review_commits) != 1 or not next(iter(review_commits)):
-            raise ValueError("all reviews must be bound to one implementation commit")
-        review_commit = next(iter(review_commits))
-        execution_review_changed_paths = _git_changed_paths(
-            Path.cwd(), source_commit, review_commit
-        )
-        review_verification_changed_paths = _git_changed_paths(
-            Path.cwd(), review_commit, git_commit
-        )
-        allowed_changed_paths = {
-            "README.md",
-            "STABLE_V1_MILESTONE_ROADMAP.md",
-            "acceptance/experimental-v3.1-meta-review/manifest.json",
-            "acceptance/experimental-v3.1-meta-review/report.csv",
-            "acceptance/experimental-v3.1-meta-review/report.json",
-            "acceptance/experimental-v3.1-meta-review/report.md",
-            "docs/ETCLOVG_CAPABILITY_MATRIX.md",
-            "src/minicc/cli.py",
-            "src/minicc/evals/cache_ab.py",
-            "src/minicc/evals/meta_review_ab.py",
-            "src/minicc/meta/reviewer.py",
-            "tests/test_cache_ab.py",
-            "tests/test_meta_review.py",
-            "tests/test_meta_review_ab.py",
-        }
-        if args.release_gate:
-            unexpected = sorted(
-                (
-                    set(execution_review_changed_paths)
-                    | set(review_verification_changed_paths)
-                )
-                - allowed_changed_paths
-            )
-            if unexpected:
-                raise ValueError(
-                    "execution/review commit delta contains disallowed paths: "
-                    + ", ".join(unexpected)
-                )
-            if any(review.get("invocation", {}).get("used_model") is not True for review in reviews):
-                raise ValueError("formal Meta Review evidence must use the model")
-        report = build_meta_review_ab_report(
-            disabled,
-            enabled,
-            reviews,
-            source_commit=source_commit,
-            review_commit=review_commit,
-            verification_commit=git_commit,
-            execution_review_changed_paths=execution_review_changed_paths,
-            review_verification_changed_paths=review_verification_changed_paths,
-            allowed_verification_paths=sorted(allowed_changed_paths),
-        )
-        bundle = write_meta_review_ab_report(report, args.output_dir)
-    except (OSError, ValueError, MetaReviewError, FileExistsError) as exc:
-        print(f"Meta Review report failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"meta_review_ab_status: {report['status']}")
-    print(f"json_report: {bundle['report.json']}")
-    print(f"markdown_report: {bundle['report.md']}")
-    return 0 if report["passed"] else 1
-
-
 def guidance_report_command(args: argparse.Namespace) -> int:
     git_commit, worktree_dirty = _git_evidence(Path.cwd())
     if args.release_gate and worktree_dirty:
@@ -3290,9 +3226,7 @@ def guidance_report_command(args: argparse.Namespace) -> int:
             "uv.lock",
         }
         if args.release_gate:
-            unexpected = sorted(
-                set(execution_verification_changed_paths) - allowed_changed_paths
-            )
+            unexpected = sorted(set(execution_verification_changed_paths) - allowed_changed_paths)
             if unexpected:
                 raise ValueError(
                     "execution/verification commit delta contains disallowed paths: "

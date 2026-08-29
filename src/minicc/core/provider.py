@@ -109,6 +109,8 @@ class CompletionOptions:
     # Optional UI hook. The provider still returns one complete response for
     # protocol parsing; callers may use deltas for progressive display.
     on_text_delta: Callable[[str], None] | None = None
+    on_chunk: Callable[[dict[str, Any]], None] | None = None
+    cancel_event: threading.Event | None = None
 
 
 class ModelProvider(Protocol):
@@ -117,8 +119,7 @@ class ModelProvider(Protocol):
         messages: list[dict[str, str]],
         *,
         options: CompletionOptions | None = None,
-    ) -> ModelResponse:
-        ...
+    ) -> ModelResponse: ...
 
 
 @dataclass(frozen=True)
@@ -218,9 +219,7 @@ def resolve_retry_policy(config: Mapping[str, Any] | None) -> RetryPolicy:
         maximum = int(backoff_cfg.get("max_delay_ms", backoff.max_delay_ms))
         jitter = float(backoff_cfg.get("jitter_ratio", backoff.jitter_ratio))
         if initial <= 0 or maximum <= 0 or initial > maximum:
-            raise ValueError(
-                "retry_policy.backoff requires 0 < initial_delay_ms <= max_delay_ms"
-            )
+            raise ValueError("retry_policy.backoff requires 0 < initial_delay_ms <= max_delay_ms")
         if not 0.0 <= jitter <= 1.0:
             raise ValueError("retry_policy.backoff.jitter_ratio must be within [0, 1]")
         backoff = Backoff(
@@ -365,7 +364,11 @@ class OpenAICompatibleProvider:
         started = time.perf_counter()
         try:
             raw, text, usage_raw = self._request_once(
-                payload, stream=options.stream, on_text_delta=options.on_text_delta
+                payload,
+                stream=options.stream,
+                on_text_delta=options.on_text_delta,
+                on_chunk=options.on_chunk,
+                cancel_event=options.cancel_event,
             )
         except ProviderError as exc:
             if (
@@ -378,7 +381,11 @@ class OpenAICompatibleProvider:
                 # visible attempt — to local extraction, without a config edit.
                 payload.pop("response_format", None)
                 raw, text, usage_raw = self._request_once(
-                    payload, stream=options.stream, on_text_delta=options.on_text_delta
+                    payload,
+                    stream=options.stream,
+                    on_text_delta=options.on_text_delta,
+                    on_chunk=options.on_chunk,
+                    cancel_event=options.cancel_event,
                 )
             else:
                 raise
@@ -408,9 +415,13 @@ class OpenAICompatibleProvider:
         *,
         stream: bool,
         on_text_delta: Callable[[str], None] | None = None,
+        on_chunk: Callable[[dict[str, Any]], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> tuple[dict[str, Any], str, Mapping[str, Any] | None]:
         if stream:
-            return self._complete_stream(payload, on_text_delta=on_text_delta)
+            return self._complete_stream(
+                payload, on_text_delta=on_text_delta, on_chunk=on_chunk, cancel_event=cancel_event
+            )
         raw = self._post_json(payload)
         usage_raw = raw.get("usage") if isinstance(raw, dict) else None
         return raw, extract_chat_text(raw), usage_raw
@@ -484,6 +495,8 @@ class OpenAICompatibleProvider:
         payload: dict[str, Any],
         *,
         on_text_delta: Callable[[str], None] | None = None,
+        on_chunk: Callable[[dict[str, Any]], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> tuple[dict[str, Any], str, Mapping[str, Any] | None]:
         chunks: list[dict[str, Any]] = []
         content_parts: list[str] = []
@@ -521,6 +534,10 @@ class OpenAICompatibleProvider:
             ) as response:
                 response.raise_for_status()
                 for line in response.iter_lines():
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise ProviderError(
+                            failure=LlmFailure(message="Provider stream aborted", code=ABORTED)
+                        )
                     if not line:
                         continue
                     rearm_watchdog()
@@ -533,6 +550,8 @@ class OpenAICompatibleProvider:
                     if not isinstance(chunk, dict):
                         continue
                     chunks.append(chunk)
+                    if on_chunk is not None:
+                        on_chunk(chunk)
                     if chunk.get("usage"):
                         usage_raw = chunk["usage"]
                     for choice in chunk.get("choices", []):
@@ -548,8 +567,7 @@ class OpenAICompatibleProvider:
                 raise ProviderError(
                     failure=LlmFailure(
                         message=(
-                            f"Provider stream exceeded timeout of "
-                            f"{self.stream_idle_timeout_sec:g}s"
+                            f"Provider stream exceeded timeout of {self.stream_idle_timeout_sec:g}s"
                         ),
                         code=TIMEOUT,
                     )
@@ -562,8 +580,7 @@ class OpenAICompatibleProvider:
                 raise ProviderError(
                     failure=LlmFailure(
                         message=(
-                            f"Provider stream exceeded timeout of "
-                            f"{self.stream_idle_timeout_sec:g}s"
+                            f"Provider stream exceeded timeout of {self.stream_idle_timeout_sec:g}s"
                         ),
                         code=TIMEOUT,
                     )
@@ -750,7 +767,9 @@ def extract_tool_calls(raw: Mapping[str, Any]) -> tuple[NativeToolCall, ...]:
     """
     streamed = raw.get("tool_calls")
     if isinstance(streamed, list):
-        return tuple(_tool_call_from_mapping(item) for item in streamed if isinstance(item, Mapping))
+        return tuple(
+            _tool_call_from_mapping(item) for item in streamed if isinstance(item, Mapping)
+        )
 
     choices = raw.get("choices") or []
     if not choices or not isinstance(choices[0], Mapping):

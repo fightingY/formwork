@@ -67,6 +67,18 @@ def run_with_retry(
                     delay_ms=delay_ms,
                     failure=failure,
                 )
+            event_log = getattr(state, "_event_log", None)
+            if event_log is not None:
+                event_log.append(
+                    "llm/retry",
+                    {
+                        "route": route_name,
+                        "attempt": attempted,
+                        "retry_index": retry_index,
+                        "code": failure.code,
+                        "delay_ms": delay_ms,
+                    },
+                )
             sleep_fn(delay_ms / 1000.0)
             continue
 

@@ -20,11 +20,14 @@ web chat server are both clients of ``submit_turn``.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+from uuid import uuid4
 
+from minicc.core.compaction import CompactionManager
 from minicc.core.loop import AgentLoop, AgentLoopResult, BashExecutor
 from minicc.core.session import SessionManager
 from minicc.core.session_store import SessionStore
@@ -80,6 +83,32 @@ class SessionEngine:
         self._executor = executor
         self._on_approval = on_approval
         self._on_turn_end = on_turn_end
+        self._cancellations: dict[str, threading.Event] = {}
+
+    def cancel_turn(self, session_id: str, run_id: str, *, reason: str = "user") -> bool:
+        """Request cancellation through a runtime token and durable cancel event."""
+        token = self._cancellations.get(run_id)
+        if token is not None:
+            token.set()
+        try:
+            self.store.append_event(session_id, "cancel", {"run_id": run_id, "reason": reason})
+            return True
+        except Exception:
+            return False
+
+    def steer(self, session_id: str, message: str, *, message_id: str | None = None) -> str:
+        """Queue a next-step user injection durably; it is claimed before a request."""
+        mid = message_id or uuid4().hex
+        self.store.append_event(
+            session_id,
+            "inbox/splice",
+            {
+                "queue": "next-step",
+                "op": "append",
+                "messages": [{"id": mid, "role": "user", "content": message, "source": "steer"}],
+            },
+        )
+        return mid
 
     def submit_turn(
         self,
@@ -97,8 +126,16 @@ class SessionEngine:
             user_message,
             workspace_host_path=Path(record.project_root),
         )
+        state.metrics["turn_index"] = len(record.turns)
+        cancel_token = threading.Event()
+        self._cancellations[state.run_id] = cancel_token
+        state._cancel_token = cancel_token  # type: ignore[attr-defined]
         state.run_dir = self.store.session_runs_dir(session_id) / state.run_id
         state.artifacts_dir = state.run_dir / "artifacts"
+        # Runtime handle only; all durable facts are appended by AgentLoop.
+        state._event_log = self.store.event_log(session_id)  # type: ignore[attr-defined]
+        projection_registry = self.store.projection_registry(session_id)
+        state._compaction_manager = CompactionManager(state._event_log, projection_registry)  # type: ignore[attr-defined]
         # Prior turns ride along on the state so ContextBuilder can inject them;
         # transcript.jsonl remains the single source of truth (plan §5.1).
         state.session_history = history
@@ -124,9 +161,12 @@ class SessionEngine:
             return result
 
         self._invoke_turn_end(session_id, result)
-        self.store.append_message(session_id, "user", user_message, run_id=state.run_id)
-        self.store.append_message(session_id, "assistant", reply, run_id=state.run_id)
+        try:
+            self.store.save_projection_cache(session_id, state._compaction_manager.registry)  # type: ignore[attr-defined]
+        except Exception:
+            pass
         self.store.add_turn(session_id, state.run_id)
+        self._cancellations.pop(state.run_id, None)
 
         return result
 
@@ -146,6 +186,10 @@ class SessionEngine:
         then writes the ``user``+``assistant`` rows into the transcript.
         """
         state = load_run_state(self.store.session_runs_dir(session_id) / run_id / "state.json")
+        state._event_log = self.store.event_log(session_id)  # type: ignore[attr-defined]
+        state._compaction_manager = CompactionManager(
+            state._event_log, self.store.projection_registry(session_id)
+        )  # type: ignore[attr-defined]
         state.session_history = self.store.history_messages(session_id)
         state.text_delta_callback = on_text_delta
         state.progress_callback = on_progress
@@ -176,8 +220,10 @@ class SessionEngine:
         )
 
         self._invoke_turn_end(session_id, result)
-        self.store.append_message(session_id, "user", state.goal, run_id=run_id)
-        self.store.append_message(session_id, "assistant", reply, run_id=run_id)
+        try:
+            self.store.save_projection_cache(session_id, state._compaction_manager.registry)  # type: ignore[attr-defined]
+        except Exception:
+            pass
         self.store.add_turn(session_id, run_id)
 
         return result
@@ -217,9 +263,9 @@ class SessionEngine:
             self._on_turn_end(session_id, result)
         except Exception:
             metrics = result.state.metrics
-            metrics["memory_turn_end_hook_errors"] = int(
-                metrics.get("memory_turn_end_hook_errors", 0)
-            ) + 1
+            metrics["memory_turn_end_hook_errors"] = (
+                int(metrics.get("memory_turn_end_hook_errors", 0)) + 1
+            )
 
     @staticmethod
     def _assistant_reply(state: RunState) -> str:

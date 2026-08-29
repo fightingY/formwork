@@ -6,7 +6,6 @@ Every model-facing prompt lives here, organized by concern. Import from
 - :mod:`minicc.prompts.agent` — main CodeAct agent system prompt
 - :mod:`minicc.prompts.guidance` — dynamic, RunState-dependent guidance fragments
 - :mod:`minicc.prompts.compaction` — semantic-compaction prompts
-- :mod:`minicc.prompts.meta_review` — offline meta-review prompts
 - :mod:`minicc.prompts.cache_probe` — deterministic cache-probe goal/constraints
 """
 from __future__ import annotations
@@ -20,11 +19,6 @@ from minicc.prompts.guidance import (
     io_repetition_guidance,
     state_snapshot_text,
 )
-from minicc.prompts.meta_review import (
-    META_REVIEW_SYSTEM_PROMPT,
-    review_prompt,
-    schema_correction_prompt,
-)
 
 __all__ = [
     "STABLE_PREFIX",
@@ -37,7 +31,4 @@ __all__ = [
     "io_repetition_guidance",
     "action_economy_guidance",
     "state_snapshot_text",
-    "META_REVIEW_SYSTEM_PROMPT",
-    "review_prompt",
-    "schema_correction_prompt",
 ]

@@ -5,6 +5,7 @@ projection of a completed run: it contains the original trace, the baseline
 workspace, and enough metadata to either validate the recorded trajectory
 offline or drive the current CLI runtime against the same fixture.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -24,6 +25,7 @@ from minicc.core.protocol import (
     action_to_dict,
     parse_tool_call,
 )
+from minicc.core.replay import replay_events
 
 REPLAY_SCHEMA_VERSION = PROTOCOL_SCHEMA_VERSION
 
@@ -39,6 +41,16 @@ class ReplayResult:
     passed: bool
     report_path: Path
     report: dict[str, Any]
+
+
+def replay_session_event_log(path: Path, *, session_id: str = "replay") -> dict[str, Any]:
+    """Replay a new-format events.jsonl without requiring trace/state files."""
+    snapshot = replay_events(path, session_id=session_id)
+    return {
+        "session_id": snapshot.session_id,
+        "as_of_seq": snapshot.as_of_seq,
+        "projections": snapshot.values,
+    }
 
 
 def create_replay_case(
@@ -88,7 +100,9 @@ def create_replay_case(
     artifacts = source / "artifacts"
     if artifacts.is_dir():
         shutil.copytree(artifacts, target / "artifacts")
-        copied.extend(f"artifacts/{path.relative_to(artifacts).as_posix()}" for path in artifacts.rglob("*"))
+        copied.extend(
+            f"artifacts/{path.relative_to(artifacts).as_posix()}" for path in artifacts.rglob("*")
+        )
 
     workspace_snapshot = target / "workspace"
     workspace_mode = _snapshot_baseline(source / "workspace", workspace_snapshot)
@@ -122,19 +136,29 @@ def create_replay_case(
         "goal": str(state.get("goal") or ""),
         "action_defaults": {
             "timeout_sec": int((state.get("metrics") or {}).get("max_action_timeout_sec") or 60),
-            "max_tool_calls": int((state.get("metrics") or {}).get("max_tool_calls_per_step") or 16),
+            "max_tool_calls": int(
+                (state.get("metrics") or {}).get("max_tool_calls_per_step") or 16
+            ),
         },
         "source_status": str(state.get("status") or "unknown"),
-        "verification_commands": list((state.get("metrics") or {}).get("completion_verifier_commands") or []),
-        "verification_timeout_sec": int((state.get("metrics") or {}).get("completion_verifier_timeout_sec") or 120),
+        "verification_commands": list(
+            (state.get("metrics") or {}).get("completion_verifier_commands") or []
+        ),
+        "verification_timeout_sec": int(
+            (state.get("metrics") or {}).get("completion_verifier_timeout_sec") or 120
+        ),
         "workspace_mode": workspace_mode,
         "fresh_eligible": workspace_mode in {"git-baseline", "copy"},
         "deterministic_eligible": bool(response_rows)
         and all(row.get("response_text") is not None for row in response_rows),
         "event_count": len(events),
         "model_response_count": len(response_rows),
-        "model_responses_complete": all(row.get("response_text") is not None for row in response_rows),
-        "tool_result_count": sum(1 for event in events if event.get("event") in {"tool/result", "sandbox_exec_finished"}),
+        "model_responses_complete": all(
+            row.get("response_text") is not None for row in response_rows
+        ),
+        "tool_result_count": sum(
+            1 for event in events if event.get("event") in {"tool/result", "sandbox_exec_finished"}
+        ),
         "workspace": _directory_metadata(workspace_snapshot),
         "files": {},
     }
@@ -241,9 +265,15 @@ def run_deterministic_replay(
         destination = (output_dir or case).resolve()
         destination.mkdir(parents=True, exist_ok=True)
         report_path = destination / "deterministic_replay_report.json"
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        (destination / "deterministic_replay_report.md").write_text(_markdown_report(report), encoding="utf-8")
-        return ReplayResult(str(manifest.get("case_id") or case.name), "deterministic", False, report_path, report)
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        (destination / "deterministic_replay_report.md").write_text(
+            _markdown_report(report), encoding="utf-8"
+        )
+        return ReplayResult(
+            str(manifest.get("case_id") or case.name), "deterministic", False, report_path, report
+        )
     events = read_trace(case / "trace.jsonl")
     checks: dict[str, dict[str, Any]] = {}
     failures: list[str] = []
@@ -258,7 +288,11 @@ def run_deterministic_replay(
         failures.append("trace event sequence is not monotonic")
 
     starts = [event for event in events if event.get("event") == "run_started"]
-    endings = [event for event in events if event.get("event") in {"run_completed", "run_failed", "run_interrupted"}]
+    endings = [
+        event
+        for event in events
+        if event.get("event") in {"run_completed", "run_failed", "run_interrupted"}
+    ]
     checks["lifecycle"] = _check(
         len(starts) >= 1 and len(endings) >= 1,
         observed={"run_started": len(starts), "terminal_events": len(endings)},
@@ -268,7 +302,9 @@ def run_deterministic_replay(
         failures.append("run lifecycle markers are incomplete")
 
     responses = [event for event in events if event.get("event") == "model_response"]
-    complete_responses = [event for event in responses if isinstance(event.get("response_text"), str)]
+    complete_responses = [
+        event for event in responses if isinstance(event.get("response_text"), str)
+    ]
     checks["model_response_fixtures"] = _check(
         bool(responses) and len(responses) == len(complete_responses),
         observed={"responses": len(responses), "complete": len(complete_responses)},
@@ -317,7 +353,9 @@ def run_deterministic_replay(
             except (TypeError, ValueError, ProtocolError):
                 replay_failed = True
                 break
-        replayed_actions: list[dict[str, Any]] | None = None if replay_failed else replayed_actions_accum
+        replayed_actions: list[dict[str, Any]] | None = (
+            None if replay_failed else replayed_actions_accum
+        )
         recorded_actions = [
             candidate.get("action")
             for candidate in events[event_index + 1 :]
@@ -389,11 +427,15 @@ def run_deterministic_replay(
     destination = (output_dir or case).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     report_path = destination / "deterministic_replay_report.json"
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     (destination / "deterministic_replay_report.md").write_text(
         _markdown_report(report), encoding="utf-8"
     )
-    return ReplayResult(str(manifest.get("case_id") or case.name), "deterministic", passed, report_path, report)
+    return ReplayResult(
+        str(manifest.get("case_id") or case.name), "deterministic", passed, report_path, report
+    )
 
 
 def compare_fresh_replay(
@@ -457,9 +499,15 @@ def compare_fresh_replay(
         destination = (output_dir or case).resolve()
         destination.mkdir(parents=True, exist_ok=True)
         report_path = destination / "fresh_replay_report.json"
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        (destination / "fresh_replay_report.md").write_text(_markdown_report(report), encoding="utf-8")
-        return ReplayResult(str(manifest.get("case_id") or case.name), "fresh", fresh_completed, report_path, report)
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        (destination / "fresh_replay_report.md").write_text(
+            _markdown_report(report), encoding="utf-8"
+        )
+        return ReplayResult(
+            str(manifest.get("case_id") or case.name), "fresh", fresh_completed, report_path, report
+        )
     source_state = _read_json(case / "state.json")
     source_actions = _action_signatures(read_trace(case / "trace.jsonl"))
     fresh_actions = _action_signatures(read_trace(fresh / "trace.jsonl"))
@@ -470,10 +518,26 @@ def compare_fresh_replay(
     diff_match = source_diff == fresh_diff if source_diff and fresh_diff else None
     fresh_completed = fresh_state.get("status") == "completed"
     checks = {
-        "fresh_run_completed": _check(fresh_completed, observed=fresh_state.get("status"), detail="fresh run completed"),
-        "status_match": _check(status_match, observed={"source": source_state.get("status"), "fresh": fresh_state.get("status")}, detail="terminal status matches"),
-        "action_sequence_match": _check(action_match, observed={"source": len(source_actions), "fresh": len(fresh_actions)}, detail="action sequence matches exactly"),
-        "diff_match": _check(diff_match is True, observed={"source": source_diff, "fresh": fresh_diff}, detail="workspace diff hash matches") if diff_match is not None else {"passed": False, "observed": None, "detail": "diff is unavailable"},
+        "fresh_run_completed": _check(
+            fresh_completed, observed=fresh_state.get("status"), detail="fresh run completed"
+        ),
+        "status_match": _check(
+            status_match,
+            observed={"source": source_state.get("status"), "fresh": fresh_state.get("status")},
+            detail="terminal status matches",
+        ),
+        "action_sequence_match": _check(
+            action_match,
+            observed={"source": len(source_actions), "fresh": len(fresh_actions)},
+            detail="action sequence matches exactly",
+        ),
+        "diff_match": _check(
+            diff_match is True,
+            observed={"source": source_diff, "fresh": fresh_diff},
+            detail="workspace diff hash matches",
+        )
+        if diff_match is not None
+        else {"passed": False, "observed": None, "detail": "diff is unavailable"},
     }
     report = {
         "schema_version": REPLAY_SCHEMA_VERSION,
@@ -498,9 +562,17 @@ def compare_fresh_replay(
     destination = (output_dir or case).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     report_path = destination / "fresh_replay_report.json"
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     (destination / "fresh_replay_report.md").write_text(_markdown_report(report), encoding="utf-8")
-    return ReplayResult(str(manifest.get("case_id") or case.name), "fresh", bool(report["passed"]), report_path, report)
+    return ReplayResult(
+        str(manifest.get("case_id") or case.name),
+        "fresh",
+        bool(report["passed"]),
+        report_path,
+        report,
+    )
 
 
 def read_trace(path: Path) -> list[dict[str, Any]]:
@@ -527,7 +599,7 @@ def _snapshot_baseline(source: Path, destination: Path) -> str:
     baseline_ref = "refs/minicc/baseline"
     if manifest_path.is_file():
         manifest = _read_json(manifest_path)
-        candidate = ((manifest.get("included") or {}).get("baseline_commit"))
+        candidate = (manifest.get("included") or {}).get("baseline_commit")
         if candidate:
             baseline_ref = str(candidate)
     try:
@@ -573,7 +645,9 @@ def _pair_call_results(calls: list[dict[str, Any]], results: list[dict[str, Any]
     if not calls and not results:
         return True
     result_ids = {str(event.get("call_id")) for event in results}
-    return all(str(event.get("call_id")) in result_ids for event in calls) and len(calls) == len(results)
+    return all(str(event.get("call_id")) in result_ids for event in calls) and len(calls) == len(
+        results
+    )
 
 
 def _action_signatures(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -584,13 +658,22 @@ def _action_signatures(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if isinstance(action, dict):
                 signatures.append({"type": action.get("type"), "action": action})
         elif event.get("event") == "tool/call":
-            signatures.append({"type": "tool_call", "tool": event.get("tool"), "arguments": event.get("arguments")})
+            signatures.append(
+                {
+                    "type": "tool_call",
+                    "tool": event.get("tool"),
+                    "arguments": event.get("arguments"),
+                }
+            )
     return signatures
 
 
 def _hashes_match(case: Path, manifest: dict[str, Any]) -> bool:
     workspace_metadata = manifest.get("workspace")
-    if isinstance(workspace_metadata, dict) and _directory_metadata(case / "workspace") != workspace_metadata:
+    if (
+        isinstance(workspace_metadata, dict)
+        and _directory_metadata(case / "workspace") != workspace_metadata
+    ):
         return False
     for relative, metadata in (manifest.get("files") or {}).items():
         path = case / str(relative)

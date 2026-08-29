@@ -1,78 +1,52 @@
-"""Conversation-session persistence: ``session.json`` + ``transcript.jsonl``.
-
-This module is the *data* layer for V5 sessions (see
-``docs/V5_0_SESSION_CHAT_REMODEL_PLAN.md`` §5).  It owns nothing about how a
-turn is executed -- that lives in ``core/session_engine.py``.  The transcript
-is the single source of truth for conversation history; ``session.json`` is
-metadata only (project root, title, turn ordering, compaction pointer).
-
-Layout under ``<root>/<session_id>/``::
-
-    session.json       # metadata (schema_version, project_root, turns, compaction)
-    transcript.jsonl   # append-only conversation, one JSON object per line
-    runs/<run_id>/     # per-turn execution evidence (reuses the existing run dirs)
-
-The on-disk session id reuses the ``run_id`` style ``YYYYMMDD-HHMMSS-<8hex>``.
-"""
+"""Session persistence backed by an append-only event log."""
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from minicc.core.protocol import PROTOCOL_SCHEMA_VERSION
+from minicc.core.events import event_log_for
+from minicc.core.projection_cache import ProjectionCache
+from minicc.core.projections import (
+    ProjectionRegistry,
+    SurfaceProjection,
+    default_projections,
+)
 
-SESSION_SCHEMA_VERSION = PROTOCOL_SCHEMA_VERSION
-MessageRole = Literal["user", "assistant"]
+SESSION_FORMAT_VERSION = 2
+MessageRole = Literal["user", "assistant", "tool"]
 
 
 class SessionNotFoundError(KeyError):
-    """Raised when a session id has no persisted record."""
-
-
-def new_session_id() -> str:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{timestamp}-{uuid4().hex[:8]}"
-
-
-def _now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    pass
 
 
 @dataclass
 class SessionMessage:
-    """One appended line of ``transcript.jsonl``."""
-
     seq: int
     role: MessageRole
     content: str
     run_id: str | None = None
+    event_type: str = ""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self):
         return {
             "seq": self.seq,
-            "run_id": self.run_id,
             "role": self.role,
             "content": self.content,
+            "run_id": self.run_id,
+            "event_type": self.event_type,
         }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> SessionMessage:
-        return cls(
-            seq=int(data["seq"]),
-            role=data["role"],
-            content=str(data.get("content", "")),
-            run_id=data.get("run_id"),
-        )
 
 
 @dataclass
 class SessionRecord:
-    schema_version: int = SESSION_SCHEMA_VERSION
+    schema_version: int = SESSION_FORMAT_VERSION
     session_id: str = ""
     project_root: str = ""
     title: str = ""
@@ -81,13 +55,13 @@ class SessionRecord:
     turns: list[str] = field(default_factory=list)
     compaction: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self):
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> SessionRecord:
+    def from_dict(cls, data):
         return cls(
-            schema_version=int(data.get("schema_version", SESSION_SCHEMA_VERSION)),
+            schema_version=SESSION_FORMAT_VERSION,
             session_id=str(data.get("session_id", "")),
             project_root=str(data.get("project_root", "")),
             title=str(data.get("title", "")),
@@ -98,140 +72,185 @@ class SessionRecord:
         )
 
 
+def new_session_id():
+    return f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
+
+
+def _now():
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
 class SessionStore:
-    """Persist sessions under ``<root>/<session_id>/``.
-
-    ``root`` defaults to ``.minicc/sessions`` relative to the current working
-    directory; pass a ``tmp_path``-derived root in tests.
-    """
-
-    def __init__(self, root: Path | None = None) -> None:
-        self._root = root or (Path.cwd() / ".minicc" / "sessions")
+    def __init__(self, root: Path | None = None):
+        self._root = Path(root or Path.cwd() / ".minicc" / "sessions")
 
     @property
-    def root(self) -> Path:
+    def root(self):
         return self._root
 
-    def session_dir(self, session_id: str) -> Path:
-        return self.root / session_id
+    def session_dir(self, sid):
+        return self.root / sid
 
-    def session_path(self, session_id: str) -> Path:
-        return self.session_dir(session_id) / "session.json"
+    def session_path(self, sid):
+        return self.session_dir(sid) / "session.json"
 
-    def transcript_path(self, session_id: str) -> Path:
-        return self.session_dir(session_id) / "transcript.jsonl"
+    def events_path(self, sid):
+        return self.session_dir(sid) / "events.jsonl"
 
-    def session_runs_dir(self, session_id: str) -> Path:
-        return self.session_dir(session_id) / "runs"
+    def projection_cache_path(self, sid):
+        return self.session_dir(sid) / "projections.json"
 
-    def exists(self, session_id: str) -> bool:
-        return self.session_path(session_id).exists()
+    def transcript_path(self, sid):
+        return self.session_dir(sid) / "transcript.jsonl"
 
-    def create(self, project_root: Path | str, *, title: str = "") -> SessionRecord:
-        record = SessionRecord(
-            session_id=new_session_id(),
+    def session_runs_dir(self, sid):
+        return self.session_dir(sid) / "runs"
+
+    def exists(self, sid):
+        return self.session_path(sid).exists()
+
+    def create(self, project_root: Path | str, *, title: str = ""):
+        sid = new_session_id()
+        now = _now()
+        r = SessionRecord(
+            session_id=sid,
             project_root=str(Path(project_root).resolve()),
             title=title,
-            created_at=_now(),
-            updated_at=_now(),
+            created_at=now,
+            updated_at=now,
         )
-        self.session_dir(record.session_id).mkdir(parents=True, exist_ok=True)
-        self.session_runs_dir(record.session_id).mkdir(parents=True, exist_ok=True)
-        self.transcript_path(record.session_id).touch(exist_ok=True)
-        self._write_record(record)
-        return record
+        self.session_dir(sid).mkdir(parents=True, exist_ok=True)
+        self.session_runs_dir(sid).mkdir(exist_ok=True)
+        self._write_record(r)
+        self.events_path(sid).touch()
+        self.append_event(
+            sid,
+            "session/start",
+            {
+                "session_id": sid,
+                "project_root": r.project_root,
+                "format_version": SESSION_FORMAT_VERSION,
+                "created_at": now,
+            },
+        )
+        return r
 
-    def load(self, session_id: str) -> SessionRecord:
-        path = self.session_path(session_id)
-        if not path.exists():
-            raise SessionNotFoundError(f"Session not found: {session_id}")
-        return SessionRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    def load(self, sid):
+        p = self.session_path(sid)
+        if not p.exists():
+            raise SessionNotFoundError(f"Session not found: {sid}")
+        return SessionRecord.from_dict(json.loads(p.read_text(encoding="utf-8")))
 
-    def save(self, record: SessionRecord) -> None:
-        record.updated_at = _now()
-        self._write_record(record)
+    def save(self, r):
+        self._write_record(r)
 
-    def list_sessions(self) -> list[SessionRecord]:
+    def list_sessions(self):
         if not self.root.exists():
             return []
-        records: list[SessionRecord] = []
-        for child in self.root.iterdir():
-            if child.is_dir() and (child / "session.json").exists():
-                records.append(self._read_record_file(child / "session.json"))
-        records.sort(key=lambda record: record.updated_at, reverse=True)
-        return records
-
-    def rename(self, session_id: str, title: str) -> SessionRecord:
-        record = self.load(session_id)
-        record.title = title
-        self._write_record(record)
-        return record
-
-    def append_message(
-        self,
-        session_id: str,
-        role: MessageRole,
-        content: str,
-        *,
-        run_id: str | None = None,
-    ) -> SessionMessage:
-        existing = self.read_transcript(session_id)
-        seq = max((message.seq for message in existing), default=0) + 1
-        message = SessionMessage(seq=seq, role=role, content=content, run_id=run_id)
-        with self.transcript_path(session_id).open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(message.to_dict(), ensure_ascii=False) + "\n")
-        return message
-
-    def read_transcript(self, session_id: str) -> list[SessionMessage]:
-        path = self.transcript_path(session_id)
-        if not path.exists():
-            return []
-        messages: list[SessionMessage] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            messages.append(SessionMessage.from_dict(json.loads(line)))
-        return messages
-
-    def history_messages(self, session_id: str) -> list[dict[str, str]]:
-        """Transcript reduced to the ``[{role, content}, ...]`` shape injected into context."""
-        return [
-            {"role": message.role, "content": message.content}
-            for message in self.read_transcript(session_id)
-        ]
-
-    def add_turn(self, session_id: str, run_id: str) -> SessionRecord:
-        record = self.load(session_id)
-        if run_id not in record.turns:
-            record.turns.append(run_id)
-        self._write_record(record)
-        return record
-
-    def set_compaction(
-        self,
-        session_id: str,
-        *,
-        summary: str,
-        retained_from_seq: int,
-    ) -> SessionRecord:
-        record = self.load(session_id)
-        record.compaction = {
-            "summary": summary,
-            "retained_from_seq": retained_from_seq,
-        }
-        self._write_record(record)
-        return record
-
-    def _write_record(self, record: SessionRecord) -> None:
-        record.updated_at = _now()
-        path = self.session_path(record.session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(record.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        return sorted(
+            [
+                self.load(p.name)
+                for p in self.root.iterdir()
+                if p.is_dir() and (p / "session.json").exists()
+            ],
+            key=lambda x: x.updated_at,
+            reverse=True,
         )
 
-    @staticmethod
-    def _read_record_file(path: Path) -> SessionRecord:
-        return SessionRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    def event_log(self, sid):
+        if not self.exists(sid):
+            raise SessionNotFoundError(sid)
+        return event_log_for(self.session_dir(sid), sid)
+
+    def append_event(self, sid, event_type, data=None):
+        e = self.event_log(sid).append(event_type, data)
+        r = self.load(sid)
+        r.updated_at = _now()
+        self._write_record(r)
+        return e
+
+    def events(self, sid):
+        return self.event_log(sid).events
+
+    def repair(self, sid):
+        return self.event_log(sid).repair_interrupted()
+
+    def append_message(self, sid, role: MessageRole, content: str, *, run_id: str | None = None):
+        typ = "tool/result" if role == "tool" else f"{role}/message"
+        d = {"role": role, "content": content}
+        if run_id:
+            d["run_id"] = run_id
+        e = self.append_event(sid, typ, d)
+        return SessionMessage(e.seq, role, content, run_id, typ)
+
+    def read_transcript(self, sid):
+        out = []
+        for e in self.events(sid):
+            if e.type not in {"user/message", "assistant/message", "tool/result"}:
+                continue
+            d = e.data
+            role = d.get("role") or ("tool" if e.type == "tool/result" else e.type.split("/")[0])
+            msg = d.get("message") if isinstance(d.get("message"), dict) else d
+            c = msg.get("content", "") if isinstance(msg, dict) else d.get("content", "")
+            if isinstance(c, list):
+                c = json.dumps(c, ensure_ascii=False)
+            out.append(SessionMessage(e.seq, role, str(c), d.get("run_id"), e.type))
+        return out
+
+    def history_messages(self, sid):
+        reg = ProjectionRegistry()
+        reg.register(SurfaceProjection(), session_id=sid, events=self.events(sid))
+        return reg.value(sid, "surface")["messages"]
+
+    def add_turn(self, sid, run_id):
+        r = self.load(sid)
+        if run_id not in r.turns:
+            r.turns.append(run_id)
+        self._write_record(r)
+        return r
+
+    def rename(self, sid, title):
+        r = self.load(sid)
+        self.append_event(sid, "session/title", {"title": title})
+        r.title = title
+        self._write_record(r)
+        return r
+
+    def set_compaction(self, sid, *, summary, retained_from_seq):
+        r = self.load(sid)
+        r.compaction = {"summary": summary, "retained_from_seq": retained_from_seq}
+        self._write_record(r)
+        return r
+
+    def save_projection_cache(self, sid: str, registry: ProjectionRegistry) -> None:
+        ProjectionCache(self.projection_cache_path(sid)).save(registry.cache_rows(sid))
+
+    def projection_registry(self, sid, *, cache=None):
+        reg = ProjectionRegistry()
+        [reg.register(p) for p in default_projections()]
+        events = self.events(sid)
+        rows = (
+            cache if cache is not None else ProjectionCache(self.projection_cache_path(sid)).load()
+        )
+        reg.restore_cache(sid, rows, events) if rows else reg.fold(sid, events)
+        return reg
+
+    def _write_record(self, r):
+        p = self.session_path(r.session_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(r.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            with tmp.open("rb") as handle:
+                os.fsync(handle.fileno())
+        except OSError:
+            pass
+        tmp.replace(p)
+        try:
+            dir_fd = os.open(str(p.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass

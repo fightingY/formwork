@@ -1,4 +1,5 @@
 """Stable, compact and redacted human-readable projection of trace events."""
+
 from __future__ import annotations
 
 import json
@@ -7,14 +8,38 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from minicc.core.events import EventLog
+from minicc.core.projections import ProjectionRegistry, TranscriptProjection
+
 SECRET = re.compile(r"(?i)(api[_-]?key|token|password|secret)=([^\s&]+)")
 PROJECTED_EVENTS = {
-    "run_started", "run_completed", "run_failed", "run_interrupted",
-    "action_started", "tool/call", "tool/result", "observation_created",
-    "policy_decision", "child_start", "child_result", "workflow_summary_observation",
+    "run_started",
+    "run_completed",
+    "run_failed",
+    "run_interrupted",
+    "action_started",
+    "tool/call",
+    "tool/result",
+    "observation_created",
+    "policy_decision",
+    "child_start",
+    "child_result",
+    "workflow_summary_observation",
 }
 MAX_PREVIEW_CHARS = 1_200
 MAX_COMMAND_CHARS = 800
+
+
+def project_event_log(log: EventLog) -> list[dict[str, Any]]:
+    """Return the durable transcript projection from the new event log.
+
+    This is intentionally separate from the retired trace projector below;
+    telemetry loss cannot affect the returned conversation records.
+    """
+    registry = ProjectionRegistry()
+    registry.register(TranscriptProjection())
+    registry.fold(log.session_id or "", log.events)
+    return registry.value(log.session_id or "", "transcript").get("events", [])
 
 
 def redact(value: Any) -> Any:
@@ -22,7 +47,11 @@ def redact(value: Any) -> Any:
         return SECRET.sub(r"\1=[REDACTED]", value)
     if isinstance(value, dict):
         secret_keys = {"authorization", "api_key", "token", "password", "secret"}
-        return {str(key): redact(item) for key, item in value.items() if str(key).lower() not in secret_keys}
+        return {
+            str(key): redact(item)
+            for key, item in value.items()
+            if str(key).lower() not in secret_keys
+        }
     if isinstance(value, list):
         return [redact(item) for item in value]
     return value
@@ -54,9 +83,8 @@ class TranscriptProjector:
             "workflow_id": event.get("workflow_id"),
             "task_id": event.get("task_id"),
             "role": event.get("role"),
-            "turn_id": event.get("turn_id") or (
-                f"turn-{self._turn}" if self._turn and kind != "status" else None
-            ),
+            "turn_id": event.get("turn_id")
+            or (f"turn-{self._turn}" if self._turn and kind != "status" else None),
             "step_id": event.get("step_id"),
             "span_id": event.get("span_id"),
             "parent_span_id": event.get("parent_span_id"),
@@ -130,7 +158,9 @@ def _kind(event_name: str) -> str:
     return "status"
 
 
-def _intent(action: dict[str, Any] | None, event_name: str, event: dict[str, Any]) -> tuple[str, str | None]:
+def _intent(
+    action: dict[str, Any] | None, event_name: str, event: dict[str, Any]
+) -> tuple[str, str | None]:
     if action:
         explicit = action.get("intent") or action.get("progress")
         if isinstance(explicit, str) and explicit.strip():
@@ -165,7 +195,14 @@ def _action_command(action: dict[str, Any]) -> str | None:
 
 def _action_summary(action: dict[str, Any] | None, event: dict[str, Any]) -> dict[str, Any] | None:
     if action is None and event.get("event") == "tool/call":
-        return redact({"type": "tool", "tool": event.get("tool"), "call_id": event.get("call_id"), "arguments": event.get("arguments")})
+        return redact(
+            {
+                "type": "tool",
+                "tool": event.get("tool"),
+                "call_id": event.get("call_id"),
+                "arguments": event.get("arguments"),
+            }
+        )
     if action is None:
         return None
     result: dict[str, Any] = {"type": action.get("type")}
@@ -183,28 +220,54 @@ def _action_summary(action: dict[str, Any] | None, event: dict[str, Any]) -> dic
 def _observation_summary(event: dict[str, Any]) -> dict[str, Any] | None:
     event_name = str(event.get("event", ""))
     if event_name == "policy_decision":
-        return redact({"kind": "policy_decision", "decision": event.get("decision_type"), "policy": event.get("policy_name"), "message": event.get("reason")})
+        return redact(
+            {
+                "kind": "policy_decision",
+                "decision": event.get("decision_type"),
+                "policy": event.get("policy_name"),
+                "message": event.get("reason"),
+            }
+        )
     if event_name == "tool/result":
         content = event.get("content")
-        return {"kind": "tool_error" if event.get("is_error") else "tool_result", "success": not bool(event.get("is_error")), "duration_ms": event.get("duration_ms", 0), "preview": _truncate(json.dumps(redact(content), ensure_ascii=False), MAX_PREVIEW_CHARS)}
+        return {
+            "kind": "tool_error" if event.get("is_error") else "tool_result",
+            "success": not bool(event.get("is_error")),
+            "duration_ms": event.get("duration_ms", 0),
+            "preview": _truncate(
+                json.dumps(redact(content), ensure_ascii=False), MAX_PREVIEW_CHARS
+            ),
+        }
     raw = event.get("observation")
     if isinstance(raw, dict):
         stdout = str(raw.get("stdout_preview", ""))
         stderr = str(raw.get("stderr_preview", ""))
-        preview_source = stderr if raw.get("kind") in {"protocol_error", "command_error"} and stderr else stdout
-        return redact({
-            "kind": raw.get("kind"),
-            "success": raw.get("kind") in {"command_result", "no_output"},
-            "exit_code": raw.get("exit_code"),
-            "message": raw.get("message", ""),
-            "duration_ms": raw.get("duration_ms", 0),
-            "output_chars": len(stdout) + len(stderr),
-            "output_lines": stdout.count("\n") + stderr.count("\n") + 1 if stdout or stderr else 0,
-            "preview": _truncate(preview_source, MAX_PREVIEW_CHARS),
-            "artifact_ids": list(raw.get("artifact_ids", [])),
-        })
+        preview_source = (
+            stderr if raw.get("kind") in {"protocol_error", "command_error"} and stderr else stdout
+        )
+        return redact(
+            {
+                "kind": raw.get("kind"),
+                "success": raw.get("kind") in {"command_result", "no_output"},
+                "exit_code": raw.get("exit_code"),
+                "message": raw.get("message", ""),
+                "duration_ms": raw.get("duration_ms", 0),
+                "output_chars": len(stdout) + len(stderr),
+                "output_lines": stdout.count("\n") + stderr.count("\n") + 1
+                if stdout or stderr
+                else 0,
+                "preview": _truncate(preview_source, MAX_PREVIEW_CHARS),
+                "artifact_ids": list(raw.get("artifact_ids", [])),
+            }
+        )
     if event_name in {"run_started", "run_completed", "run_failed", "run_interrupted"}:
-        return redact({"status": event_name.removeprefix("run_"), "goal": event.get("goal"), "message": event.get("state_summary") or event.get("final_answer")})
+        return redact(
+            {
+                "status": event_name.removeprefix("run_"),
+                "goal": event.get("goal"),
+                "message": event.get("state_summary") or event.get("final_answer"),
+            }
+        )
     if event_name in {"child_start", "child_result", "workflow_summary_observation"}:
         payload = event.get("result") or event.get("observation") or event
         return redact(_bounded_mapping(payload)) if isinstance(payload, dict) else None
@@ -212,19 +275,48 @@ def _observation_summary(event: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _bounded_mapping(value: dict[str, Any]) -> dict[str, Any]:
-    omitted = {"response_preview", "stdout_preview", "stderr_preview", "cacheability", "event", "created_at"}
-    return {str(key): _truncate(item, MAX_PREVIEW_CHARS) if isinstance(item, str) else item for key, item in value.items() if key not in omitted}
+    omitted = {
+        "response_preview",
+        "stdout_preview",
+        "stderr_preview",
+        "cacheability",
+        "event",
+        "created_at",
+    }
+    return {
+        str(key): _truncate(item, MAX_PREVIEW_CHARS) if isinstance(item, str) else item
+        for key, item in value.items()
+        if key not in omitted
+    }
 
 
 def _format_markdown(records: list[dict[str, Any]]) -> str:
-    run_id = next((str(record.get("run_id")) for record in records if record.get("run_id")), "unknown")
+    run_id = next(
+        (str(record.get("run_id")) for record in records if record.get("run_id")), "unknown"
+    )
     start = next((record for record in records if record.get("event") == "run_started"), None)
-    end = next((record for record in reversed(records) if record.get("event") in {"run_completed", "run_failed", "run_interrupted"}), None)
+    end = next(
+        (
+            record
+            for record in reversed(records)
+            if record.get("event") in {"run_completed", "run_failed", "run_interrupted"}
+        ),
+        None,
+    )
     goal = ((start or {}).get("observation") or {}).get("goal") or ""
     outcome = ((end or {}).get("observation") or {}).get("status") or "running"
     turns = {record.get("turn_id") for record in records if record.get("turn_id")}
     actions = sum(record.get("kind") == "action" for record in records)
-    lines = ["# miniCC Run Transcript", "", "## Overview", "", f"- **Run:** `{run_id}`", f"- **Outcome:** `{outcome}`", f"- **Turns:** `{len(turns)}`", f"- **Actions:** `{actions}`"]
+    lines = [
+        "# miniCC Run Transcript",
+        "",
+        "## Overview",
+        "",
+        f"- **Run:** `{run_id}`",
+        f"- **Outcome:** `{outcome}`",
+        f"- **Turns:** `{len(turns)}`",
+        f"- **Actions:** `{actions}`",
+    ]
     if goal:
         lines.append(f"- **Goal:** {goal}")
     lines.extend(["", "## Timeline", ""])
@@ -235,7 +327,14 @@ def _format_markdown(records: list[dict[str, Any]]) -> str:
             active_turn = str(turn_id)
             lines.extend([f"### {active_turn.replace('-', ' ').title()}", ""])
         lines.extend(_format_record(record))
-    lines.extend(["---", "", "Full low-level events and unabridged command output remain in `trace.jsonl` and linked artifacts.", ""])
+    lines.extend(
+        [
+            "---",
+            "",
+            "Full low-level events and unabridged command output remain in `trace.jsonl` and linked artifacts.",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -250,12 +349,20 @@ def _format_record(record: dict[str, Any]) -> list[str]:
     if event == "run_started":
         return ["**Run started**", ""]
     if event in {"run_completed", "run_failed", "run_interrupted"}:
-        label = {"run_completed": "Run completed", "run_failed": "Run failed", "run_interrupted": "Run interrupted"}[str(event)]
+        label = {
+            "run_completed": "Run completed",
+            "run_failed": "Run failed",
+            "run_interrupted": "Run interrupted",
+        }[str(event)]
         message = observation.get("message")
         return [f"**{label}**" + (f": {message}" if message else ""), ""]
     if kind == "action":
         action_type = str(action.get("type") or action.get("tool") or "action")
-        lines = [f"**Intent:** {intent}" if intent else "**Intent:** Perform the next action", "", f"**Action:** `{action_type}`"]
+        lines = [
+            f"**Intent:** {intent}" if intent else "**Intent:** Perform the next action",
+            "",
+            f"**Action:** `{action_type}`",
+        ]
         command = _action_command(action)
         if command:
             lines.extend(["", "```shell", str(command), "```"])
@@ -275,12 +382,31 @@ def _format_record(record: dict[str, Any]) -> list[str]:
         lines = [headline, ""]
         preview = str(observation.get("preview") or "").strip()
         if preview:
-            lines.extend(["<details>", "<summary>Output preview</summary>", "", "```text", preview, "```", "", "</details>", ""])
+            lines.extend(
+                [
+                    "<details>",
+                    "<summary>Output preview</summary>",
+                    "",
+                    "```text",
+                    preview,
+                    "```",
+                    "",
+                    "</details>",
+                    "",
+                ]
+            )
         return lines
     if kind == "policy":
-        return [f"**Policy:** `{observation.get('decision')}` by `{observation.get('policy')}` - {observation.get('message')}", ""]
+        return [
+            f"**Policy:** `{observation.get('decision')}` by `{observation.get('policy')}` - {observation.get('message')}",
+            "",
+        ]
     if kind in {"child_start", "child_end", "summary"}:
-        label = {"child_start": "Child started", "child_end": "Child finished", "summary": "Workflow Summary"}[str(kind)]
+        label = {
+            "child_start": "Child started",
+            "child_end": "Child finished",
+            "summary": "Workflow Summary",
+        }[str(kind)]
         summary = observation.get("summary") or observation.get("status") or ""
         return [f"**{label}:** {summary}", ""]
     return []
