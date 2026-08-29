@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 import pytest
@@ -5,11 +6,16 @@ import pytest
 from minicc.core.compaction import CompactionError, CompactionManager
 from minicc.core.events import EventLog, EventValidationError
 from minicc.core.projections import ProjectionRegistry, default_projections
+from minicc.core.protocol import BashAction
 from minicc.core.recovery import recover_session
 from minicc.core.replay import replay_round_trip
+from minicc.core.session import SessionManager
 from minicc.core.session_store import SessionStore
 from minicc.core.spill import SpillStore
+from minicc.core.state import RunState
 from minicc.core.stream import StreamAssembler
+from minicc.policy.base import PolicyDecision
+from minicc.sandbox.local_runner import LocalCommandExecutor
 
 
 def registry(log: EventLog) -> ProjectionRegistry:
@@ -31,6 +37,14 @@ def test_event_log_pairs_tools_and_repairs_crash(tmp_path: Path) -> None:
     assert report["repaired_events"] == [4, 5]
     assert report["unknown_tool_outcomes"][0]["callId"] == "c1"
     assert report["allow_automatic_retry"] is False
+
+
+def test_event_log_rejects_duplicate_tool_result(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl", session_id="s")
+    log.append("tool/call", {"call_id": "c1", "turn": 0, "step": 0, "name": "read"})
+    log.append("tool/result", {"call_id": "c1", "turn": 0, "step": 0, "content": "ok"})
+    with pytest.raises(EventValidationError, match="only be recorded once"):
+        log.append("tool/result", {"call_id": "c1", "turn": 0, "step": 0, "content": "again"})
 
 
 def test_live_cold_and_cache_suffix_projection_match(tmp_path: Path) -> None:
@@ -112,6 +126,38 @@ def test_session_reload_rebuilds_same_projection_from_disk(tmp_path: Path) -> No
     before = store.projection_registry(sid).snapshot(sid).values
     reloaded = SessionStore(tmp_path / "sessions").projection_registry(sid).snapshot(sid).values
     assert before == reloaded
+
+
+def test_approval_request_and_result_are_durable_events(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    record = store.create(tmp_path)
+    state = RunState.start("approve", workspace_host_path=tmp_path)
+    state._event_log = store.event_log(record.session_id)
+    manager = SessionManager()
+    manager.request_approval(
+        state,
+        BashAction(command="echo ok"),
+        PolicyDecision(type="require_approval", reason="needs approval", policy_name="test"),
+    )
+    manager.approve(state)
+    events = store.events(record.session_id)
+    assert [e.type for e in events if e.type.startswith("approval/")] == [
+        "approval/request",
+        "approval/result",
+    ]
+    assert events[-1].data["tool_call_id"] == events[-2].data["tool_call_id"]
+
+
+def test_local_executor_observes_runtime_cancel_token(tmp_path: Path) -> None:
+    state = RunState.start("cancel", workspace_host_path=tmp_path)
+    token = threading.Event()
+    state._cancel_token = token
+    token.set()
+    observation = LocalCommandExecutor().run(
+        BashAction(command="python -c \"import time; time.sleep(5)\"", timeout_sec=10), state
+    )
+    assert observation.kind == "command_error"
+    assert "cancelled" in observation.message.lower()
 
 
 def test_event_log_replay_round_trip_is_deterministic(tmp_path: Path) -> None:

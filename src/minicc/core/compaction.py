@@ -67,8 +67,18 @@ class CompactionManager:
                 self.prune_tool_results()
                 events = self.log.events
             events = self.log.events
+            shadowed = {
+                int(seq)
+                for e in events
+                if e.data.get("surfaceOp") == "replace"
+                for seq in e.data.get("sourceEventSeqs", e.data.get("source_event_seqs", []))
+                if str(seq).isdigit()
+            }
             surface = [
-                e for e in events if e.type in {"user/message", "assistant/message", "tool/result"}
+                e
+                for e in events
+                if e.type in {"user/message", "assistant/message", "tool/result"}
+                and e.seq not in shadowed
             ]
             if len(surface) < 2:
                 return None
@@ -86,11 +96,7 @@ class CompactionManager:
                 for e in events
                 if e.type == "tool/call"
             }
-            while source and any(
-                e.type == "tool/result"
-                and call_seq.get(str(e.data.get("call_id", e.data.get("callId")))) is None
-                for e in source
-            ):
+            while source and not _balanced_surface(source, events, call_seq):
                 source.pop()
             if not source:
                 return None
@@ -99,6 +105,7 @@ class CompactionManager:
                 e.type == "step/start"
                 and not any(
                     x.type == "step/end"
+                    and x.data.get("turn") == e.data.get("turn")
                     and x.data.get("step") == e.data.get("step")
                     and x.seq > e.seq
                     for x in events
@@ -175,8 +182,17 @@ class CompactionManager:
 
     def prune_tool_results(self, *, max_chars: int = 4000) -> int:
         count = 0
+        already = {
+            e.data.get("source_seq")
+            for e in self.log.events
+            if e.type == "compaction/prune"
+        }
         for e in self.log.events:
-            if e.type == "tool/result" and len(str(e.data.get("content", ""))) > max_chars:
+            if (
+                e.type == "tool/result"
+                and e.seq not in already
+                and len(str(e.data.get("content", ""))) > max_chars
+            ):
                 self.log.append(
                     "compaction/prune",
                     {
@@ -185,12 +201,17 @@ class CompactionManager:
                         "locator": e.data.get("locator"),
                     },
                 )
+                # A tool result is already durably paired and may not be
+                # emitted twice. Replace only its projected surface node with
+                # a bounded tool message; the original event remains intact.
                 self.log.append(
-                    "tool/result",
+                    "assistant/message",
                     {
+                        "message": {
+                            "role": "tool",
+                            "content": str(e.data.get("content", ""))[:max_chars],
+                        },
                         "call_id": e.data.get("call_id", e.data.get("callId")),
-                        "role": "tool",
-                        "content": str(e.data.get("content", ""))[:max_chars],
                         "locator": e.data.get("locator"),
                         "surfaceOp": "replace",
                         "sourceEventSeqs": [e.seq],
@@ -266,6 +287,40 @@ class CompactionManager:
 
 def _estimate(e):
     return max(1, len(str(e.data)) * 0.25)
+
+
+def _balanced_surface(source, events, call_seq) -> bool:
+    """Ensure replacing a surface interval cannot strand a tool result.
+
+    A selected result is valid only when its call belongs to the same selected
+    interval, or the assistant surface node in that interval contains the call
+    block.  This keeps the projected surface replayable while leaving the
+    original call/result events untouched in the log.
+    """
+    source_seqs = {e.seq for e in source}
+    first, last = min(source_seqs), max(source_seqs)
+    for event in source:
+        if event.type != "tool/result":
+            continue
+        cid = str(event.data.get("call_id") or event.data.get("callId"))
+        seq = call_seq.get(cid)
+        if seq is None:
+            return False
+        if first <= seq <= last:
+            continue
+        found = False
+        for node in source:
+            if node.type != "assistant/message":
+                continue
+            payload = node.data.get("message", node.data)
+            content = payload.get("content") if isinstance(payload, dict) else None
+            blocks = content if isinstance(content, list) else []
+            if any(isinstance(block, dict) and str(block.get("id")) == cid for block in blocks):
+                found = True
+                break
+        if not found:
+            return False
+    return True
 
 
 def _deterministic(text):

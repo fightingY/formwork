@@ -131,7 +131,13 @@ class DockerSandboxRunner:
             pass
         return container_name
 
-    def exec(self, *, container_name: str, action: BashAction) -> CommandResult:
+    def exec(
+        self,
+        *,
+        container_name: str,
+        action: BashAction,
+        cancel_event: object | None = None,
+    ) -> CommandResult:
         started = time.perf_counter()
         command = [
             "docker",
@@ -144,13 +150,10 @@ class DockerSandboxRunner:
             action.command,
         ]
         try:
-            completed = subprocess.run(
+            completed, cancelled = _run_cancellable(
                 command,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=action.timeout_sec,
+                cancel_event=cancel_event,
             )
         except subprocess.TimeoutExpired as exc:
             self.cleanup(container_name)
@@ -158,6 +161,16 @@ class DockerSandboxRunner:
                 exit_code=None,
                 stdout=_decode_timeout_output(exc.stdout),
                 stderr=_decode_timeout_output(exc.stderr),
+                timed_out=True,
+                timeout_sec=action.timeout_sec,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
+
+        if cancelled:
+            return CommandResult(
+                exit_code=None,
+                stdout=completed.stdout or "",
+                stderr=completed.stderr or "",
                 timed_out=True,
                 timeout_sec=action.timeout_sec,
                 duration_ms=int((time.perf_counter() - started) * 1000),
@@ -181,6 +194,50 @@ class DockerSandboxRunner:
             errors="replace",
             timeout=60,
         )
+
+
+def _run_cancellable(
+    args: list[str], *, timeout: int, cancel_event: object | None
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    if cancel_event is None:
+        return (
+            subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            ),
+            False,
+        )
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    started = time.monotonic()
+    try:
+        while True:
+            if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+                process.kill()
+                stdout, stderr = process.communicate(timeout=5)
+                return subprocess.CompletedProcess(args, process.returncode, stdout, stderr), True
+            if timeout > 0 and time.monotonic() - started >= timeout:
+                raise subprocess.TimeoutExpired(args, timeout)
+            try:
+                stdout, stderr = process.communicate(timeout=0.1)
+                return subprocess.CompletedProcess(args, process.returncode, stdout, stderr), False
+            except subprocess.TimeoutExpired:
+                continue
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate(timeout=5)
+        raise subprocess.TimeoutExpired(args, timeout, output=stdout, stderr=stderr) from None
+
 
 
 class DockerCommandExecutor:
@@ -213,7 +270,18 @@ class DockerCommandExecutor:
                 )
             state.container_name = self.runner.start(**self.restart_params)  # type: ignore[arg-type]
 
-        result = self.runner.exec(container_name=state.container_name, action=action)
+        try:
+            result = self.runner.exec(
+                container_name=state.container_name,
+                action=action,
+                cancel_event=getattr(state, "_cancel_token", None),
+            )
+        except TypeError as exc:
+            # Third-party/test runners may still implement the pre-token
+            # contract; the built-in runner always accepts the token.
+            if "cancel_event" not in str(exc):
+                raise
+            result = self.runner.exec(container_name=state.container_name, action=action)
         if result.timed_out:
             # Non-terminal: the container was torn down by runner.exec()'s own cleanup()
             # on timeout, but the run keeps going. is_error normalization for this

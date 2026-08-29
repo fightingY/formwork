@@ -40,12 +40,36 @@ class SessionManager:
     def fail(self, state: RunState, message: str) -> None:
         state.status = "failed"
         state.state_summary = message
+        log = getattr(state, "_event_log", None)
+        if log is not None and not getattr(state, "_failure_event_written", False):
+            log.append(
+                "assistant/message",
+                {
+                    "run_id": state.run_id,
+                    "role": "assistant",
+                    "content": message,
+                    "kind": "failure",
+                },
+            )
+            state._failure_event_written = True  # type: ignore[attr-defined]
 
     def request_ask(self, state: RunState, question: str) -> None:
         state.status = "waiting_approval"
         state.open_questions.append(question)
         state.approval_question = question
         state.metrics["approvals_requested"] = state.metrics.get("approvals_requested", 0) + 1
+        log = getattr(state, "_event_log", None)
+        if log is not None:
+            log.append(
+                "approval/request",
+                {
+                    "run_id": state.run_id,
+                    "tool_call_id": f"question:{state.run_id}:{len(state.open_questions)}",
+                    "question": state.approval_question,
+                    "action": None,
+                    "reason": "model_question",
+                },
+            )
         self.save(state)
 
     def request_approval(
@@ -58,8 +82,10 @@ class SessionManager:
         state.pending_action = action
         state.approval_question = decision.approval_question or decision.reason
         state.open_questions.append(state.approval_question)
+        approval_id = f"approval:{state.run_id}:{len(state.approvals) + 1}"
         state.approvals.append(
             {
+                "approval_id": approval_id,
                 "status": "pending",
                 "policy_name": decision.policy_name,
                 "reason": decision.reason,
@@ -68,27 +94,67 @@ class SessionManager:
             }
         )
         state.metrics["approvals_requested"] = state.metrics.get("approvals_requested", 0) + 1
+        log = getattr(state, "_event_log", None)
+        if log is not None:
+            log.append(
+                "approval/request",
+                {
+                    "run_id": state.run_id,
+                    "tool_call_id": approval_id,
+                    "question": state.approval_question,
+                    "action": action.command,
+                    "policy_name": decision.policy_name,
+                    "reason": decision.reason,
+                },
+            )
         self.save(state)
 
     def approve(self, state: RunState) -> None:
+        approval_id = _pending_approval_id(state)
         state.approvals.append(
             {
+                "approval_id": approval_id,
                 "status": "approved",
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "action": state.pending_action.command if state.pending_action else None,
             }
         )
+        log = getattr(state, "_event_log", None)
+        if log is not None:
+            log.append(
+                "approval/result",
+                {
+                    "run_id": state.run_id,
+                    "tool_call_id": approval_id,
+                    "status": "approved",
+                    "action": state.pending_action.command if state.pending_action else None,
+                },
+            )
         self.save(state)
 
     def deny(self, state: RunState, reason: str) -> None:
+        approval_id = _pending_approval_id(state)
         state.approvals.append(
             {
+                "approval_id": approval_id,
                 "status": "denied",
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "reason": reason,
                 "action": state.pending_action.command if state.pending_action else None,
             }
         )
+        log = getattr(state, "_event_log", None)
+        if log is not None:
+            log.append(
+                "approval/result",
+                {
+                    "run_id": state.run_id,
+                    "tool_call_id": approval_id,
+                    "status": "denied",
+                    "reason": reason,
+                    "action": state.pending_action.command if state.pending_action else None,
+                },
+            )
         self.save(state)
 
     def apply_pending_approval_result(
@@ -172,6 +238,13 @@ def latest_approval_result(state: RunState) -> dict | None:
         if approval.get("status") in {"approved", "denied"}:
             return approval
     return None
+
+
+def _pending_approval_id(state: RunState) -> str:
+    for approval in reversed(state.approvals):
+        if approval.get("status") == "pending":
+            return str(approval.get("approval_id") or f"approval:{state.run_id}:{len(state.approvals)}")
+    return f"approval:{state.run_id}:{len(state.approvals) + 1}"
 
 
 def record_execution_metrics(state: RunState, observation: Observation) -> None:

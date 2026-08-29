@@ -148,6 +148,18 @@ class AgentLoop:
             self.lifecycle.start(state)
         event_log = getattr(state, "_event_log", None)
         turn_no = int(state.metrics.get("turn_index", 0))
+        if event_log is not None:
+            compactor = getattr(state, "_compaction_manager", None)
+            if compactor is not None:
+                configured_window = self.context_builder.config.context_window
+                if configured_window is not None:
+                    compactor.context_window = int(configured_window)
+                compactor.threshold_ratio = float(
+                    getattr(self.context_builder.config, "threshold_ratio", compactor.threshold_ratio)
+                )
+                compactor.retain_ratio = float(
+                    getattr(self.context_builder.config, "retain_ratio", compactor.retain_ratio)
+                )
         if event_log is not None and not resumed:
             event_log.append("turn/start", {"turn": turn_no})
             options = self.config.model_options
@@ -199,6 +211,11 @@ class AgentLoop:
                 # a disposable execution view and must never become a second
                 # prompt authority.
                 registry = getattr(getattr(state, "_compaction_manager", None), "registry", None)
+                compactor = getattr(state, "_compaction_manager", None)
+                if compactor is not None:
+                    # Automatic pressure compaction runs only at a closed step
+                    # boundary (the previous iteration emitted step/end).
+                    compactor.compact(turn=turn_no, prune=True)
                 if registry is not None:
                     registry.fold(event_log.session_id or "", event_log.events)
                     projected_history = registry.value(event_log.session_id or "", "surface").get(
@@ -590,7 +607,10 @@ class AgentLoop:
         trajectory: list[TrajectoryStep],
         reason: str,
     ) -> None:
-        if self.checkpoint_manager is not None:
+        # Event sessions checkpoint by projection watermark/cache.  The legacy
+        # trajectory checkpoint would create a second durable fact source, so it
+        # is intentionally bypassed whenever an event log is attached.
+        if self.checkpoint_manager is not None and getattr(state, "_event_log", None) is None:
             self.checkpoint_manager.create(state, trajectory, reason=reason)
 
     def _should_interrupt(self, trajectory: list[TrajectoryStep]) -> bool:

@@ -211,11 +211,41 @@ class EventLog:
                 or data.get("tool_call_id")
                 or data.get("toolCallId")
             )
-            if not call_id or not any(
-                e.type == "tool/call" and (e.data.get("call_id") or e.data.get("callId")) == call_id
+            calls = [
+                e
+                for e in events
+                if e.type == "tool/call"
+                and str(e.data.get("call_id") or e.data.get("callId")) == str(call_id)
+            ]
+            if not call_id or not calls:
+                raise EventValidationError("tool/result must pair with a prior tool/call")
+            if any(
+                e.type == "tool/result"
+                and str(
+                    e.data.get("call_id")
+                    or e.data.get("callId")
+                    or e.data.get("tool_call_id")
+                    or e.data.get("toolCallId")
+                )
+                == str(call_id)
                 for e in events
             ):
-                raise EventValidationError("tool/result must pair with a prior tool/call")
+                raise EventValidationError("tool/result may only be recorded once per tool call")
+            call = calls[-1]
+            if "turn" in data and "turn" in call.data and data.get("turn") != call.data.get("turn"):
+                raise EventValidationError("tool/result must remain in the tool call's turn")
+            if "step" in data and "step" in call.data and data.get("step") != call.data.get("step"):
+                raise EventValidationError("tool/result must remain in the tool call's step")
+        if event_type == "tool/call":
+            call_id = data.get("call_id") or data.get("callId")
+            if not call_id:
+                raise EventValidationError("tool/call requires call_id")
+            if any(
+                e.type == "tool/call"
+                and str(e.data.get("call_id") or e.data.get("callId")) == str(call_id)
+                for e in events
+            ):
+                raise EventValidationError("tool/call id must be unique within a session")
         if event_type == "step/end":
             starts = [
                 e

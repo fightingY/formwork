@@ -119,6 +119,9 @@ class SessionEngine:
         on_progress: Callable[[dict[str, object]], None] | None = None,
     ) -> SessionTurnResult:
         """Run one conversational turn for ``session_id`` and persist it."""
+        # Cold load is a recovery boundary: close any torn turn/step before a
+        # new request can claim the session.
+        self.store.repair(session_id)
         record = self.store.load(session_id)
         history = self.store.history_messages(session_id)
 
@@ -266,6 +269,7 @@ class SessionEngine:
             metrics["memory_turn_end_hook_errors"] = (
                 int(metrics.get("memory_turn_end_hook_errors", 0)) + 1
             )
+
 
     @staticmethod
     def _assistant_reply(state: RunState) -> str:

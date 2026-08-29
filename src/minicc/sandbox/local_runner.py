@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from minicc.core.protocol import BashAction
 from minicc.core.state import Observation, RunState
@@ -40,14 +41,11 @@ class LocalCommandExecutor:
                 ),
             )
         try:
-            completed = subprocess.run(
+            completed, cancelled = _run_cancellable(
                 command_args,
                 cwd=state.workspace_host_path,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=action.timeout_sec,
+                cancel_event=getattr(state, "_cancel_token", None),
             )
         except subprocess.TimeoutExpired as exc:
             return observation_from_command_result(
@@ -65,6 +63,15 @@ class LocalCommandExecutor:
                 preview_chars=self.preview_chars,
             )
 
+        if cancelled:
+            return Observation(
+                kind="command_error",
+                message="Command cancelled by the runtime cancellation token.",
+                stdout_preview=completed.stdout or "",
+                stderr_preview=completed.stderr or "",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
+
         duration_ms = int((time.perf_counter() - started) * 1000)
         return observation_from_command_result(
             CommandResult(
@@ -78,6 +85,65 @@ class LocalCommandExecutor:
             artifact_threshold_bytes=self.artifact_threshold_bytes,
             preview_chars=self.preview_chars,
         )
+
+
+def _run_cancellable(
+    args: list[str],
+    *,
+    cwd: Path | None,
+    timeout: int,
+    cancel_event: object | None,
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    """Run a command while polling the runtime abort token.
+
+    ``subprocess.run`` cannot observe an AbortController-style token.  Keeping
+    the process handle here gives cancellation a real execution boundary and
+    still preserves partial stdout/stderr for the resulting tool event.
+    """
+    if cancel_event is None:
+        return (
+            subprocess.run(
+                args,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            ),
+            False,
+        )
+    process = subprocess.Popen(
+        args,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    started = time.monotonic()
+    cancelled = False
+    try:
+        while True:
+            if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+                cancelled = True
+                process.kill()
+                break
+            if timeout > 0 and time.monotonic() - started >= timeout:
+                raise subprocess.TimeoutExpired(args, timeout)
+            try:
+                stdout, stderr = process.communicate(timeout=0.1)
+                return subprocess.CompletedProcess(args, process.returncode, stdout, stderr), False
+            except subprocess.TimeoutExpired:
+                continue
+        stdout, stderr = process.communicate(timeout=5)
+        return subprocess.CompletedProcess(args, process.returncode, stdout, stderr), cancelled
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate(timeout=5)
+        exc = subprocess.TimeoutExpired(args, timeout, output=stdout, stderr=stderr)
+        raise exc from None
 
 
 def _local_shell_args(command: str) -> list[str] | None:
