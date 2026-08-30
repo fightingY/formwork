@@ -11,7 +11,6 @@ from .multi_agent import (
     JobRegistry,
     MultiAgentError,
     MultiAgentManager,
-    TaskClaimRegistry,
     WorkspaceLease,
     WorkspaceLeaseRegistry,
 )
@@ -20,5 +19,5 @@ from .projections import ProjectionRegistry, default_projections
 __all__ = [
     "EventLog", "EventValidationError", "SessionEvent", "ProjectionRegistry", "default_projections",
     "ChildResult", "ChildTask", "Evidence", "Fact", "ForkSnapshot", "JobRecord", "JobRegistry",
-    "MultiAgentError", "MultiAgentManager", "TaskClaimRegistry", "WorkspaceLease", "WorkspaceLeaseRegistry",
+    "MultiAgentError", "MultiAgentManager", "WorkspaceLease", "WorkspaceLeaseRegistry",
 ]

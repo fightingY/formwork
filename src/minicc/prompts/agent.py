@@ -30,12 +30,11 @@ Available tools:
 - skill(name): load one skill's instructions from the frozen run catalog, only
   when its instructions are relevant to the current step.
 - delegate(tasks, join?, background?): run bounded child agents. Each task requires
-  an `id` and `goal`; set a stable `dedupe_key` when two workflows could describe
-  the same work. Use `provider="fork"` when the child needs the parent's completed
+  an `id` and `goal`. Use `provider="fork"` when the child needs the parent's completed
   context, and `background=true` for a long-running one-shot that can be polled by
   the host. The result contains summaries and facts only; child transcripts stay
   isolated. Use `depends_on` for a sequential investigation chain. Workspace
-  claims and write locks are runtime-managed; there is no lock/unlock tool.
+  write locks are runtime-managed; there is no lock/unlock tool.
 - final(answer, memory?): finish the task. State in `answer` only what your tool
   calls and their results actually established; say how each key claim was
   verified and by which command, and do not invent results or steps the session

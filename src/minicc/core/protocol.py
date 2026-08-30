@@ -389,7 +389,7 @@ TOOLS: tuple[dict[str, Any], ...] = (
                 "capability_profile": {"type": "string"}, "provider": {"type": "string", "enum": ["spawn", "fork"]},
                 "depends_on": {"type": "array", "items": {"type": "string"}},
                 "max_turns": {"type": "integer", "minimum": 0}, "timeout_sec": {"type": "number", "minimum": 0},
-                "output_schema": {"type": "string"}, "dedupe_key": {"type": "string"},
+                "output_schema": {"type": "string"},
             }, "required": ["id", "goal"], "additionalProperties": False}},
             "join": {"type": "string", "enum": ["all", "any"]}, "background": {"type": "boolean"},
         }, "required": ["tasks"], "additionalProperties": False}}},
