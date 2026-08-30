@@ -262,14 +262,16 @@ class AgentLoop:
                             and e.data.get("source") == "steer"
                             and e.data.get("turn") == turn_no
                         }
+                    memory_block = self.context_builder._l1_memory_context(state)
+                    injections = [*steer_messages]
+                    if memory_block:
+                        injections.append({"role": "user", "content": memory_block})
+                    injections.append({"role": "user", "content": f"Goal: {state.goal}"})
                     messages = provider_messages(
                         assemble_request(
                             request=request,
                             surface={"messages": projected_history},
-                            injections=[
-                                *steer_messages,
-                                {"role": "user", "content": f"Goal: {state.goal}"},
-                            ],
+                            injections=injections,
                         )
                     )
                 else:

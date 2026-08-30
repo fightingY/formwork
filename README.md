@@ -79,6 +79,11 @@ L1 在每轮结束用一次 LLM 提炼原子记忆进 SQLite/FTS5，按阈值升
 开始双轨注入（L2/L3 走 system 缓存轨、L1 走每轮 `<relevant-memories>` 检索块），全程优雅降级；
 working-memory 的四重 SHA 证据仪式已删除、改为失败跳过。手写 Feedback JSONL 保留为 L3 persona 的人写种子。
 
+记忆的工程时序、EventLog 事件、SQLite/FTS5 与可选 embedding、分层召回和落盘位置见
+[`docs/MEMORY_PROJECTION_ARCHITECTURE.md`](docs/MEMORY_PROJECTION_ARCHITECTURE.md)。其核心定位是
+“event log 上的可重建 memory projection”：L0 保留执行事实，L1 提炼带来源的原子项目事实，
+L2/L3 只对重复或确认的信号做低频升级，下一轮按 goal 召回而不是重放全部历史。
+
 Stable V3.1 新增显式触发的离线
 Meta Review：`minicc meta-review <run_id>` 读取已结束 run 的不可变证据，在独立
 `.minicc/meta-reviews/` 目录生成带来源哈希和模型调用指标的审查结果，不修改源 run，也不自动

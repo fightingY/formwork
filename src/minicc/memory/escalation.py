@@ -141,14 +141,21 @@ class PersonaEscalator:
         self.persona_threshold = max(1, persona_threshold)
 
     def __call__(self, session_id: str, state: Any, new_memories: list[L1Memory]) -> None:
-        del session_id, new_memories  # escalation reads the persisted store, not the batch
-        self._maybe_synthesize(state)
+        del session_id
+        self._maybe_synthesize(state, new_memories)
 
-    def _maybe_synthesize(self, state: Any) -> None:
+    def _maybe_synthesize(self, state: Any, new_memories: list[L1Memory]) -> None:
         metrics = getattr(state, "metrics", None) or {}
         goal = str(getattr(state, "goal", "") or "")
         signals = self._project_signals()
         if not signals:
+            return
+        new_signal_content = {
+            memory.content
+            for memory in new_memories
+            if memory.type in PERSONA_SIGNAL_TYPES
+        }
+        if new_memories and not new_signal_content and not has_emphasis(goal):
             return
         emphasized = has_emphasis(goal)
         if len(signals) < self.persona_threshold and not emphasized:
@@ -161,6 +168,11 @@ class PersonaEscalator:
             return
         try:
             self.store.upsert_persona(entry)
+            _record_memory_event(
+                state,
+                "memory/l3_upserted",
+                {"source_record_ids": entry.source_record_ids, "confidence": entry.confidence},
+            )
         except Exception:  # noqa: BLE001 — degrade, never block the turn
             metrics["persona_synthesis_failed"] = int(
                 metrics.get("persona_synthesis_failed", 0)
@@ -298,12 +310,18 @@ class ScenarioEscalator:
         self.scenario_threshold = max(1, scenario_threshold)
 
     def __call__(self, session_id: str, state: Any, new_memories: list[L1Memory]) -> None:
-        del session_id, new_memories
-        self._maybe_synthesize(state)
+        del session_id
+        self._maybe_synthesize(state, new_memories)
 
-    def _maybe_synthesize(self, state: Any) -> None:
+    def _maybe_synthesize(self, state: Any, new_memories: list[L1Memory]) -> None:
         metrics = getattr(state, "metrics", None) or {}
+        new_ids = {memory.content for memory in new_memories}
         for topic, memories in self._clusters().items():
+            cluster_ids = {memory.content for memory in memories}
+            # Avoid paying for a repeated synthesis when this turn added no
+            # memory to the topic. A new fact causes an in-place L2 refresh.
+            if new_ids and not (new_ids & cluster_ids):
+                continue
             if len(memories) < self.scenario_threshold:
                 continue
             entry = self.synthesizer.synthesize(topic, memories)
@@ -314,6 +332,14 @@ class ScenarioEscalator:
                 continue
             try:
                 self.store.upsert_scenario(entry)
+                _record_memory_event(
+                    state,
+                    "memory/l2_upserted",
+                    {
+                        "scenario": entry.scenario,
+                        "source_record_ids": entry.source_record_ids,
+                    },
+                )
             except Exception:  # noqa: BLE001 — degrade, never block
                 metrics["scenario_synthesis_failed"] = int(
                     metrics.get("scenario_synthesis_failed", 0)
@@ -363,3 +389,13 @@ class EscalationHook:
             self.persona(session_id, state, new_memories)
         if self.scenario is not None:
             self.scenario(session_id, state, new_memories)
+
+
+def _record_memory_event(state: Any, event_type: str, data: dict[str, Any]) -> None:
+    event_log = getattr(state, "_event_log", None)
+    if event_log is None:
+        return
+    try:
+        event_log.append(event_type, {"run_id": getattr(state, "run_id", ""), **data})
+    except Exception:
+        pass

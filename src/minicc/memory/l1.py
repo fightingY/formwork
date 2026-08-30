@@ -699,13 +699,19 @@ class L1Distiller:
             )
         except (ProviderError, RuntimeError):
             return DistillResult(ok=False, error_code="provider", usage=None)
-        return self._parse(response.text, session_id=session_id, usage=response.usage)
+        return self._parse(
+            response.text,
+            session_id=session_id,
+            run_id=run_id,
+            usage=response.usage,
+        )
 
     def _parse(
         self,
         text: str,
         *,
         session_id: str,
+        run_id: str,
         usage: ModelUsage | None,
     ) -> DistillResult:
         try:
@@ -716,13 +722,13 @@ class L1Distiller:
             return DistillResult(ok=False, error_code="bad_shape", usage=usage)
         memories: list[L1Memory] = []
         for item in data:
-            memory = _coerce_memory(item, session_id=session_id)
+            memory = _coerce_memory(item, session_id=session_id, run_id=run_id)
             if memory is not None:
                 memories.append(memory)
         return DistillResult(ok=True, memories=memories, usage=usage)
 
 
-def _coerce_memory(item: Any, *, session_id: str) -> L1Memory | None:
+def _coerce_memory(item: Any, *, session_id: str, run_id: str = "") -> L1Memory | None:
     if not isinstance(item, dict):
         return None
     content = item.get("content")
@@ -738,6 +744,16 @@ def _coerce_memory(item: Any, *, session_id: str) -> L1Memory | None:
     if not isinstance(source, dict):
         source = {}
     source = {str(key): value for key, value in source.items()}
+    # Preserve the model's compact file/line source shape for compatibility;
+    # when it omits a source entirely, attach the producing run as provenance.
+    if not source and run_id:
+        source["run_id"] = run_id
+    metadata = item.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata = {str(key): value for key, value in metadata.items()}
+    if run_id:
+        metadata.setdefault("run_id", run_id)
     created_at = _now()
     return L1Memory(
         type=raw_type,
@@ -746,6 +762,7 @@ def _coerce_memory(item: Any, *, session_id: str) -> L1Memory | None:
         scope=raw_scope,
         session_id=session_id,
         source=source,
+        metadata=metadata,
         created_at=created_at,
         updated_at=created_at,
     )
@@ -811,6 +828,46 @@ def recall_memories(
     except Exception as exc:  # noqa: BLE001 — memory must never propagate
         return RecallResult(ok=False, error_code=f"recall_error:{type(exc).__name__}")
     return RecallResult(ok=True, memories=memories)
+
+
+def recall_scoped_memories(
+    store: MemoryStore,
+    query: str,
+    *,
+    session_id: str = "",
+    limit: int = DEFAULT_MAX_RESULTS,
+    timeout_sec: float = DEFAULT_RECALL_TIMEOUT_SEC,
+) -> RecallResult:
+    """Recall session-local facts first, then project facts.
+
+    Session memories describe the active task and are allowed to outrank older
+    project knowledge. The two result sets are deduplicated by record id and
+    bounded before prompt rendering. Any store failure still degrades to an
+    empty result, matching :func:`recall_memories`.
+    """
+    del timeout_sec
+    if not query.strip() or limit <= 0:
+        return RecallResult(ok=True, memories=[])
+    try:
+        session_rows = (
+            store.search(query, scope="session", limit=limit)
+            if session_id
+            else []
+        )
+        project_rows = store.search(query, scope="project", limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        return RecallResult(ok=False, error_code=f"recall_error:{type(exc).__name__}")
+    result: list[L1Memory] = []
+    seen: set[int] = set()
+    for memory in [*session_rows, *project_rows]:
+        if memory.record_id is not None and memory.record_id in seen:
+            continue
+        if memory.record_id is not None:
+            seen.add(memory.record_id)
+        result.append(memory)
+        if len(result) >= limit:
+            break
+    return RecallResult(ok=True, memories=result)
 
 
 def format_relevant_memories(
@@ -905,6 +962,11 @@ class MemoryTurnHook:
                 metrics.get("memory_distill_failed", 0)
             ) + 1
             metrics["memory_distill_error"] = outcome.error_code
+            _record_memory_event(
+                state,
+                "memory/l1_failed",
+                {"run_id": run_id, "error_code": outcome.error_code},
+            )
             return
         metrics["memory_distill_successes"] = int(
             metrics.get("memory_distill_successes", 0)
@@ -914,9 +976,25 @@ class MemoryTurnHook:
             metrics["memory_distill_prompt_tokens"] = outcome.usage.prompt_tokens or 0
             metrics["memory_distill_completion_tokens"] = outcome.usage.completion_tokens or 0
         if not outcome.memories:
+            _record_memory_event(
+                state,
+                "memory/l1_extracted",
+                {"run_id": run_id, "count": 0, "record_ids": []},
+            )
             return
         stored = self._store_with_dedup(state, outcome.memories)
         metrics["memory_stored"] = len(stored)
+        _record_memory_event(
+            state,
+            "memory/l1_extracted",
+            {
+                "run_id": run_id,
+                "count": len(outcome.memories),
+                "stored_count": len(stored),
+                "record_ids": stored,
+                "scopes": sorted({memory.scope for memory in outcome.memories}),
+            },
+        )
         if self.escalator is not None:
             self.escalator(session_id, state, outcome.memories)
 
@@ -994,4 +1072,55 @@ def _run_facts(state: Any) -> str:
         f"command_failures={metrics.get('command_failures', 0)}",
         f"policy_denials={metrics.get('policy_denials', 0)}",
     ]
+    # Feed bounded execution evidence to the distiller. This makes L1 a
+    # projection of actual tool activity (commands/results/files), not merely
+    # a summary of the natural-language answer.
+    event_log = getattr(state, "_event_log", None)
+    if event_log is not None:
+        run_id = str(getattr(state, "run_id", ""))
+        turn_index = int(metrics.get("turn_index", 0))
+        events = [
+            event
+            for event in getattr(event_log, "events", [])
+            if (
+                event.data.get("run_id") in {None, run_id}
+                and event.data.get("turn") in {None, turn_index}
+            )
+        ]
+        evidence: list[str] = []
+        for event in events[-24:]:
+            data = event.data
+            if event.type == "tool/call":
+                evidence.append(
+                    f"event#{event.seq} tool_call {data.get('tool')}: "
+                    f"{_short(data.get('arguments'), 500)}"
+                )
+            elif event.type == "tool/result":
+                evidence.append(
+                    f"event#{event.seq} tool_result {data.get('tool')} "
+                    f"error={data.get('is_error')}: {_short(data.get('content'), 700)}"
+                )
+            elif event.type == "assistant/message":
+                message = data.get("message") if isinstance(data.get("message"), dict) else data
+                evidence.append(f"event#{event.seq} assistant: {_short(message.get('content'), 700)}")
+        if evidence:
+            fields.append("Execution evidence:\n" + "\n".join(evidence))
     return ", ".join(fields)
+
+
+def _short(value: Any, limit: int) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: max(limit - 3, 0)] + "..."
+
+
+def _record_memory_event(state: Any, event_type: str, data: dict[str, Any]) -> None:
+    event_log = getattr(state, "_event_log", None)
+    if event_log is None:
+        return
+    try:
+        event_log.append(event_type, data)
+    except Exception:
+        # The memory ledger is observability; a logging failure must not affect
+        # the already-committed agent turn.
+        return

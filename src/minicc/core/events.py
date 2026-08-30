@@ -56,6 +56,13 @@ EVENT_TYPES: tuple[str, ...] = (
     "job/update",
     "job/end",
     "workspace/lock",
+    # Memory is a derived projection, but its lifecycle is logged so a prompt
+    # can be audited and the index can be rebuilt from the L0 event stream.
+    "memory/l1_extracted",
+    "memory/l1_failed",
+    "memory/l2_upserted",
+    "memory/l3_upserted",
+    "memory/recall",
 )
 
 

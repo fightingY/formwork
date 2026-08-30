@@ -92,6 +92,9 @@ class RunState:
     parent_run_id: str | None = None
     workflow_id: str | None = None
     task_id: str | None = None
+    # Runtime session identity used to scope memory recall. The transcript and
+    # EventLog remain the durable source; this value is not persisted in a run.
+    session_id: str = field(default="", repr=False)
     role: str = "root"
     capability_profile: str = "root"
     depth: int = 0
@@ -143,6 +146,7 @@ class RunState:
         data.pop("session_history", None)
         data.pop("text_delta_callback", None)
         data.pop("progress_callback", None)
+        data.pop("session_id", None)
         for key in ["run_dir", "artifacts_dir", "workspace_host_path"]:
             if data[key] is not None:
                 data[key] = str(data[key])
@@ -202,6 +206,7 @@ class RunState:
             parent_run_id=data.get("parent_run_id"),
             workflow_id=data.get("workflow_id"),
             task_id=data.get("task_id"),
+            session_id=str(data.get("session_id", "") or ""),
             role=str(data.get("role", "root")),
             capability_profile=str(data.get("capability_profile", "root")),
             depth=int(data.get("depth", 0)),
@@ -237,6 +242,7 @@ def initial_metrics() -> dict[str, Any]:
         "provider_retried_requests": 0,
         "provider_name": "",
         "provider_response_models": [],
+        "memory_recall_event_recorded": 0,
         "provider_system_fingerprints": [],
         "infrastructure_errors": 0,
         "command_failures": 0,

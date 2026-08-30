@@ -19,7 +19,7 @@ from minicc.memory.l1 import (
     MemoryStore,
     PersonaEntry,
     format_relevant_memories,
-    recall_memories,
+    recall_scoped_memories,
 )
 from minicc.memory.working import working_memory_context
 from minicc.prompts.agent import STABLE_PREFIX
@@ -484,16 +484,36 @@ class ContextBuilder:
         """
         if self.memory_store is None:
             return ""
-        result = recall_memories(
+        session_id = str(getattr(state, "session_id", "") or "")
+        result = recall_scoped_memories(
             self.memory_store,
             state.goal,
-            scope="project",
+            session_id=session_id,
             limit=self.memory_max_results,
         )
         state.metrics["l1_memories_recalled"] = len(result.memories)
         if not result.ok:
             state.metrics["memory_recall_failed"] = 1
+            if not state.metrics.get("memory_recall_event_recorded"):
+                self._record_memory_event(
+                    state,
+                    "memory/recall",
+                    {"query": state.goal[:500], "ok": False, "record_ids": [], "error": result.error_code},
+                )
+                state.metrics["memory_recall_event_recorded"] = 1
             return ""
+        if not state.metrics.get("memory_recall_event_recorded"):
+            self._record_memory_event(
+                state,
+                "memory/recall",
+                {
+                    "query": state.goal[:500],
+                    "ok": True,
+                    "record_ids": [memory.record_id for memory in result.memories if memory.record_id is not None],
+                    "scope_order": ["session", "project"] if session_id else ["project"],
+                },
+            )
+            state.metrics["memory_recall_event_recorded"] = 1
         block = format_relevant_memories(
             result.memories,
             max_chars_per_memory=self.memory_max_chars_per_memory,
@@ -503,6 +523,16 @@ class ContextBuilder:
             return ""
         state.metrics["l1_memories_injected"] = len(result.memories)
         return block
+
+    @staticmethod
+    def _record_memory_event(state: RunState, event_type: str, data: dict[str, object]) -> None:
+        event_log = getattr(state, "_event_log", None)
+        if event_log is None:
+            return
+        try:
+            event_log.append(event_type, {"run_id": state.run_id, **data})
+        except Exception:
+            pass
 
     def _l3_persona_context(self, state: RunState) -> str:
         """Render the merged L3 persona view into the system cache track.

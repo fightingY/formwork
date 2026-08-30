@@ -137,6 +137,9 @@ class SessionEngine:
             user_message,
             workspace_host_path=Path(record.project_root),
         )
+        # Runtime identity lets the memory projection distinguish session-local
+        # facts from project facts during the next prompt assembly.
+        state.session_id = session_id  # type: ignore[attr-defined]
         state.metrics["turn_index"] = len(record.turns)
         cancel_token = threading.Event()
         self._cancellations[state.run_id] = cancel_token
@@ -197,6 +200,7 @@ class SessionEngine:
         then writes the ``user``+``assistant`` rows into the transcript.
         """
         state = load_run_state(self.store.session_runs_dir(session_id) / run_id / "state.json")
+        state.session_id = session_id  # type: ignore[attr-defined]
         state._event_log = self.store.event_log(session_id)  # type: ignore[attr-defined]
         state._compaction_manager = CompactionManager(
             state._event_log, self.store.projection_registry(session_id)
