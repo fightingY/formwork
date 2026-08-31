@@ -15,6 +15,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from minicc.core.events import EventLog
 from minicc.core.ledger import (
     LEDGER_SCHEMA_VERSION,
     SuiteBundle,
@@ -36,6 +37,7 @@ from minicc.evals.case import (
     fixture_source_path,
 )
 from minicc.sandbox.workspace import prepare_run_workspace, write_workspace_diff
+from minicc.trace.recorder import materialize_trace_from_event_log
 from minicc.trace.transcript import project_trace
 
 AgentRunCallable = Callable[[EvalCase, RunState], RunState]
@@ -170,6 +172,13 @@ def run_eval_case(
         stage=stage,
     )
     state.run_id = workspace.run_id
+    state._event_log = EventLog(  # type: ignore[attr-defined]
+        workspace.run_dir / "events.jsonl", session_id=state.run_id
+    )
+    state._event_log.append(  # type: ignore[attr-defined]
+        "session/start",
+        {"session_id": state.run_id, "run_id": state.run_id, "project_root": str(workspace.workspace_dir)},
+    )
     source_path = case_source_path(case, project_root=Path.cwd())
     fixture_path = fixture_source_path(case, project_root=Path.cwd())
     try:
@@ -783,6 +792,9 @@ def _finalize_transcript(run_dir: Path) -> None:
     fail an otherwise-complete eval run.
     """
     try:
+        event_path = run_dir / "events.jsonl"
+        if event_path.is_file():
+            materialize_trace_from_event_log(EventLog(event_path), run_dir / "trace.jsonl")
         project_trace(run_dir / "trace.jsonl", run_dir)
     except OSError as exc:
         (run_dir / "finalize_errors.txt").write_text(

@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from minicc.core.events import EventLog
 from minicc.core.protocol import (
     PROTOCOL_SCHEMA_VERSION,
     ProtocolError,
@@ -26,6 +27,7 @@ from minicc.core.protocol import (
     parse_tool_call,
 )
 from minicc.core.replay import replay_events
+from minicc.trace.recorder import materialize_trace_from_event_log
 
 REPLAY_SCHEMA_VERSION = PROTOCOL_SCHEMA_VERSION
 
@@ -64,9 +66,10 @@ def create_replay_case(
     if not source.is_dir():
         raise ReplayError(f"Run directory does not exist: {source}")
     trace_path = source / "trace.jsonl"
+    event_path = source / "events.jsonl"
     state_path = source / "state.json"
-    if not trace_path.is_file() or not state_path.is_file():
-        raise ReplayError("A replay source must contain both trace.jsonl and state.json.")
+    if not state_path.is_file() or (not trace_path.is_file() and not event_path.is_file()):
+        raise ReplayError("A replay source must contain state.json and events.jsonl (or legacy trace.jsonl).")
 
     state = _read_json(state_path)
     run_id = str(state.get("run_id") or source.name)
@@ -81,6 +84,7 @@ def create_replay_case(
 
     copied: list[str] = []
     for relative in (
+        "events.jsonl",
         "trace.jsonl",
         "state.json",
         "metrics.json",
@@ -97,6 +101,11 @@ def create_replay_case(
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, destination)
             copied.append(relative)
+
+    if event_path.is_file():
+        materialize_trace_from_event_log(EventLog(event_path), target / "trace.jsonl")
+        if "trace.jsonl" not in copied:
+            copied.append("trace.jsonl")
     artifacts = source / "artifacts"
     if artifacts.is_dir():
         shutil.copytree(artifacts, target / "artifacts")

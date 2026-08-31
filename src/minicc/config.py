@@ -152,6 +152,7 @@ class MemorySettings:
     persona_confirm_threshold: int = 3
     scenario_cluster_threshold: int = 5
     embedding_enabled: bool = False
+    background: bool = False
 
 
 @dataclass(frozen=True)
@@ -293,6 +294,7 @@ def load_settings() -> Settings:
                 memory_config, "scenario_cluster_threshold", 5
             ),
             embedding_enabled=_bool_config(memory_config, "embedding_enabled", False),
+            background=_bool_config(memory_config, "background", False),
         ),
     )
 

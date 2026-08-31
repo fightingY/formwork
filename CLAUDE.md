@@ -58,7 +58,7 @@ uv build                                 # 构建 sdist/wheel
 8. **`core/context.py`（`ContextBuilder`）** —— 分层 prompt 组装（stable prefix + 动态 trajectory）、预算检查、压缩（默认 deterministic，可选 semantic）。prompt layout 有 `rebuild`/`append`/`epoch`/`append_until_compaction`。
 9. **`policy/`（`PolicyChain`）** —— 有序策略（command/path/network/budget/approval + V4 的 capability/readonly-bash），返回 `deny`/`require_approval`/`rewrite`/`allow`。由 `policy/factory.py` 按配置构建。
 10. **`sandbox/`** —— `workspace.py`（复制 + `diff.patch`）、`docker_runner.py`、`local_runner.py`、`observation.py`（命令结果归一成 `Observation`）、`artifact_store.py`。
-11. **`trace/` + `core/ledger.py` + `core/run_catalog.py`** —— 证据：`trace.jsonl`（recorder）、`metrics.json`、`run_report.json/.md`、suite manifest/report、版本索引。schema v2、不可变、SHA-256 锚定。
+11. **`trace/` + `core/ledger.py` + `core/run_catalog.py`** —— `events.jsonl` 是 canonical EventLog；`trace.jsonl` 是由其 `trace/event` 投影物化的兼容证据视图，另有 `metrics.json`、`run_report.json/.md`、suite manifest/report、版本索引。schema v2、不可变、SHA-256 锚定。
 
 V5 会话层（experimental）叠在 run/eval **之上**（Project → Session → Turn → Run → Message），不改变上面的 loop：
 

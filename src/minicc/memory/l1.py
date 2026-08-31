@@ -239,6 +239,68 @@ CREATE TABLE IF NOT EXISTS persona (
 )
 """
 
+_MEMORY_JOBS_DDL = """
+CREATE TABLE IF NOT EXISTS memory_jobs (
+    job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    source_run_id TEXT NOT NULL DEFAULT '',
+    source_seq_start INTEGER NOT NULL DEFAULT 0,
+    source_seq_end INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT '',
+    completed_at TEXT NOT NULL DEFAULT ''
+)
+"""
+
+_MEMORY_GENERATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS memory_generations (
+    generation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    layer TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    source_run_id TEXT NOT NULL DEFAULT '',
+    source_seq_start INTEGER NOT NULL DEFAULT 0,
+    source_seq_end INTEGER NOT NULL DEFAULT 0,
+    prompt_hash TEXT NOT NULL DEFAULT '',
+    input_hash TEXT NOT NULL DEFAULT '',
+    output_hash TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    model_config_hash TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'completed',
+    record_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT ''
+)
+"""
+
+_MEMORY_SNAPSHOTS_DDL = """
+CREATE TABLE IF NOT EXISTS memory_snapshots (
+    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    generation INTEGER NOT NULL DEFAULT 0,
+    content_hash TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'published',
+    created_at TEXT NOT NULL,
+    published_at TEXT NOT NULL DEFAULT ''
+)
+"""
+
+_MEMORY_SNAPSHOT_ITEMS_DDL = """
+CREATE TABLE IF NOT EXISTS memory_snapshot_items (
+    snapshot_id INTEGER NOT NULL,
+    layer TEXT NOT NULL,
+    item_id INTEGER NOT NULL,
+    rank INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (snapshot_id, layer, item_id),
+    FOREIGN KEY (snapshot_id) REFERENCES memory_snapshots(snapshot_id)
+)
+"""
+
 
 class MemoryStore:
     """Per-project SQLite + FTS5 storage for L1 (and, later, L2/L3) memories.
@@ -255,9 +317,11 @@ class MemoryStore:
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute("PRAGMA journal_mode = WAL")
             yield conn
             conn.commit()
         finally:
@@ -265,9 +329,167 @@ class MemoryStore:
 
     def initialize(self) -> None:
         with self._connection() as conn:
-            for ddl in (_MAIN_TABLE_DDL, _FTS_TABLE_DDL, _SCENARIOS_DDL, _PERSONA_DDL):
+            for ddl in (
+                _MAIN_TABLE_DDL,
+                _FTS_TABLE_DDL,
+                _SCENARIOS_DDL,
+                _PERSONA_DDL,
+                _MEMORY_JOBS_DDL,
+                _MEMORY_GENERATIONS_DDL,
+                _MEMORY_SNAPSHOTS_DDL,
+                _MEMORY_SNAPSHOT_ITEMS_DDL,
+            ):
                 conn.execute(ddl)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_jobs_status ON memory_jobs(status, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_snapshots_active ON memory_snapshots(project_id, status, snapshot_id)")
             conn.execute("PRAGMA user_version = 1")
+
+    def enqueue_job(
+        self,
+        *,
+        project_id: str,
+        session_id: str = "",
+        source_run_id: str = "",
+        source_seq_start: int = 0,
+        source_seq_end: int = 0,
+        payload: dict[str, Any] | None = None,
+    ) -> int:
+        """Durably enqueue a turn-end projection job.
+
+        The payload is deliberately bounded turn input, while the canonical
+        event range remains the auditable source reference for a rebuild.
+        """
+        now = _now()
+        with self._connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO memory_jobs (project_id, session_id, source_run_id, "
+                "source_seq_start, source_seq_end, payload_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (project_id, session_id, source_run_id, int(source_seq_start), int(source_seq_end),
+                 json.dumps(payload or {}, ensure_ascii=False), now),
+            )
+            return int(cursor.lastrowid)
+
+    def claim_jobs(self, *, limit: int = 1, stale_after_sec: int = 900) -> list[dict[str, Any]]:
+        """Atomically claim pending jobs and recover stale workers."""
+        now = _now()
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE memory_jobs SET status='pending', started_at='' "
+                "WHERE status='running' AND started_at <> '' "
+                "AND (julianday(?) - julianday(started_at))*86400 > ?",
+                (now, max(1, stale_after_sec)),
+            )
+            rows = conn.execute(
+                "SELECT * FROM memory_jobs WHERE status='pending' ORDER BY job_id LIMIT ?",
+                (max(0, limit),),
+            ).fetchall()
+            claimed: list[dict[str, Any]] = []
+            for row in rows:
+                conn.execute(
+                    "UPDATE memory_jobs SET status='running', attempts=attempts+1, started_at=? WHERE job_id=?",
+                    (now, int(row['job_id'])),
+                )
+                item = dict(row)
+                item['attempts'] = int(row['attempts']) + 1
+                item['payload'] = _loads_json(row['payload_json'], {})
+                claimed.append(item)
+            return claimed
+
+    def complete_job(self, job_id: int) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE memory_jobs SET status='completed', completed_at=?, last_error='' WHERE job_id=?",
+                (_now(), int(job_id)),
+            )
+
+    def fail_job(self, job_id: int, error: str, *, retry: bool = True) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE memory_jobs SET status=?, last_error=?, completed_at=? WHERE job_id=?",
+                ('pending' if retry else 'failed', str(error)[:1000], '' if retry else _now(), int(job_id)),
+            )
+
+    def record_generation(self, *, layer: str, project_id: str, status: str = 'completed',
+                          source_run_id: str = '', source_seq_start: int = 0,
+                          source_seq_end: int = 0, prompt: str = '', input_text: str = '',
+                          output_text: str = '', model: str = '', model_config_hash: str = '',
+                          record_ids: list[int] | None = None, error: str = '') -> int:
+        def digest(value: str) -> str:
+            return hashlib.sha256(value.encode('utf-8')).hexdigest() if value else ''
+        now = _now()
+        with self._connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO memory_generations (layer, project_id, source_run_id, source_seq_start, "
+                "source_seq_end, prompt_hash, input_hash, output_hash, model, model_config_hash, status, "
+                "record_ids_json, created_at, completed_at, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (layer, project_id, source_run_id, int(source_seq_start), int(source_seq_end), digest(prompt),
+                 digest(input_text), digest(output_text), model, model_config_hash, status,
+                 json.dumps(record_ids or []), now, now if status in {'completed', 'failed'} else '', error[:1000]),
+            )
+            return int(cursor.lastrowid)
+
+    def publish_snapshot(self, *, project_id: str, generation: int = 0) -> int:
+        """Publish an immutable L1/L2/L3 read view in one transaction."""
+        with self._connection() as conn:
+            rows = {
+                'l1': conn.execute("SELECT record_id FROM memories ORDER BY priority DESC, updated_at DESC").fetchall(),
+                'l2': conn.execute("SELECT scenario_id FROM scenarios ORDER BY updated_at DESC").fetchall(),
+                'l3': conn.execute("SELECT persona_id FROM persona ORDER BY origin DESC, updated_at DESC").fetchall(),
+            }
+            ids = [f"{layer}:{int(row[0])}" for layer, values in rows.items() for row in values]
+            content_hash = hashlib.sha256('|'.join(ids).encode('utf-8')).hexdigest()
+            conn.execute("UPDATE memory_snapshots SET status='superseded' WHERE project_id=? AND status='published'", (project_id,))
+            cursor = conn.execute(
+                "INSERT INTO memory_snapshots (project_id, generation, content_hash, status, created_at, published_at) VALUES (?, ?, ?, 'published', ?, ?)",
+                (project_id, int(generation), content_hash, _now(), _now()),
+            )
+            snapshot_id = int(cursor.lastrowid)
+            for layer, values in rows.items():
+                for rank, row in enumerate(values):
+                    conn.execute(
+                        "INSERT INTO memory_snapshot_items (snapshot_id, layer, item_id, rank) VALUES (?, ?, ?, ?)",
+                        (snapshot_id, layer, int(row[0]), rank),
+                    )
+            return snapshot_id
+
+    def active_snapshot_id(self, *, project_id: str) -> int | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT snapshot_id FROM memory_snapshots WHERE project_id=? AND status='published' ORDER BY snapshot_id DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()
+        return int(row['snapshot_id']) if row else None
+
+    def reset_derived(self) -> None:
+        """Clear rebuildable read models while leaving the EventLog untouched."""
+        with self._connection() as conn:
+            for table in ("memory_snapshot_items", "memory_snapshots", "memory_generations", "memory_jobs", "memories_fts", "memories", "scenarios", "persona"):
+                conn.execute(f"DELETE FROM {table}")
+
+    def list_snapshot_scenarios(self, snapshot_id: int, *, limit: int | None = None) -> list[ScenarioEntry]:
+        sql = (
+            "SELECT s.scenario_id, s.scenario, s.summary, s.recipe, s.source_record_ids, s.doc_ref, s.updated_at "
+            "FROM memory_snapshot_items i JOIN scenarios s ON s.scenario_id=i.item_id "
+            "WHERE i.snapshot_id=? AND i.layer='l2' ORDER BY i.rank"
+        )
+        params: list[Any] = [int(snapshot_id)]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(max(0, int(limit)))
+        with self._connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [ScenarioEntry.from_row(row) for row in rows]
+
+    def list_snapshot_persona(self, snapshot_id: int) -> list[PersonaEntry]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT p.persona_id, p.profile, p.style, p.hard_rule, p.source_record_ids, p.origin, p.confidence, p.updated_at "
+                "FROM memory_snapshot_items i JOIN persona p ON p.persona_id=i.item_id "
+                "WHERE i.snapshot_id=? AND i.layer='l3' ORDER BY i.rank",
+                (int(snapshot_id),),
+            ).fetchall()
+        return [PersonaEntry.from_row(row) for row in rows]
 
     def add_memories(self, memories: list[L1Memory]) -> list[int]:
         """Persist a batch of memories, returning their assigned record ids.
@@ -320,6 +542,7 @@ class MemoryStore:
         query: str,
         *,
         scope: MemoryScope = "project",
+        session_id: str | None = None,
         limit: int = DEFAULT_MAX_RESULTS,
     ) -> list[L1Memory]:
         """Recall with automatic strategy (plan §4.4).
@@ -329,33 +552,42 @@ class MemoryStore:
         keyword recall for free.
         """
         if self.embedder is None:
-            return self._bm25_search(query, scope=scope, limit=limit)
+            return self._bm25_search(query, scope=scope, session_id=session_id, limit=limit)
         try:
-            return self._hybrid_search(query, scope=scope, limit=limit)
+            return self._hybrid_search(query, scope=scope, session_id=session_id, limit=limit)
         except Exception:  # noqa: BLE001 — hybrid failure degrades to BM25
-            return self._bm25_search(query, scope=scope, limit=limit)
+            return self._bm25_search(query, scope=scope, session_id=session_id, limit=limit)
 
     def _bm25_search(
         self,
         query: str,
         *,
         scope: MemoryScope = "project",
+        session_id: str | None = None,
         limit: int = DEFAULT_MAX_RESULTS,
     ) -> list[L1Memory]:
         fts_query = _fts_query(query)
         if not fts_query:
             return []
         with self._connection() as conn:
-            rows = conn.execute(
+            session_clause = "AND m.session_id = ? " if session_id is not None else ""
+            sql = (
                 "SELECT m.record_id, m.type, m.content, m.priority, m.scope, "
                 "       m.session_id, m.source_json, m.created_at, m.updated_at, "
                 "       m.metadata_json "
                 "FROM memories_fts "
                 "JOIN memories m ON m.record_id = memories_fts.record_id "
                 "WHERE memories_fts MATCH ? AND m.scope = ? "
-                "ORDER BY bm25(memories_fts) ASC, m.priority DESC "
-                "LIMIT ?",
-                (fts_query, scope, max(0, limit)),
+                + session_clause
+                + "ORDER BY bm25(memories_fts) ASC, m.priority DESC LIMIT ?"
+            )
+            rows = conn.execute(
+                sql,
+                (
+                    (fts_query, scope, session_id, max(0, limit))
+                    if session_id is not None
+                    else (fts_query, scope, max(0, limit))
+                ),
             ).fetchall()
         return [L1Memory.from_row(row) for row in rows]
 
@@ -364,12 +596,17 @@ class MemoryStore:
         query: str,
         *,
         scope: MemoryScope = "project",
+        session_id: str | None = None,
         limit: int = DEFAULT_MAX_RESULTS,
     ) -> list[L1Memory]:
         assert self.embedder is not None
-        bm25_results = self._bm25_search(query, scope=scope, limit=limit * 2)
+        bm25_results = self._bm25_search(
+            query, scope=scope, session_id=session_id, limit=limit * 2
+        )
         query_vec = self.embedder(query)
-        embedding_results = self._embedding_search(query_vec, scope=scope, limit=limit * 2)
+        embedding_results = self._embedding_search(
+            query_vec, scope=scope, session_id=session_id, limit=limit * 2
+        )
         return rrf_fuse([bm25_results, embedding_results], limit=limit)
 
     def _embedding_search(
@@ -377,14 +614,20 @@ class MemoryStore:
         query_vec: list[float],
         *,
         scope: MemoryScope = "project",
+        session_id: str | None = None,
         limit: int = DEFAULT_MAX_RESULTS,
     ) -> list[L1Memory]:
         with self._connection() as conn:
+            where = "scope = ?"
+            params: list[Any] = [scope]
+            if session_id is not None:
+                where += " AND session_id = ?"
+                params.append(session_id)
             rows = conn.execute(
                 "SELECT record_id, type, content, priority, scope, session_id, "
                 "       source_json, created_at, updated_at, metadata_json, embedding "
-                "FROM memories WHERE scope = ?",
-                (scope,),
+                f"FROM memories WHERE {where}",
+                params,
             ).fetchall()
         scored: list[tuple[float, L1Memory]] = []
         for row in rows:
@@ -396,7 +639,14 @@ class MemoryStore:
         scored.sort(key=lambda pair: (-pair[0], pair[1].priority))
         return [memory for _, memory in scored[:limit]]
 
-    def update_memory(self, record_id: int, content: str) -> bool:
+    def update_memory(
+        self,
+        record_id: int,
+        content: str,
+        *,
+        memory: L1Memory | None = None,
+        merge: bool = False,
+    ) -> bool:
         """Replace an existing memory's content (used by dedup update/merge).
 
         Returns ``False`` when the record is gone; never raises.  The FTS row is
@@ -409,10 +659,33 @@ class MemoryStore:
             ).fetchone()
             if existing is None:
                 return False
-            conn.execute(
-                "UPDATE memories SET content = ?, updated_at = ? WHERE record_id = ?",
-                (content, now, record_id),
-            )
+            if memory is None:
+                conn.execute(
+                    "UPDATE memories SET content = ?, updated_at = ? WHERE record_id = ?",
+                    (content, now, record_id),
+                )
+            else:
+                row = conn.execute(
+                    "SELECT source_json, metadata_json, priority FROM memories WHERE record_id = ?",
+                    (record_id,),
+                ).fetchone()
+                old_source = _loads_json(row["source_json"], {}) if row else {}
+                old_meta = _loads_json(row["metadata_json"], {}) if row else {}
+                source = dict(old_source)
+                for key, value in memory.source.items():
+                    if key not in source:
+                        source[key] = value
+                    elif source[key] != value and merge:
+                        prior = source[key] if isinstance(source[key], list) else [source[key]]
+                        incoming = value if isinstance(value, list) else [value]
+                        source[key] = list(dict.fromkeys(prior + incoming))
+                metadata = dict(old_meta)
+                metadata.update(memory.metadata)
+                conn.execute(
+                    "UPDATE memories SET content=?, priority=?, source_json=?, metadata_json=?, updated_at=? WHERE record_id=?",
+                    (content, max(int(row["priority"] if row else 0), _clamp_priority(memory.priority)),
+                     json.dumps(source, ensure_ascii=False), json.dumps(metadata, ensure_ascii=False), now, record_id),
+                )
             conn.execute(
                 "UPDATE memories_fts SET content = ? WHERE record_id = ?",
                 (content, record_id),
@@ -850,7 +1123,7 @@ def recall_scoped_memories(
         return RecallResult(ok=True, memories=[])
     try:
         session_rows = (
-            store.search(query, scope="session", limit=limit)
+            store.search(query, scope="session", session_id=session_id, limit=limit)
             if session_id
             else []
         )
@@ -913,12 +1186,16 @@ class MemoryTurnHook:
         distill_every_n_turns: int = 1,
         escalator: Any = None,
         deduper: Any = None,
+        background: bool = False,
+        worker: Any = None,
     ) -> None:
         self.store = store
         self.distiller = distiller
         self.distill_every_n_turns = max(1, distill_every_n_turns)
         self.escalator = escalator
         self.deduper = deduper
+        self.background = bool(background)
+        self.worker = worker
         self._turn_counter = 0
 
     def __call__(self, session_id: str, result: Any) -> None:
@@ -930,12 +1207,48 @@ class MemoryTurnHook:
         if self._turn_counter % self.distill_every_n_turns != 0:
             return
         try:
-            self._distill_and_store(session_id, result)
+            if self.background:
+                self._enqueue(session_id, result)
+            else:
+                self._distill_and_store(session_id, result)
         except Exception as exc:  # noqa: BLE001 — degrade, never block the turn
             metrics["memory_distill_failed"] = int(
                 metrics.get("memory_distill_failed", 0)
             ) + 1
             metrics["memory_distill_error"] = f"hook:{type(exc).__name__}"
+
+    def _enqueue(self, session_id: str, result: Any) -> None:
+        state = result.state
+        event_log = getattr(state, "_event_log", None)
+        seq_end = int(getattr(event_log, "last_seq", 0) or 0)
+        payload = {
+            "user_message": str(getattr(result, "user_message", "") or getattr(state, "goal", "") or ""),
+            "assistant_reply": str(getattr(result, "assistant_reply", "") or getattr(state, "final_answer", "") or ""),
+            "run_facts": _run_facts(state),
+        }
+        project_id = str(getattr(state, "project_id", "") or getattr(state, "workspace_host_path", "") or "project")
+        job_id = self.store.enqueue_job(
+            project_id=project_id,
+            session_id=session_id,
+            source_run_id=str(getattr(result, "run_id", "") or getattr(state, "run_id", "")),
+            source_seq_start=int(state.metrics.get("turn_start_seq", max(1, seq_end))),
+            source_seq_end=seq_end,
+            payload=payload,
+        )
+        state.metrics["memory_job_id"] = job_id
+        _record_memory_event(state, "memory/capture_requested", {"job_id": job_id, "source_seq_end": seq_end})
+        if self.worker is None:
+            from minicc.memory.worker import MemoryWorker
+
+            def process(job: dict[str, Any]) -> None:
+                # Keep the live state for metrics/event provenance while the
+                # durable payload makes the job inspectable and recoverable.
+                del job
+                self._distill_and_store(session_id, result)
+
+            self.worker = MemoryWorker(self.store, process)
+        if hasattr(self.worker, "start"):
+            self.worker.start()
 
     def _distill_and_store(self, session_id: str, result: Any) -> None:
         state = result.state
@@ -957,6 +1270,21 @@ class MemoryTurnHook:
             session_id=session_id,
             run_facts=_run_facts(state),
         )
+        project_id = str(getattr(state, "project_id", "") or getattr(state, "workspace_host_path", "") or "project")
+        event_log = getattr(state, "_event_log", None)
+        seq_end = int(getattr(event_log, "last_seq", 0) or 0)
+        generation_id = self.store.record_generation(
+            layer="L1",
+            project_id=project_id,
+            source_run_id=run_id,
+            source_seq_start=int(metrics.get("turn_start_seq", max(1, seq_end))),
+            source_seq_end=seq_end,
+            input_text=user_message + "\n" + assistant_reply,
+            output_text=json.dumps([memory.to_dict() for memory in outcome.memories], ensure_ascii=False),
+            status="completed" if outcome.ok else "failed",
+            error=outcome.error_code or "",
+        )
+        metrics["memory_generation_id"] = generation_id
         if not outcome.ok:
             metrics["memory_distill_failed"] = int(
                 metrics.get("memory_distill_failed", 0)
@@ -997,6 +1325,13 @@ class MemoryTurnHook:
         )
         if self.escalator is not None:
             self.escalator(session_id, state, outcome.memories)
+        try:
+            snapshot_id = self.store.publish_snapshot(project_id=project_id, generation=generation_id)
+            metrics["memory_snapshot_published"] = snapshot_id
+        except Exception:  # noqa: BLE001 - snapshot publication is best effort
+            metrics["memory_snapshot_publish_failed"] = int(
+                metrics.get("memory_snapshot_publish_failed", 0)
+            ) + 1
 
     def _store_with_dedup(self, state: Any, memories: list[L1Memory]) -> list[int]:
         """Store a distill batch, running LLM dedup first when a deduper is set.
@@ -1049,7 +1384,12 @@ class MemoryTurnHook:
                 record_id = getattr(decision, "record_id", None)
                 content = getattr(decision, "content", None) or memory.content
                 if isinstance(record_id, int):
-                    if self.store.update_memory(record_id, content):
+                    if self.store.update_memory(
+                        record_id,
+                        content,
+                        memory=memory,
+                        merge=action == "merge",
+                    ):
                         stored.append(record_id)
                     else:
                         stored.extend(self.store.add_memories([memory]))

@@ -18,6 +18,7 @@ from minicc.memory.l1 import (
     format_relevant_memories,
     project_db_path,
     recall_memories,
+    recall_scoped_memories,
 )
 
 
@@ -121,6 +122,26 @@ def test_store_search_respects_scope(tmp_path) -> None:
     ]
     # session-scoped memories never leak into project recall.
     assert all(m.scope == "project" for m in project_results)
+
+
+def test_scoped_recall_keeps_session_memories_isolated(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory" / "project.db")
+    store.initialize()
+    store.add_memories(
+        [
+            _memory(content="session one deployment note", scope="session", session_id="s1"),
+            _memory(content="session two deployment note", scope="session", session_id="s2"),
+            _memory(content="project deployment command", scope="project"),
+        ]
+    )
+
+    result = recall_scoped_memories(store, "deployment note command", session_id="s1", limit=5)
+
+    assert result.ok is True
+    contents = [memory.content for memory in result.memories]
+    assert "session one deployment note" in contents
+    assert "session two deployment note" not in contents
+    assert "project deployment command" in contents
 
 
 def test_store_search_empty_query_returns_nothing(tmp_path) -> None:

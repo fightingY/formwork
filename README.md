@@ -57,7 +57,7 @@ V3.6 已把结构化 hybrid 工具面与有界多工具调度归档为确定性�
 关联链，结论仍只属于对应归档版本。
 
 V5.0（experimental）在 run/eval 之上新增会话（Session）层：多轮对话，每轮仍是一个 `run_id`，
-仍产出 trace/metrics，`transcript.jsonl` 为唯一事实源。`minicc chat --host 127.0.0.1 --port 8000`
+仍产出 EventLog/trace/metrics，`events.jsonl` 为唯一事实源，trace 和 transcript 都是投影。`minicc chat --host 127.0.0.1 --port 8000`
 启动纯标准库 Web 聊天（SSE + 单页前端），`minicc session …` 走 CLI 多轮。安全叙事改为**双模式分工**：
 会话在真实工作目录直跑 + 审批链 + git 回滚；run/eval 的隔离拷贝（快照复制 + `diff.patch`）保留为
 块状模式专用。该层已确定性实现（全量 509 passed、ruff/mypy 通过），但按 experimental→stable 约定
@@ -74,7 +74,8 @@ Stable V3.2 将目标相关 Skill catalog 与 commit-bound Feedback rules 的
 所有 claim 均携带配置、run ID、原始 artifact 和复跑命令。归档见 `acceptance/stable-v3.0/`。
 
 上下文与记忆采用分层设计：运行态 trajectory/state summary 只服务当前 run。V5.1 已把记忆重构成
-L0→L3 金字塔（experimental，尚未真实模型验收）：L0 是会话 transcript + 每轮 run 的 turn trace；
+L0→L3 金字塔（experimental，尚未真实模型验收）：L0 是每个 session/run 的 canonical EventLog；
+`trace.jsonl` 与 transcript 是从 EventLog 物化的投影；
 L1 在每轮结束用一次 LLM 提炼原子记忆进 SQLite/FTS5，按阈值升维成 L2 scenario / L3 persona，回合
 开始双轨注入（L2/L3 走 system 缓存轨、L1 走每轮 `<relevant-memories>` 检索块），全程优雅降级；
 working-memory 的四重 SHA 证据仪式已删除、改为失败跳过。手写 Feedback JSONL 保留为 L3 persona 的人写种子。

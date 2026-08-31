@@ -264,6 +264,11 @@ class ContextBuilder:
         )
         if self._uses_budget_driven_history():
             state.metrics["cache_prefix_pending_reset_reason"] = "compaction_epoch_rollover"
+            # Long-term memory snapshots are pinned to the prompt epoch.  A
+            # compaction starts a new epoch and may pick up a newly published
+            # background projection without changing the previous prefix.
+            if hasattr(state, "_memory_snapshot_id"):
+                state._memory_snapshot_id = None  # type: ignore[attr-defined]
             state.metrics["context_compaction_target_ratio"] = EPOCH_COMPACTION_TARGET_RATIO
             state.metrics["context_compaction_target_chars"] = int(
                 self.config.max_prompt_chars * EPOCH_COMPACTION_TARGET_RATIO
@@ -545,7 +550,13 @@ class ContextBuilder:
         entries = self._manual_persona_entries()
         if self.memory_store is not None:
             try:
-                entries.extend(self.memory_store.list_persona())
+                snapshot_id = self._memory_snapshot_id(state)
+                auto_entries = (
+                    self.memory_store.list_snapshot_persona(snapshot_id)
+                    if snapshot_id is not None
+                    else self.memory_store.list_persona()
+                )
+                entries.extend(auto_entries)
             except Exception:  # noqa: BLE001 — degrade to manual seed only
                 entries = list(entries)
         if not entries:
@@ -584,7 +595,12 @@ class ContextBuilder:
             state.metrics["l2_scenarios_injected"] = 0
             return ""
         try:
-            scenarios = self.memory_store.list_scenarios(limit=DEFAULT_MAX_SCENARIOS)
+            snapshot_id = self._memory_snapshot_id(state)
+            scenarios = (
+                self.memory_store.list_snapshot_scenarios(snapshot_id, limit=DEFAULT_MAX_SCENARIOS)
+                if snapshot_id is not None
+                else self.memory_store.list_scenarios(limit=DEFAULT_MAX_SCENARIOS)
+            )
         except Exception:  # noqa: BLE001 — degrade, no scenarios
             state.metrics["l2_scenarios_injected"] = 0
             return ""
@@ -593,6 +609,30 @@ class ContextBuilder:
             return ""
         state.metrics["l2_scenarios_injected"] = len(scenarios)
         return render_scenarios(scenarios)
+
+    def _memory_snapshot_id(self, state: RunState) -> int | None:
+        """Resolve once per run so background projection writes do not mutate a
+        cached prompt prefix halfway through a session.  A new state (or a
+        compaction epoch that clears this field) picks up the latest publish.
+        """
+        existing = getattr(state, "_memory_snapshot_id", None)
+        if existing is not None:
+            return int(existing)
+        if self.memory_store is None:
+            return None
+        project_id = str(
+            getattr(state, "project_id", "")
+            or getattr(state, "workspace_host_path", "")
+            or "project"
+        )
+        try:
+            snapshot_id = self.memory_store.active_snapshot_id(project_id=project_id)
+        except Exception:  # noqa: BLE001
+            snapshot_id = None
+        if snapshot_id is not None:
+            state._memory_snapshot_id = snapshot_id  # type: ignore[attr-defined]
+            state.metrics["memory_snapshot_id"] = snapshot_id
+        return snapshot_id
 
     def _instruction_context(self, state: RunState) -> list[str]:
         context: list[str] = []

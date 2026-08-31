@@ -206,17 +206,21 @@ def _persona_prompt(signals: list[L1Memory]) -> str:
 
 
 def topic_key(memory: L1Memory) -> str:
-    """The topic bucket for one L1 memory: its ``source.file`` if set.
+    """Return a stable L2 topic bucket from provenance metadata.
 
-    P2 clusters by the normalized ``source.file`` (plan §3.1: 候选主题来自 L1 的
-    ``source.file``).  Memories without a file are returned as ``""`` and are not
-    clusterable — honest keyword-level clustering, deferring content mining to the
-    optional embedding pass (P3).
+    File/module/symbol metadata is preferred because it is deterministic and
+    explainable.  A semantic ``topic`` supplied by the distiller is accepted as
+    a fallback; memories with no project anchor are intentionally not clustered.
     """
     source = memory.source if isinstance(memory.source, dict) else {}
-    file = source.get("file")
-    if isinstance(file, str) and file.strip():
-        return file.strip()
+    for key in ("topic", "module", "file", "symbol", "test_name", "git_commit"):
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().replace("\\", "/").lower()
+    metadata = memory.metadata if isinstance(memory.metadata, dict) else {}
+    value = metadata.get("topic")
+    if isinstance(value, str) and value.strip():
+        return value.strip().lower()
     return ""
 
 

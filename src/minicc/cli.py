@@ -25,6 +25,7 @@ from minicc.config import (
 )
 from minicc.core.checkpoint import CheckpointError, CheckpointManager
 from minicc.core.context import STABLE_PREFIX, ContextBuilder, ContextConfig
+from minicc.core.events import EventLog
 from minicc.core.failover import ProviderFailoverChain
 from minicc.core.ledger import (
     apply_cleanup_plan,
@@ -112,6 +113,7 @@ from minicc.memory.escalation import (
 )
 from minicc.memory.feedback import FeedbackMemory
 from minicc.memory.l1 import L1Distiller, MemoryStore, MemoryTurnHook, project_db_path
+from minicc.memory.rebuild import rebuild_from_event_log
 from minicc.memory.working import attach_working_memory
 from minicc.policy.factory import build_policy_chain
 from minicc.sandbox.artifact_store import ArtifactStore
@@ -128,7 +130,7 @@ from minicc.sandbox.workspace import (
 )
 from minicc.skills.registry import SkillRegistry, default_skill_roots
 from minicc.trace.metrics import write_metrics
-from minicc.trace.recorder import TraceRecorder, trace_path_for
+from minicc.trace.recorder import TraceRecorder, materialize_trace_from_event_log, trace_path_for
 from minicc.trace.replay import (
     ReplayError,
     compare_fresh_replay,
@@ -583,6 +585,13 @@ def build_parser() -> argparse.ArgumentParser:
         "traces", help="List runs that have trace or metrics files."
     )
     traces_parser.set_defaults(handler=traces_command)
+    rebuild_parser = subparsers.add_parser(
+        "memory-rebuild", help="Rebuild L1/L2/L3 SQLite projections from an EventLog."
+    )
+    rebuild_parser.add_argument("event_log", type=Path, help="Canonical events.jsonl path.")
+    rebuild_parser.add_argument("--db", type=Path, default=None, help="Target memory SQLite database.")
+    rebuild_parser.add_argument("--project-id", default=None, help="Stable project identity for snapshots.")
+    rebuild_parser.set_defaults(handler=memory_rebuild_command)
     transcript_parser = subparsers.add_parser(
         "transcript", help="Project a trace.jsonl into transcript artifacts."
     )
@@ -1055,6 +1064,7 @@ def run_command(args: argparse.Namespace) -> int:
                 )
 
         _attach_repository_context(state, state.workspace_host_path or Path.cwd())
+        _ensure_event_log(state)
 
         if follow_up_from:
             attach_working_memory(
@@ -1114,11 +1124,14 @@ def run_command(args: argparse.Namespace) -> int:
         write_run_report(state)
         if state.run_dir is not None:
             trace_file = state.run_dir / "trace.jsonl"
-            if trace_file.exists():
-                try:
+            try:
+                event_log = getattr(state, "_event_log", None)
+                if event_log is not None:
+                    materialize_trace_from_event_log(event_log, trace_file)
+                if trace_file.exists():
                     project_trace(trace_file, state.run_dir)
-                except OSError as exc:
-                    print(f"Failed to finalize transcript: {exc}", file=sys.stderr)
+            except OSError as exc:
+                print(f"Failed to finalize transcript: {exc}", file=sys.stderr)
         catalog.register_state(milestone, state, git_commit=_git_evidence(Path.cwd())[0])
 
     if result is None:
@@ -1143,7 +1156,11 @@ def resume_command(args: argparse.Namespace) -> int:
 
     session = SessionManager()
     state = session.load(args.run_id)
-    trace = TraceRecorder(trace_path_for(state))
+    _ensure_event_log(state)
+    trace = TraceRecorder(
+        trace_path_for(state),
+        event_log=getattr(state, "_event_log", None),
+    )
     from_checkpoint = bool(getattr(args, "from_checkpoint", False))
     restored_trajectory = None
     if from_checkpoint:
@@ -1154,6 +1171,8 @@ def resume_command(args: argparse.Namespace) -> int:
             return 2
         state = restored.state
         restored_trajectory = restored.trajectory
+        _ensure_event_log(state)
+        trace.event_log = getattr(state, "_event_log", None)
     elif state.status != "waiting_approval":
         print(
             f"Run {args.run_id} is not waiting for approval. Current status: {state.status}",
@@ -1226,6 +1245,13 @@ def resume_command(args: argparse.Namespace) -> int:
                 _write_run_artifact_index(state)
             except Exception as exc:
                 print(f"Failed to finalize run evidence: {exc}", file=sys.stderr)
+        if state.run_dir is not None:
+            try:
+                event_log = getattr(state, "_event_log", None)
+                if event_log is not None:
+                    materialize_trace_from_event_log(event_log, state.run_dir / "trace.jsonl")
+            except OSError as exc:
+                print(f"Failed to materialize canonical trace: {exc}", file=sys.stderr)
         catalog.update_existing_state(state, fallback_milestone=settings.project.milestone)
 
     _print_run_result(result.state, result.state.run_dir)
@@ -1589,6 +1615,7 @@ def _build_memory_subsystem(
         distill_every_n_turns=settings.memory.distill_every_n_turns,
         escalator=escalator,
         deduper=deduper,
+        background=settings.memory.background,
     )
     return store, hook
 
@@ -1644,6 +1671,34 @@ def _attach_repository_context(
         )
 
 
+def _ensure_event_log(state: RunState) -> EventLog:
+    """Bind every run to its canonical EventLog, migrating legacy trace rows."""
+    existing = getattr(state, "_event_log", None)
+    if existing is not None:
+        return existing
+    if state.run_dir is not None:
+        event_path = state.run_dir / "events.jsonl"
+    else:
+        event_path = Path.cwd() / ".minicc" / "events" / f"{state.run_id}.jsonl"
+    log = EventLog(event_path, session_id=state.run_id)
+    if not log.events:
+        log.append(
+            "session/start",
+            {"session_id": state.run_id, "run_id": state.run_id, "project_root": str(state.workspace_host_path or Path.cwd())},
+        )
+        legacy_trace = state.run_dir / "trace.jsonl" if state.run_dir is not None else None
+        if legacy_trace is not None and legacy_trace.is_file():
+            for line in legacy_trace.read_text(encoding="utf-8").splitlines():
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    log.append("trace/event", {"trace_event": payload, "migrated": True})
+    state._event_log = log  # type: ignore[attr-defined]
+    return log
+
+
 def _build_loop(
     provider: OpenAICompatibleProvider,
     executor: BashExecutor,
@@ -1666,6 +1721,7 @@ def _build_loop(
     trace = TraceRecorder(
         trace_path_for(state) if state is not None else None,
         on_event=state.progress_callback if state is not None else None,
+        event_log=getattr(state, "_event_log", None) if state is not None else None,
     )
     if (
         state is not None
@@ -3188,6 +3244,28 @@ def traces_command(args: argparse.Namespace) -> int:
                 print(f"  metrics: {metrics_path}")
     if not found:
         print(f"No trace files found under {runs_root}.")
+    return 0
+
+
+def memory_rebuild_command(args: argparse.Namespace) -> int:
+    """Recreate the derived memory database without mutating the EventLog."""
+    try:
+        settings = load_settings(Path.cwd() / "minicc.yaml")
+        provider = _build_provider_or_print_error(settings)
+        if provider is None:
+            return 2
+        event_path = Path(args.event_log)
+        store = MemoryStore(args.db or project_db_path(Path.cwd()))
+        result = rebuild_from_event_log(
+            EventLog(event_path),
+            store,
+            L1Distiller(provider),
+            project_id=str(args.project_id or Path.cwd().resolve()),
+        )
+    except Exception as exc:  # noqa: BLE001 - report a useful CLI error
+        print(f"Memory rebuild failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0
 
 

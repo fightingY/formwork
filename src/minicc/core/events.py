@@ -62,7 +62,11 @@ EVENT_TYPES: tuple[str, ...] = (
     "memory/l1_failed",
     "memory/l2_upserted",
     "memory/l3_upserted",
+    "memory/capture_requested",
     "memory/recall",
+    # Generic run-level event envelope. TraceRecorder writes here; trace.jsonl
+    # is materialized from these envelopes and is not an authority.
+    "trace/event",
 )
 
 
@@ -233,6 +237,7 @@ class EventLog:
                 for e in events
                 if e.type == "tool/call"
                 and str(e.data.get("call_id") or e.data.get("callId")) == str(call_id)
+                and _same_call_scope(e.data, data)
             ]
             if not call_id or not calls:
                 raise EventValidationError("tool/result must pair with a prior tool/call")
@@ -245,6 +250,7 @@ class EventLog:
                     or e.data.get("toolCallId")
                 )
                 == str(call_id)
+                and _same_call_scope(e.data, data)
                 for e in events
             ):
                 raise EventValidationError("tool/result may only be recorded once per tool call")
@@ -260,9 +266,10 @@ class EventLog:
             if any(
                 e.type == "tool/call"
                 and str(e.data.get("call_id") or e.data.get("callId")) == str(call_id)
+                and _same_call_scope(e.data, data)
                 for e in events
             ):
-                raise EventValidationError("tool/call id must be unique within a session")
+                raise EventValidationError("tool/call id must be unique within a turn/step")
         if event_type == "step/end":
             starts = [
                 e
@@ -341,6 +348,14 @@ class EventLog:
 
 def event_log_for(session_dir: Path, session_id: str | None = None) -> EventLog:
     return EventLog(Path(session_dir) / "events.jsonl", session_id=session_id)
+
+
+def _same_call_scope(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Tool call ids are unique within a turn/step, not across resumes."""
+    for key in ("turn", "step"):
+        if key in left and key in right and left.get(key) != right.get(key):
+            return False
+    return True
 
 
 # Public semantic aliases used by integrations.

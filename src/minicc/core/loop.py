@@ -9,6 +9,7 @@ from typing import Protocol
 from minicc.core.action_handler import ActionHandler
 from minicc.core.checkpoint import CheckpointManager
 from minicc.core.context import ContextBuilder, state_snapshot_text
+from minicc.core.events import EventLog
 from minicc.core.lifecycle import RunLifecycle
 from minicc.core.multi_agent import MultiAgentManager
 from minicc.core.prompt import assemble_request, provider_messages
@@ -34,7 +35,7 @@ from minicc.core.state import Observation, RunState, TrajectoryStep
 from minicc.core.tooling import HybridToolRunner, ToolCallScheduler
 from minicc.core.verification import CompletionVerifier
 from minicc.policy.base import PolicyChain
-from minicc.trace.recorder import TraceRecorder
+from minicc.trace.recorder import TraceRecorder, materialize_trace_from_event_log
 
 
 class BashExecutor(Protocol):
@@ -148,13 +149,27 @@ class AgentLoop:
     ) -> AgentLoopResult:
         resumed = trajectory is not None
         trajectory = list(trajectory or [])
+        event_log = getattr(state, "_event_log", None)
+        if event_log is None and state.run_dir is not None:
+            event_log = EventLog(state.run_dir / "events.jsonl", session_id=state.run_id)
+            if not event_log.events:
+                event_log.append(
+                    "session/start",
+                    {
+                        "session_id": state.run_id,
+                        "run_id": state.run_id,
+                        "project_root": str(state.workspace_host_path or ""),
+                    },
+                )
+            state._event_log = event_log  # type: ignore[attr-defined]
+        if event_log is not None:
+            self.trace.event_log = event_log
         state.metrics["max_parallel_tool_calls"] = self.config.max_parallel_tool_calls
         state.metrics["max_tool_calls_per_step"] = self.config.max_tool_calls_per_step
         if resumed:
             self.lifecycle.resume(state, len(trajectory))
         else:
             self.lifecycle.start(state)
-        event_log = getattr(state, "_event_log", None)
         turn_no = int(state.metrics.get("turn_index", 0))
         if event_log is not None:
             compactor = getattr(state, "_compaction_manager", None)
@@ -168,7 +183,20 @@ class AgentLoop:
                 compactor.retain_ratio = float(
                     getattr(self.context_builder.config, "retain_ratio", compactor.retain_ratio)
                 )
-        if event_log is not None and not resumed:
+        has_open_turn = False
+        if event_log is not None:
+            starts = [
+                event
+                for event in event_log.events
+                if event.type == "turn/start" and event.data.get("turn") == turn_no
+            ]
+            ends = [
+                event
+                for event in event_log.events
+                if event.type == "turn/end" and event.data.get("turn") == turn_no
+            ]
+            has_open_turn = len(starts) > len(ends)
+        if event_log is not None and (not resumed or not has_open_turn):
             event_log.append("turn/start", {"turn": turn_no})
             options = self.config.model_options
             event_log.append(
@@ -557,6 +585,11 @@ class AgentLoop:
             self._checkpoint(state, trajectory, "interrupted_finalized")
         if state.run_dir is not None or self.session.runs_root is not None:
             self.session.save(state)
+        if event_log is not None and self.trace.path is not None:
+            try:
+                materialize_trace_from_event_log(event_log, self.trace.path)
+            except OSError:
+                pass
         return AgentLoopResult(state=state, trajectory=trajectory)
 
     @staticmethod
@@ -621,10 +654,9 @@ class AgentLoop:
         trajectory: list[TrajectoryStep],
         reason: str,
     ) -> None:
-        # Event sessions checkpoint by projection watermark/cache.  The legacy
-        # trajectory checkpoint would create a second durable fact source, so it
-        # is intentionally bypassed whenever an event log is attached.
-        if self.checkpoint_manager is not None and getattr(state, "_event_log", None) is None:
+        # Checkpoints are recoverable snapshots, not a competing fact source;
+        # the canonical EventLog still records the lifecycle around them.
+        if self.checkpoint_manager is not None:
             self.checkpoint_manager.create(state, trajectory, reason=reason)
 
     def _should_interrupt(self, trajectory: list[TrajectoryStep]) -> bool:

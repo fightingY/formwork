@@ -21,6 +21,9 @@ class TraceRecorder:
     capture_model_responses: bool = True
     events: list[dict[str, Any]] = field(default_factory=list)
     on_event: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False, compare=False)
+    # When bound, EventLog is the canonical write model. ``path`` remains a
+    # compatibility output path and is materialized from EventLog at finalize.
+    event_log: Any | None = field(default=None, repr=False, compare=False)
     _sequence: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -62,7 +65,15 @@ class TraceRecorder:
                 # UI observers are best effort and must never affect the run.
                 pass
 
-        if self.path is not None:
+        if self.event_log is not None:
+            try:
+                self.event_log.append("trace/event", {"trace_event": event})
+            except Exception:
+                # Observability must not break the active run. The in-memory
+                # event remains available to callers and can be regenerated if
+                # the canonical append failed.
+                pass
+        elif self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -383,6 +394,23 @@ def trace_path_for(state: RunState) -> Path | None:
     if state.run_dir is None:
         return None
     return state.run_dir / "trace.jsonl"
+
+
+def materialize_trace_from_event_log(event_log: Any, path: Path) -> Path:
+    """Write the legacy trace projection from canonical ``trace/event`` rows."""
+    rows: list[dict[str, Any]] = []
+    for event in getattr(event_log, "events", []):
+        if event.type != "trace/event":
+            continue
+        payload = event.data.get("trace_event")
+        if isinstance(payload, dict):
+            rows.append(payload)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    return path
 
 
 def observation_to_dict(observation: Observation) -> dict[str, Any]:
