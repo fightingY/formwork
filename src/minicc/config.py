@@ -152,7 +152,10 @@ class MemorySettings:
     persona_confirm_threshold: int = 3
     scenario_cluster_threshold: int = 5
     embedding_enabled: bool = False
+    embedding_route: str = ""
+    embedding_model: str = ""
     background: bool = False
+    job_max_attempts: int = 3
 
 
 @dataclass(frozen=True)
@@ -294,7 +297,10 @@ def load_settings() -> Settings:
                 memory_config, "scenario_cluster_threshold", 5
             ),
             embedding_enabled=_bool_config(memory_config, "embedding_enabled", False),
+            embedding_route=_str_config(memory_config, "embedding_route", ""),
+            embedding_model=_str_config(memory_config, "embedding_model", ""),
             background=_bool_config(memory_config, "background", False),
+            job_max_attempts=max(1, _int_config(memory_config, "job_max_attempts", 3)),
         ),
     )
 

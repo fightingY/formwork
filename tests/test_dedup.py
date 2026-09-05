@@ -1,6 +1,7 @@
 """Deterministic tests for V5.1 P3: LLM dedup (store/skip/update/merge)."""
 
 import json
+import sqlite3
 from dataclasses import dataclass, field
 
 from minicc.core.provider import CompletionOptions, ModelResponse, ModelUsage
@@ -111,7 +112,7 @@ def test_dedup_store_action_inserts(tmp_path) -> None:
     state = RunState.start("anything")
     hook = _hook(store, ScriptedProvider([json.dumps([{"index": 0, "action": "store"}])]))
 
-    stored = hook._store_with_dedup(state, [_memory("brand new fact")])
+    stored = hook.projector.store_with_dedup(state, [_memory("brand new fact")])
     assert len(stored) == 1
     assert store.count_memories() == 1
     assert state.metrics["memory_dedup_store"] == 1
@@ -127,7 +128,7 @@ def test_dedup_skip_action_drops(tmp_path) -> None:
         ScriptedProvider([json.dumps([{"index": 0, "action": "skip", "record_id": 1}])]),
     )
 
-    stored = hook._store_with_dedup(
+    stored = hook.projector.store_with_dedup(
         state, [_memory("the auth bug root cause is the token check")]
     )
     assert stored == []
@@ -158,8 +159,8 @@ def test_dedup_update_action_replaces_content(tmp_path) -> None:
         ),
     )
 
-    stored = hook._store_with_dedup(state, [_memory("the auth bug root cause is old")])
-    assert stored == [1]
+    stored = hook.projector.store_with_dedup(state, [_memory("the auth bug root cause is old")])
+    assert [memory.record_id for memory in stored] == [1]
     assert store.count_memories() == 1
     assert store.list_memories()[0].content == "the auth bug root cause is the session cookie"
     assert state.metrics["memory_dedup_update"] == 1
@@ -188,8 +189,8 @@ def test_dedup_merge_action_replaces_content(tmp_path) -> None:
         ),
     )
 
-    stored = hook._store_with_dedup(state, [_memory("auth bug: session cookie")])
-    assert stored == [1]
+    stored = hook.projector.store_with_dedup(state, [_memory("auth bug: session cookie")])
+    assert [memory.record_id for memory in stored] == [1]
     assert store.count_memories() == 1
     assert "session cookie" in store.list_memories()[0].content
     assert state.metrics["memory_dedup_merge"] == 1
@@ -201,7 +202,7 @@ def test_dedup_failure_appends_all(tmp_path) -> None:
     state = RunState.start("anything")
     hook = _hook(store, ScriptedProvider(["not json"]))
 
-    stored = hook._store_with_dedup(state, [_memory("a new fact")])
+    stored = hook.projector.store_with_dedup(state, [_memory("a new fact")])
     assert len(stored) == 1
     assert store.count_memories() == 1  # appended anyway (plan §4.5)
     assert state.metrics["memory_dedup_failed"] == 1
@@ -214,6 +215,61 @@ def test_dedup_missing_decision_defaults_to_store(tmp_path) -> None:
     # The model returns an empty array -> every memory defaults to store.
     hook = _hook(store, ScriptedProvider([json.dumps([])]))
 
-    stored = hook._store_with_dedup(state, [_memory("a"), _memory("b")])
+    stored = hook.projector.store_with_dedup(state, [_memory("a"), _memory("b")])
     assert len(stored) == 2
     assert store.count_memories() == 2
+
+
+# --- generation audit (spec §7: DEDUP calls land in memory_generations) ------
+
+
+def _dedup_generations(store: MemoryStore) -> list[sqlite3.Row]:
+    with sqlite3.connect(str(store.db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute(
+            "SELECT * FROM memory_generations WHERE layer='DEDUP' ORDER BY generation_id"
+        ).fetchall()
+
+
+def test_dedup_success_records_generation(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory" / "project.db")
+    store.initialize()
+    store.add_memories([_memory("the auth bug root cause is the token check")])
+    state = RunState.start("anything")
+    state.run_id = "run-9"
+    hook = _hook(
+        store,
+        ScriptedProvider(
+            [
+                json.dumps(
+                    [{"index": 0, "action": "update", "record_id": 1, "content": "v2"}]
+                )
+            ]
+        ),
+    )
+
+    stored = hook.projector.store_with_dedup(state, [_memory("the auth bug changed")])
+    assert [memory.record_id for memory in stored] == [1]
+
+    rows = _dedup_generations(store)
+    assert len(rows) == 1  # one audit row per dedup call
+    assert rows[0]["status"] == "completed"
+    assert rows[0]["source_run_id"] == "run-9"
+    assert json.loads(rows[0]["record_ids_json"]) == [1]
+    # Hashes only: the stored output_hash is the sha256 of the decision list.
+    assert len(rows[0]["output_hash"]) == 64
+
+
+def test_dedup_failure_records_failed_generation(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory" / "project.db")
+    store.initialize()
+    state = RunState.start("anything")
+    hook = _hook(store, ScriptedProvider(["not json"]))
+
+    stored = hook.projector.store_with_dedup(state, [_memory("a new fact")])
+    assert len(stored) == 1  # append_all fallback still ran
+
+    rows = _dedup_generations(store)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["error"] == "dedup_unavailable"

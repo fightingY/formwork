@@ -508,6 +508,10 @@ class ContextBuilder:
                 state.metrics["memory_recall_event_recorded"] = 1
             return ""
         if not state.metrics.get("memory_recall_event_recorded"):
+            # Audit the retrieval itself (plan §4.4): per-scope diagnostics show
+            # which strategy ran, which candidates each strategy contributed,
+            # how RRF fused them, and what the reranked final selection was.
+            scopes = result.diagnostics or {}
             self._record_memory_event(
                 state,
                 "memory/recall",
@@ -516,6 +520,21 @@ class ContextBuilder:
                     "ok": True,
                     "record_ids": [memory.record_id for memory in result.memories if memory.record_id is not None],
                     "scope_order": ["session", "project"] if session_id else ["project"],
+                    "retrieval_mode": {
+                        scope: diag.get("retrieval_mode") for scope, diag in scopes.items()
+                    },
+                    "bm25_candidates": {
+                        scope: diag.get("bm25_candidates", []) for scope, diag in scopes.items()
+                    },
+                    "vector_candidates": {
+                        scope: diag.get("vector_candidates", []) for scope, diag in scopes.items()
+                    },
+                    "rrf_rank": {
+                        scope: diag.get("rrf_rank", {}) for scope, diag in scopes.items()
+                    },
+                    "final_record_ids": {
+                        scope: diag.get("final_record_ids", []) for scope, diag in scopes.items()
+                    },
                 },
             )
             state.metrics["memory_recall_event_recorded"] = 1
@@ -554,7 +573,7 @@ class ContextBuilder:
                 auto_entries = (
                     self.memory_store.list_snapshot_persona(snapshot_id)
                     if snapshot_id is not None
-                    else self.memory_store.list_persona()
+                    else self.memory_store.list_persona(state="confirmed")
                 )
                 entries.extend(auto_entries)
             except Exception:  # noqa: BLE001 — degrade to manual seed only

@@ -197,7 +197,10 @@ class AgentLoop:
             ]
             has_open_turn = len(starts) > len(ends)
         if event_log is not None and (not resumed or not has_open_turn):
-            event_log.append("turn/start", {"turn": turn_no})
+            turn_start = event_log.append("turn/start", {"turn": turn_no})
+            # L1 memory anchor: the turn's evidence range in events.jsonl starts
+            # here, so a background job can rebuild the turn purely from the log.
+            state.metrics["turn_start_seq"] = turn_start.seq
             options = self.config.model_options
             event_log.append(
                 "request/header",

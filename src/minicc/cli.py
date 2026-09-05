@@ -591,6 +591,15 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild_parser.add_argument("event_log", type=Path, help="Canonical events.jsonl path.")
     rebuild_parser.add_argument("--db", type=Path, default=None, help="Target memory SQLite database.")
     rebuild_parser.add_argument("--project-id", default=None, help="Stable project identity for snapshots.")
+    rebuild_parser.add_argument(
+        "--mode",
+        choices=("deterministic", "semantic"),
+        default="semantic",
+        help="deterministic: no LLM, repair indexes in place; semantic: re-distill turns (LLM).",
+    )
+    rebuild_parser.add_argument(
+        "--json", action="store_true", help="Print the rebuild manifest as JSON."
+    )
     rebuild_parser.set_defaults(handler=memory_rebuild_command)
     transcript_parser = subparsers.add_parser(
         "transcript", help="Project a trace.jsonl into transcript artifacts."
@@ -1588,7 +1597,13 @@ def _build_memory_subsystem(
     simply runs without memory rather than failing (plan §4.5).
     """
     try:
-        store = MemoryStore(project_db_path(project_root))
+        embedder = None
+        if settings.memory.embedding_enabled:
+            # Real /embeddings adapter (spec §9); None → pure BM25 recall.
+            from minicc.memory.embeddings import embedder_from_settings
+
+            embedder = embedder_from_settings(settings)
+        store = MemoryStore(project_db_path(project_root), embedder=embedder)
         store.initialize()
     except Exception as exc:  # noqa: BLE001 — memory must never block a run
         print(f"Memory subsystem unavailable; continuing without it: {exc}", file=sys.stderr)
@@ -1609,6 +1624,16 @@ def _build_memory_subsystem(
             scenario_threshold=settings.memory.scenario_cluster_threshold,
         )
         escalator = EscalationHook(persona=persona, scenario=scenario)
+    worker = None
+    if settings.memory.background:
+        from minicc.memory.processor import MemoryJobProcessor
+        from minicc.memory.worker import MemoryWorker
+
+        worker = MemoryWorker(
+            store,
+            MemoryJobProcessor(store, distiller, deduper=deduper, escalator=escalator),
+            max_attempts=settings.memory.job_max_attempts,
+        )
     hook = MemoryTurnHook(
         store,
         distiller,
@@ -1616,6 +1641,7 @@ def _build_memory_subsystem(
         escalator=escalator,
         deduper=deduper,
         background=settings.memory.background,
+        worker=worker,
     )
     return store, hook
 
@@ -3250,22 +3276,52 @@ def traces_command(args: argparse.Namespace) -> int:
 def memory_rebuild_command(args: argparse.Namespace) -> int:
     """Recreate the derived memory database without mutating the EventLog."""
     try:
-        settings = load_settings(Path.cwd() / "minicc.yaml")
-        provider = _build_provider_or_print_error(settings)
-        if provider is None:
-            return 2
+        settings = load_settings()
+        mode = str(getattr(args, "mode", "semantic"))
+        distiller: L1Distiller | None = None
+        embedder = None
+        if mode == "semantic":
+            provider = _build_provider_or_print_error(settings)
+            if provider is None:
+                return 2
+            distiller = L1Distiller(provider)
+        elif getattr(settings.memory, "embedding_enabled", False):
+            # Deterministic track still honors embeddings (spec §10): repair
+            # NULL vectors when configured; otherwise pure BM25/FTS repair.
+            from minicc.memory.embeddings import embedder_from_settings
+
+            embedder = embedder_from_settings(settings)
         event_path = Path(args.event_log)
         store = MemoryStore(args.db or project_db_path(Path.cwd()))
         result = rebuild_from_event_log(
             EventLog(event_path),
             store,
-            L1Distiller(provider),
+            distiller,
             project_id=str(args.project_id or Path.cwd().resolve()),
+            mode=mode,
+            reset=mode == "semantic",
+            embedder=embedder,
         )
     except Exception as exc:  # noqa: BLE001 - report a useful CLI error
         print(f"Memory rebuild failed: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    if getattr(args, "json", False):
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    else:
+        repair = result.get("repair") or {}
+        print(
+            f"memory rebuild mode={result['mode']} turns={result['turn_count']} "
+            f"l1={result['l1_count']} l2={result['l2_count']} "
+            f"l3_confirmed={result['l3_confirmed_count']} "
+            f"l3_candidate={result['l3_candidate_count']} "
+            f"snapshot={result['snapshot_id']}"
+        )
+        if repair:
+            print(
+                f"repair topic_keys_backfilled={repair.get('topic_keys_backfilled', 0)} "
+                f"fts_rows={repair.get('fts_rows', 0)} "
+                f"embeddings_added={repair.get('embeddings_added', 0)}"
+            )
     return 0
 
 

@@ -75,10 +75,23 @@ Stable V3.2 将目标相关 Skill catalog 与 commit-bound Feedback rules 的
 
 上下文与记忆采用分层设计：运行态 trajectory/state summary 只服务当前 run。V5.1 已把记忆重构成
 L0→L3 金字塔（experimental，尚未真实模型验收）：L0 是每个 session/run 的 canonical EventLog；
-`trace.jsonl` 与 transcript 是从 EventLog 物化的投影；
-L1 在每轮结束用一次 LLM 提炼原子记忆进 SQLite/FTS5，按阈值升维成 L2 scenario / L3 persona，回合
-开始双轨注入（L2/L3 走 system 缓存轨、L1 走每轮 `<relevant-memories>` 检索块），全程优雅降级；
-working-memory 的四重 SHA 证据仪式已删除、改为失败跳过。手写 Feedback JSONL 保留为 L3 persona 的人写种子。
+`trace.jsonl` 与 transcript 是从 EventLog 物化的投影；SQLite 是可重建的读模型，不是第二事实源。
+L1 在每轮结束用一次 LLM 提炼原子记忆进 SQLite/FTS5，每行持久化 `topic_key`/`confidence`/`status`
+和 `run_id + event_seq` 溯源锚点，先经 BM25+向量候选 + 模型裁决的去重（失败退化为直接追加）。
+L2 scenario 按持久化 `topic_key` 聚类（要求 ≥2 个不同 run、阈值默认 5 条），`scenario_members`
+落库记录 L1↔L2 成员关系，recipe 存为步骤数组；L3 规则按 `rule_key` 独立成行，走
+candidate→confirmed 状态机（重复出现或「确认记住」才确认，hard_rule 必须显式确认；候选永不注入，
+且 L3 只做建议——PolicyChain 依旧对每条命令执法）。后台任务真正可恢复：`memory_jobs` 带租约与
+attempts 预算，processor 只凭 job 行里的 EventLog seq 区间重建证据（无闭包），worker 重启即可续跑。
+每次 L1/L2/L3/DEDUP 模型调用都在 `memory_generations` 留哈希审计；snapshot 只冻结 L2/L3 供 prompt
+epoch 稳定引用，compaction 换 epoch 时才重新解析。回合开始双轨注入（L2/L3 走 system 缓存轨、L1 走
+每轮 `<relevant-memories>` 检索块），`memory/recall` 事件带逐 scope 检索诊断（retrieval_mode、
+bm25/vector 候选、RRF 排名、最终入选）；`memory.embedding_enabled` 打开真实的 OpenAI 兼容
+`/embeddings` 适配器（`memory.embedding_route`/`embedding_model` 可选独立 route），无向量或向量
+故障一律退化为 BM25，绝不失败。`minicc memory-rebuild` 分双轨：`--mode semantic`（默认，重放
+蒸馏）与 `--mode deterministic`（不调模型，回填 topic_key/重建 FTS5/重发 snapshot），两轨都输出
+manifest 且不向 EventLog 追加任何事件。working-memory 的四重 SHA 证据仪式已删除、改为失败跳过。
+手写 Feedback JSONL 保留为 L3 persona 的人写种子。
 
 记忆的工程时序、EventLog 事件、SQLite/FTS5 与可选 embedding、分层召回和落盘位置见
 [`docs/MEMORY_PROJECTION_ARCHITECTURE.md`](docs/MEMORY_PROJECTION_ARCHITECTURE.md)。其核心定位是
